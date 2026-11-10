@@ -12,7 +12,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - Default model: `deepseek/deepseek-v4.1-flash`.
 
 ## Folders (under `src/`)
-- `ingest/` extraction, OCR, chunking (not built yet)
+- `ingest/` pdf.js extraction, page quality, Tesseract OCR, OCR output check, clause chunker, fingerprints, storage check. `ingest.worker.ts` runs the pipeline off the main thread.
 - `runner/` IndexedDB layer, `runTask`, worker, client (plain TS, no UI imports)
 - `tasks/` task types, fingerprint, parse, split, validation
 - `retrieval/` local search (not built yet)
@@ -40,7 +40,13 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - Concurrency 2.
 - Show "AI-assisted, requires lawyer review" on all outputs (later prompts).
 
+## Pages (dev)
+- `/` the Prompt 1 task test page
+- `/?page=ingest` the ingestion page (upload PDF, OCR language, Start/resume, Recheck, review, chunks)
+- Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing.
+
 ## Commands
 - `npm run dev` the SPA
-- `npm test` unit tests (runTask logic with fake-indexeddb)
+- `npm test` unit tests (runTask with fake-indexeddb, chunker, page quality, OCR output check)
+- `python3 tests/fixtures/make_fixtures.py` regenerates test PDFs (scanned30.pdf is gitignored)
 - `npx supabase start`, then `npx supabase functions serve ai-proxy --env-file supabase/functions/.env`

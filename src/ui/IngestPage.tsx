@@ -1,0 +1,302 @@
+import { useEffect, useRef, useState } from 'react';
+import { openHarnessDb, FINAL_PAGE_STATUSES, type HarnessDBHandle, type DocumentRecord, type PageRecord, type ChunkRecord } from '../runner/db';
+import { sha256Bytes } from '../ingest/hash';
+import { requestPersistence, storageReport, type StorageReport } from '../ingest/storage';
+import { openPdf, renderPageInto, closePdf, type PdfDoc } from '../ingest/pdfPages';
+import type { IngestMessage } from '../ingest/ingest.worker';
+import type { IngestEvent } from '../ingest/pipeline';
+
+const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
+const MB = (n: number) => (n / 1048576).toFixed(1) + ' MB';
+
+export function IngestPage() {
+  const [db, setDb] = useState<HarnessDBHandle | null>(null);
+  const [docs, setDocs] = useState<DocumentRecord[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pages, setPages] = useState<PageRecord[]>([]);
+  const [chunks, setChunks] = useState<ChunkRecord[]>([]);
+  const [progress, setProgress] = useState<{ done: number; total: number; skipped: number } | null>(null);
+  const [log, setLog] = useState<string[]>([]);
+  const [storage, setStorage] = useState<StorageReport | null>(null);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [reviewPageNo, setReviewPageNo] = useState<number | null>(null);
+  const [correction, setCorrection] = useState('');
+  const [busy, setBusy] = useState(false);
+  const workerRef = useRef<Worker | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pdfRef = useRef<{ docId: string; pdf: PdfDoc } | null>(null);
+
+  const addLog = (line: string) => setLog((l) => [...l.slice(-60), `${new Date().toLocaleTimeString()} ${line}`]);
+
+  useEffect(() => {
+    openHarnessDb().then(setDb);
+  }, []);
+
+  useEffect(() => {
+    if (!db) return;
+    const refresh = async () => {
+      setDocs((await db.getAll('documents')).sort((a, b) => b.createdAt - a.createdAt));
+      if (selectedId) {
+        const all = await db.getAll('pages', IDBKeyRange.bound([selectedId, 0], [selectedId, Number.MAX_SAFE_INTEGER]));
+        setPages(all.sort((a, b) => a.pageNo - b.pageNo));
+        const doc = await db.get('documents', selectedId);
+        if (doc?.status === 'ready') {
+          const cs = await db.getAll('chunks', IDBKeyRange.bound(`${selectedId}:`, `${selectedId}:\uffff`));
+          setChunks(cs.sort((a, b) => a.index - b.index));
+        } else {
+          setChunks([]);
+        }
+      }
+    };
+    refresh();
+    const t = setInterval(refresh, 1500);
+    return () => clearInterval(t);
+  }, [db, selectedId]);
+
+  useEffect(() => {
+    requestPersistence().then(setPersisted);
+  }, []);
+
+  const selected = docs.find((d) => d.id === selectedId) ?? null;
+
+  async function onFile(file: File) {
+    if (!db) return;
+    const buf = await file.arrayBuffer();
+    const hash = await sha256Bytes(buf);
+    const report = await storageReport(file.size);
+    setStorage(report);
+    if (!report.fits) addLog(`WARNING: ${file.name} needs about ${MB(report.neededBytes)} free, only ${MB(report.free)} available`);
+    const existing = await db.get('documents', hash);
+    if (!existing) {
+      await db.put('documents', {
+        id: hash,
+        name: file.name,
+        hash,
+        size: file.size,
+        pdf: new Blob([buf], { type: 'application/pdf' }),
+        createdAt: Date.now(),
+        status: 'new',
+        ocrLangs: 'eng',
+        pageCount: 0,
+        prepFingerprint: null,
+        chunkCount: 0,
+      });
+      addLog(`stored ${file.name} (${MB(file.size)}) as ${hash.slice(0, 12)}`);
+    } else {
+      addLog(`${file.name} already stored`);
+    }
+    setSelectedId(hash);
+  }
+
+  async function setLangs(langs: string) {
+    if (!db || !selected) return;
+    await db.put('documents', { ...selected, ocrLangs: langs });
+  }
+
+  function post(msg: IngestMessage) {
+    if (workerRef.current) workerRef.current.terminate();
+    const worker = new Worker(new URL('../ingest/ingest.worker.ts', import.meta.url), { type: 'module' });
+    workerRef.current = worker;
+    setBusy(true);
+    worker.onmessage = (e: MessageEvent<IngestEvent | { type: 'locked' | 'idle'; docId?: string }>) => {
+      const ev = e.data;
+      if (ev.type === 'progress') {
+        setProgress({ done: ev.done, total: ev.total, skipped: ev.skipped });
+      } else if (ev.type === 'page') {
+        addLog(`page ${ev.pageNo}: ${ev.status}${ev.reason ? ` (${ev.reason})` : ''}`);
+      } else if (ev.type === 'finished') {
+        addLog(`finished: ${ev.status}, review pages ${ev.review}, chunks ${ev.chunks}`);
+        setProgress(null);
+      } else if (ev.type === 'locked') {
+        addLog('locked: this document is being processed in another tab');
+      } else if (ev.type === 'error') {
+        addLog(`error: ${(ev as { message: string }).message}`);
+      } else if (ev.type === 'idle') {
+        setBusy(false);
+        worker.terminate();
+        workerRef.current = null;
+      }
+    };
+    worker.postMessage(msg);
+  }
+
+  function startIngest(recheck: boolean) {
+    if (!selected) return;
+    addLog(recheck ? 'recheck started (decisions kept)' : 'ingest started');
+    post({ type: 'ingest', docId: selected.id, recheck });
+  }
+
+  async function reviewImage(pageNo: number) {
+    if (!selected?.pdf) return;
+    if (!pdfRef.current || pdfRef.current.docId !== selected.id) {
+      if (pdfRef.current) await closePdf(pdfRef.current.pdf);
+      pdfRef.current = { docId: selected.id, pdf: await openPdf(await selected.pdf.arrayBuffer()) };
+    }
+    const canvas = canvasRef.current;
+    if (canvas) await renderPageInto(pdfRef.current.pdf, pageNo, 110, canvas);
+  }
+
+  useEffect(() => {
+    if (reviewPageNo !== null) reviewImage(reviewPageNo).catch((e) => addLog(`render failed: ${String(e)}`));
+  }, [reviewPageNo, selectedId]);
+
+  const review = pages.filter((p) => !FINAL_PAGE_STATUSES.includes(p.status));
+  const reviewPage = pages.find((p) => p.pageNo === reviewPageNo) ?? null;
+
+  async function decide(page: PageRecord, decision: 'accept' | 'correct' | 'blank' | 'unresolved', text?: string) {
+    if (!db) return;
+    const now = Date.now();
+    const finalText = decision === 'blank' ? '' : decision === 'correct' ? (text ?? '') : page.text;
+    await db.put('ocr_decisions', { docId: page.docId, pageNo: page.pageNo, decision, text: finalText, savedAt: now }, [page.docId, page.pageNo]);
+    if (decision === 'unresolved') {
+      await db.put('pages', { ...page, status: 'review', reason: 'unresolved', updatedAt: now }, [page.docId, page.pageNo]);
+    } else {
+      await db.put(
+        'pages',
+        { ...page, text: finalText, status: decision === 'blank' ? 'blank' : 'accepted', source: 'manual', reason: null, updatedAt: now },
+        [page.docId, page.pageNo],
+      );
+    }
+    addLog(`page ${page.pageNo}: decision ${decision} saved`);
+    setCorrection('');
+    setReviewPageNo(null);
+    post({ type: 'ingest', docId: page.docId });
+  }
+
+  return (
+    <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1200 }}>
+      <h2>Ingestion</h2>
+
+      <div>
+        <input type="file" accept="application/pdf" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+        {persisted !== null && <span> storage persistent: {String(persisted)}</span>}
+        {storage && !storage.fits && (
+          <div style={{ color: 'red' }}>
+            Quota warning: this file needs about {MB(storage.neededBytes)} free, but only {MB(storage.free)} is available.
+          </div>
+        )}
+      </div>
+
+      <h3>Documents</h3>
+      <select value={selectedId ?? ''} onChange={(e) => setSelectedId(e.target.value || null)}>
+        <option value="">-- select --</option>
+        {docs.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.name} [{d.status}] {d.id.slice(0, 8)}
+          </option>
+        ))}
+      </select>
+
+      {selected && (
+        <div style={{ marginTop: 8 }}>
+          <div>
+            Status: <b>{selected.status}</b> · pages {selected.pageCount} · chunks {selected.chunkCount} · prep{' '}
+            <code>{selected.prepFingerprint?.slice(0, 16) ?? '-'}</code> · doc hash <code>{selected.hash.slice(0, 16)}</code>
+          </div>
+          <div>
+            OCR language:{' '}
+            <select value={selected.ocrLangs} disabled={busy} onChange={(e) => setLangs(e.target.value)}>
+              {LANG_OPTIONS.map((l) => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>{' '}
+            <button disabled={busy} onClick={() => startIngest(false)}>Start / resume</button>{' '}
+            <button disabled={busy} onClick={() => startIngest(true)}>Recheck (keep decisions)</button>
+          </div>
+          {progress && (
+            <div>
+              Progress: {progress.done} / {progress.total} pages (skipped {progress.skipped} already saved)
+              <progress value={progress.done} max={progress.total} style={{ marginLeft: 8 }} />
+            </div>
+          )}
+          <div>
+            Review needed: {review.length} page(s).{' '}
+            {selected.status === 'ready' ? <b style={{ color: 'green' }}>READY</b> : <span>Not ready</span>}
+          </div>
+        </div>
+      )}
+
+      {selected && pages.length > 0 && (
+        <>
+          <h3>Pages</h3>
+          <table border={1} cellPadding={3}>
+            <thead>
+              <tr><th>page</th><th>status</th><th>source</th><th>reason</th><th>dpi</th><th>native chars</th><th>images</th><th>review</th></tr>
+            </thead>
+            <tbody>
+              {pages.map((p) => (
+                <tr key={p.pageNo}>
+                  <td>{p.pageNo}</td>
+                  <td>{p.status}</td>
+                  <td>{p.source ?? ''}</td>
+                  <td>{p.reason ?? ''}</td>
+                  <td>{p.dpi ?? ''}</td>
+                  <td>{p.nativeChars}</td>
+                  <td>{p.imageCount}</td>
+                  <td>
+                    {!FINAL_PAGE_STATUSES.includes(p.status) && (
+                      <button onClick={() => { setReviewPageNo(p.pageNo); setCorrection(p.text); }}>review</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {reviewPage && (
+        <div style={{ marginTop: 12, border: '1px solid #999', padding: 8 }}>
+          <h3>Review page {reviewPage.pageNo} ({reviewPage.reason ?? reviewPage.status})</h3>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <canvas ref={canvasRef} style={{ width: 420, border: '1px solid #ccc' }} />
+            <div style={{ flex: 1 }}>
+              <textarea rows={18} style={{ width: '100%' }} value={correction} onChange={(e) => setCorrection(e.target.value)} />
+              <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button onClick={() => decide(reviewPage, 'accept')}>Accept</button>
+                <button onClick={() => decide(reviewPage, 'correct', correction)}>Save correction</button>
+                <button onClick={() => decide(reviewPage, 'blank')}>Confirm blank</button>
+                <button onClick={() => decide(reviewPage, 'unresolved')}>Leave unresolved</button>
+                <button
+                  disabled={busy}
+                  onClick={() => { post({ type: 'ocr', docId: reviewPage.docId, pageNo: reviewPage.pageNo }); addLog(`page ${reviewPage.pageNo}: OCR retry at 300 DPI`); }}
+                >
+                  Retry OCR at 300 DPI
+                </button>
+                <button onClick={() => setReviewPageNo(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {chunks.length > 0 && (
+        <>
+          <h3>Chunks ({chunks.length})</h3>
+          <table border={1} cellPadding={3}>
+            <thead>
+              <tr><th>#</th><th>clauses</th><th>pages</th><th>tokens (est)</th><th>heading</th><th>section</th><th>oversize</th><th>carried</th></tr>
+            </thead>
+            <tbody>
+              {chunks.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.index}</td>
+                  <td>{c.clauseFrom ?? '-'} to {c.clauseTo ?? '-'}</td>
+                  <td>{c.pageStart}-{c.pageEnd}</td>
+                  <td>{c.tokenEst}</td>
+                  <td>{c.heading ?? ''}</td>
+                  <td>{c.parentSection ?? ''}</td>
+                  <td>{c.oversize ? 'yes' : ''}</td>
+                  <td>{c.carried ? 'yes' : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <h3>Log</h3>
+      <pre style={{ maxHeight: 240, overflow: 'auto' }}>{log.join('\n')}</pre>
+    </div>
+  );
+}
