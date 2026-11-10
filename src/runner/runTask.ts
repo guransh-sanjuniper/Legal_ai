@@ -50,7 +50,14 @@ async function attempt(db: HarnessDBHandle, task: Task, cfg: RunConfig): Promise
 
   let res: CallResult;
   try {
-    res = await cfg.callModel({ model, prompt: task.prompt, input: task.input, maxTokens: task.maxTokens, timeoutMs: cfg.timeoutMs });
+    res = await cfg.callModel({
+      model,
+      prompt: task.prompt,
+      input: task.input,
+      maxTokens: task.maxTokens,
+      timeoutMs: cfg.timeoutMs,
+      reasoning: cfg.reasoning ?? null,
+    });
   } catch (e) {
     const code = e instanceof CallError ? e.code : 'network';
     return fail(db, requesting, code, cfg, cfg.now() - started);
@@ -97,6 +104,9 @@ async function finishFromRaw(db: HarnessDBHandle, task: Task, raw: RawResponse, 
   const now = cfg.now();
 
   if (raw.finishReason === 'length') {
+    // Some reasoning models spend the whole budget on reasoning and emit no text. Splitting
+    // the input cannot help there, so fail instead of fanning out more paid calls.
+    if (raw.text.trim().length === 0) return fail(db, task, 'empty_output', cfg);
     const pieces = splitInput(task.input, cfg.minPieceChars);
     if (!pieces || task.depth + 1 > cfg.maxSplitDepth) return fail(db, task, 'length', cfg);
     const specs: TaskSpec[] = pieces.map((input, i) => ({

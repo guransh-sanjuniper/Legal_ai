@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
   if (rlErr) return json(500, { code: 'internal' });
   if ((count as number) > limit) return json(429, { code: 'http_429' });
 
-  let body: { model?: unknown; messages?: unknown; max_tokens?: unknown };
+  let body: { model?: unknown; messages?: unknown; max_tokens?: unknown; reasoning?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -49,6 +49,7 @@ Deno.serve(async (req) => {
         model: body.model,
         messages: body.messages,
         max_tokens: maxTokens,
+        ...(body.reasoning && typeof body.reasoning === 'object' ? { reasoning: body.reasoning } : {}),
         stream: true,
         usage: { include: true },
       }),

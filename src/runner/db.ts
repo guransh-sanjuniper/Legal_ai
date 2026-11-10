@@ -42,9 +42,48 @@ export interface OcrDecision {
   savedAt: number;
 }
 
+export interface EmbeddingWindowRecord {
+  key: string;
+  docId: string;
+  chunkId: string;
+  windowIndex: number;
+  text: string;
+  start: number;
+  end: number;
+  tokenEst: number;
+  model: string;
+  modelVersion: string;
+  dim: number;
+  prepFingerprint: string;
+  vector: Float32Array;
+}
+
+export interface EmbeddingStateRecord {
+  docId: string;
+  model: string;
+  modelVersion: string;
+  dim: number;
+  prepFingerprint: string;
+  windowsTotal: number;
+  completedAt: number | null;
+}
+
+export interface DefinitionsRecord {
+  docId: string;
+  prepFingerprint: string;
+  sheet: {
+    parties: string[];
+    defined_terms: { term: string; definition: string; clause: string | null; page: number | null }[];
+    key_dates: { date: string; description: string; clause: string | null; page: number | null }[];
+    sources: { chunkId: string; pageStart: number; pageEnd: number }[];
+  };
+  updatedAt: number;
+}
+
 export interface ChunkRecord {
   id: string;
   docId: string;
+  prepFingerprint: string;
   index: number;
   text: string;
   carried: string | null;
@@ -68,6 +107,9 @@ export interface HarnessDB extends DBSchema {
   pages: { key: [string, number]; value: PageRecord };
   chunks: { key: string; value: ChunkRecord };
   embeddings: { key: string; value: { chunkId: string; model: string; vector: Float32Array } };
+  embedding_windows: { key: string; value: EmbeddingWindowRecord; indexes: { byDoc: string } };
+  embedding_state: { key: string; value: EmbeddingStateRecord };
+  definitions: { key: string; value: DefinitionsRecord };
   tasks: { key: string; value: Task; indexes: { byRun: string } };
   raw_responses: { key: string; value: RawResponse };
   ocr_decisions: { key: [string, number]; value: OcrDecision };
@@ -77,19 +119,35 @@ export interface HarnessDB extends DBSchema {
 export type HarnessDBHandle = IDBPDatabase<HarnessDB>;
 
 export function openHarnessDb(): Promise<HarnessDBHandle> {
-  return openDB<HarnessDB>('pipeline-harness', 1, {
-    upgrade(db) {
-      db.createObjectStore('documents', { keyPath: 'id' });
-      db.createObjectStore('pages');
-      db.createObjectStore('chunks', { keyPath: 'id' });
-      db.createObjectStore('embeddings', { keyPath: 'chunkId' });
-      const tasks = db.createObjectStore('tasks', { keyPath: 'id' });
-      tasks.createIndex('byRun', 'runId');
-      db.createObjectStore('raw_responses', { keyPath: 'key' });
-      db.createObjectStore('ocr_decisions');
-      db.createObjectStore('run_state', { keyPath: 'runId' });
+  return openDB<HarnessDB>('pipeline-harness', 2, {
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        db.createObjectStore('documents', { keyPath: 'id' });
+        db.createObjectStore('pages');
+        db.createObjectStore('chunks', { keyPath: 'id' });
+        db.createObjectStore('embeddings', { keyPath: 'chunkId' });
+        const tasks = db.createObjectStore('tasks', { keyPath: 'id' });
+        tasks.createIndex('byRun', 'runId');
+        db.createObjectStore('raw_responses', { keyPath: 'key' });
+        db.createObjectStore('ocr_decisions');
+        db.createObjectStore('run_state', { keyPath: 'runId' });
+      }
+      if (oldVersion < 2) {
+        const windows = db.createObjectStore('embedding_windows', { keyPath: 'key' });
+        windows.createIndex('byDoc', 'docId');
+        db.createObjectStore('embedding_state', { keyPath: 'docId' });
+        db.createObjectStore('definitions', { keyPath: 'docId' });
+      }
     },
   });
+}
+
+export async function deleteEmbeddingsForDoc(db: HarnessDBHandle, docId: string): Promise<void> {
+  const tx = db.transaction(['embedding_windows', 'embedding_state'], 'readwrite');
+  const keys = await tx.objectStore('embedding_windows').index('byDoc').getAllKeys(docId);
+  for (const key of keys) await tx.objectStore('embedding_windows').delete(key);
+  await tx.objectStore('embedding_state').delete(docId);
+  await tx.done;
 }
 
 export function rawKey(taskId: string, attemptId: string): string {

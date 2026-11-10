@@ -1,0 +1,26 @@
+{
+  "version": "law-standin-v1",
+  "notice": "TEST DATA ONLY. These are invented placeholder passages for harness testing. They are NOT statutes, are NOT legal advice, and must not be cited. Replace with the firm's verified law library.",
+  "passages": [
+    { "id": "L01", "title": "Possession and delay", "text": "PLACEHOLDER: Where a promoter fails to hand over possession by the agreed date, the promoter is liable to pay compensation for every month of delay until possession is actually handed over." },
+    { "id": "L02", "title": "Compensation for delay", "text": "PLACEHOLDER: Delay in completion of a project entitles the allottee to interest on the amount paid, at the rate prescribed, for the period of delay." },
+    { "id": "L03", "title": "Maintenance charges", "text": "PLACEHOLDER: A member must pay maintenance charges to the society every month. Non payment of maintenance charges is a breach and attracts interest on arrears." },
+    { "id": "L04", "title": "Power of attorney", "text": "PLACEHOLDER: A society may execute a power of attorney in favour of the developer to enable the developer to obtain permissions, approvals and no objection certificates for redevelopment." },
+    { "id": "L05", "title": "Stamp duty", "text": "PLACEHOLDER: Stamp duty is payable on the instrument of transfer at the rate prescribed by the stamp schedule. Registration charges are payable in addition to stamp duty." },
+    { "id": "L06", "title": "Registration of agreements", "text": "PLACEHOLDER: An agreement for sale must be registered under the registration law within the prescribed period, failing which it is not admissible as evidence." },
+    { "id": "L03b", "title": "Maintenance arrears", "text": "PLACEHOLDER: Arrears of maintenance charges may be recovered by the society from the defaulting member with interest, and may be a charge on the flat." },
+    { "id": "L07", "title": "Arbitration", "text": "PLACEHOLDER: Any dispute arising between the parties out of this agreement shall be referred to arbitration by a sole arbitrator appointed jointly by the parties." },
+    { "id": "L08", "title": "Jurisdiction", "text": "PLACEHOLDER: The courts at the place where the property is situated shall have exclusive jurisdiction over disputes relating to the property." },
+    { "id": "L09", "title": "Force majeure", "text": "PLACEHOLDER: A party is not liable for delay caused by force majeure, being events beyond the reasonable control of that party, including natural calamities and government orders." },
+    { "id": "L10", "title": "Transfer of flat", "text": "PLACEHOLDER: A member may transfer a flat only after informing the society and paying the transfer fee. The society must record the transfer in its register of members." },
+    { "id": "L11", "title": "Nomination and succession", "text": "PLACEHOLDER: On the death of a member, the nominee or legal heir may apply to the society for transfer of the flat and membership in accordance with the bye laws." },
+    { "id": "L12", "title": "Redevelopment consent", "text": "PLACEHOLDER: Redevelopment of a society property requires the consent of the requisite majority of members in a general body meeting and a registered development agreement." },
+    { "id": "L13", "title": "Corpus fund", "text": "PLACEHOLDER: The developer shall pay a corpus amount to the society for the benefit of the members as agreed in the development agreement." },
+    { "id": "L14", "title": "Rent for alternative accommodation", "text": "PLACEHOLDER: The developer shall pay monthly rent for temporary alternative accommodation to each displaced member until possession of the new premises is handed over." },
+    { "id": "L15", "title": "Security deposit", "text": "PLACEHOLDER: The developer may be required to furnish a security deposit or bank guarantee to secure performance of the obligations under the development agreement." },
+    { "id": "L16", "title": "Title and indemnity", "text": "PLACEHOLDER: The society shall indemnify the developer against claims to title, and the developer shall indemnify the society against defects in construction." },
+    { "id": "L17", "title": "Notices", "text": "PLACEHOLDER: A notice under this agreement must be in writing and sent to the registered address of the party by hand, registered post or email acknowledged by the recipient." },
+    { "id": "L18", "title": "Termination", "text": "PLACEHOLDER: A party may terminate this agreement on material breach after giving written notice and a reasonable opportunity to remedy the breach." },
+    { "id": "L19", "title": "Occupation certificate", "text": "PLACEHOLDER: The developer shall obtain the occupation certificate or completion certificate before handing over possession of the new building to the society." }
+  ]
+}

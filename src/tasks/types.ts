@@ -61,12 +61,15 @@ export interface RawResponse {
   savedAt: number;
 }
 
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+
 export interface CallRequest {
   model: string;
   prompt: string;
   input: string;
   maxTokens: number;
   timeoutMs: number;
+  reasoning?: { effort: ReasoningEffort } | null;
 }
 
 export interface CallResult {
@@ -104,6 +107,7 @@ export interface RunConfig {
   model: string;
   fallbackModel: string | null;
   timeoutMs: number;
+  reasoning?: { effort: ReasoningEffort } | null;
   maxRetries: number;
   minPieceChars: number;
   maxSplitDepth: number;

@@ -15,7 +15,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `ingest/` pdf.js extraction, page quality, Tesseract OCR, OCR output check, clause chunker, fingerprints, storage check. `ingest.worker.ts` runs the pipeline off the main thread.
 - `runner/` IndexedDB layer, `runTask`, worker, client (plain TS, no UI imports)
 - `tasks/` task types, fingerprint, parse, split, validation
-- `retrieval/` local search (not built yet)
+- `retrieval/` embeddings in a worker (transformers.js), Unicode tokenizer + MiniSearch keyword index, RRF hybrid search, law stand-in, definitions sheet
 - `ui/` React pages only
 
 ## Tables
@@ -43,10 +43,13 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 ## Pages (dev)
 - `/` the Prompt 1 task test page
 - `/?page=ingest` the ingestion page (upload PDF, OCR language, Start/resume, Recheck, review, chunks)
+- `/?page=search` embedding progress, hybrid document search, law stand-in search, definitions sheet
 - Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing.
 - Chunking: top-level clauses must continue the numeric sequence (`N)` primarily, `N.` legacy). `(a)`, `(i)`, `a)`, `(N)` stay inside the clause. Lettered recitals continue A..Z with one restart allowed. Table rows are never boundaries (Sr./no. headers, numbered name/amount rows, bare `N text`).
 - `checkChunks` (shown as the "Chunk check" panel) reports page gaps/overlaps, above-max chunks, bad starts, missing/repeated clauses and size-only clause splits.
 - Golden test: `tests/golden/hiramoti.test.ts` reads `HIRAMOTI_PDF` (or a known local path) and skips if the PDF is absent.
+- Embeddings: `Xenova/multilingual-e5-small` q8, version `...@q8-v1`, `passage:` for chunks, `query:` for questions, windows ≤400 tokens pointing at a parent chunk. Vectors store model + modelVersion + prepFingerprint; a mismatch re-embeds.
+- Definitions use a non-reasoning model: set `VITE_SEARCH_MODEL` (e.g. `openai/gpt-4o-mini`). Reasoning models can spend the whole output budget on reasoning and return no JSON; that now fails as `empty_output` instead of splitting.
 
 ## Commands
 - `npm run dev` the SPA

@@ -33,6 +33,7 @@ export function makeCallModel(opts: { functionsUrl: string; anonKey: string; acc
               { role: 'user', content: req.input },
             ],
             max_tokens: req.maxTokens,
+            ...(req.reasoning ? { reasoning: req.reasoning } : {}),
           }),
           signal: ctrl.signal,
         });

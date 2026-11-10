@@ -1,11 +1,11 @@
 import type { HarnessDBHandle, PageRecord, PageStatus, DocumentRecord, ChunkRecord, OcrDecision } from '../runner/db';
-import { FINAL_PAGE_STATUSES } from '../runner/db';
+import { FINAL_PAGE_STATUSES, deleteEmbeddingsForDoc } from '../runner/db';
 import { sha256Hex } from '../tasks/fingerprint';
 import { openPdf, closePdf, extractNativePage, renderPageInto, type PdfDoc } from './pdfPages';
 import { assessNativeText } from './quality';
 import { checkOcrOutput, type OcrCheck, type OcrLang } from './ocrCheck';
 import { OcrEngine } from './ocr';
-import { chunkDocument } from './chunk';
+import { chunkDocument, DEFAULT_CHUNK_CONFIG } from './chunk';
 
 export const EXTRACTOR_VERSION = 'pdfjs-v1+tesseract-v1';
 const BATCH_PAGES = 5;
@@ -127,7 +127,13 @@ async function writePages(db: HarnessDBHandle, records: PageRecord[]): Promise<v
 }
 
 async function prepFingerprint(docHash: string, ocrLangs: string, pages: PageRecord[]): Promise<string> {
-  const rows: unknown[] = [EXTRACTOR_VERSION, docHash, ocrLangs];
+  // Chunk sizes are part of the fingerprint: changing them rebuilds chunks and embeddings.
+  const rows: unknown[] = [
+    EXTRACTOR_VERSION,
+    docHash,
+    ocrLangs,
+    `chunk:${DEFAULT_CHUNK_CONFIG.targetTokens}/${DEFAULT_CHUNK_CONFIG.maxTokens}/${DEFAULT_CHUNK_CONFIG.minTokens}`,
+  ];
   for (const p of pages) rows.push([p.pageNo, p.status, await sha256Hex(p.text)]);
   return sha256Hex(JSON.stringify(rows));
 }
@@ -186,7 +192,8 @@ async function finalize(deps: PipelineDeps, docId: string): Promise<void> {
 
   const chunks = chunkDocument(pages.map((p) => ({ pageNo: p.pageNo, text: p.text })));
   const prep = await prepFingerprint(doc.hash, doc.ocrLangs, pages);
-  const records: ChunkRecord[] = chunks.map((c) => ({ ...c, id: `${docId}:${c.index}`, docId }));
+  const records: ChunkRecord[] = chunks.map((c) => ({ ...c, id: `${docId}:${c.index}`, docId, prepFingerprint: prep }));
+  const previousPrep = doc.prepFingerprint;
 
   const tx = db.transaction(['chunks', 'documents'], 'readwrite');
   const store = tx.objectStore('chunks');
@@ -200,6 +207,10 @@ async function finalize(deps: PipelineDeps, docId: string): Promise<void> {
     chunkCount: records.length,
   });
   await tx.done;
+
+  // A changed preparation (pages, OCR decisions or chunk sizes) invalidates stored vectors.
+  if (previousPrep !== prep) await deleteEmbeddingsForDoc(db, docId);
+
   emit({ type: 'finished', status: 'ready', review: 0, chunks: records.length, prepFingerprint: prep });
 }
 
