@@ -275,7 +275,7 @@ export function IngestPage() {
           <h3>Chunks ({chunks.length})</h3>
           <table border={1} cellPadding={3}>
             <thead>
-              <tr><th>#</th><th>clauses</th><th>pages</th><th>tokens (est)</th><th>heading</th><th>section</th><th>oversize</th><th>carried</th></tr>
+              <tr><th>#</th><th>clauses</th><th>pages</th><th>tokens (est)</th><th>heading</th><th>section</th><th>split</th><th>carried</th></tr>
             </thead>
             <tbody>
               {chunks.map((c) => (
@@ -286,7 +286,7 @@ export function IngestPage() {
                   <td>{c.tokenEst}</td>
                   <td>{c.heading ?? ''}</td>
                   <td>{c.parentSection ?? ''}</td>
-                  <td>{c.oversize ? 'yes' : ''}</td>
+                  <td>{c.split ? `part ${(c.partIndex ?? 0) + 1}/${c.partCount}` : ''}</td>
                   <td>{c.carried ? 'yes' : ''}</td>
                 </tr>
               ))}

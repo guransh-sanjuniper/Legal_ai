@@ -56,7 +56,9 @@ export interface ChunkRecord {
   parentSection: string | null;
   tokenEst: number;
   units: number;
-  oversize: boolean;
+  split: boolean;
+  partIndex: number | null;
+  partCount: number | null;
 }
 
 export interface HarnessDB extends DBSchema {
