@@ -5,6 +5,7 @@ import { requestPersistence, storageReport, type StorageReport } from '../ingest
 import { openPdf, renderPageInto, closePdf, type PdfDoc } from '../ingest/pdfPages';
 import type { IngestMessage } from '../ingest/ingest.worker';
 import type { IngestEvent } from '../ingest/pipeline';
+import { checkChunks } from '../ingest/checkChunks';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
 const MB = (n: number) => (n / 1048576).toFixed(1) + ' MB';
@@ -42,7 +43,16 @@ export function IngestPage() {
         const doc = await db.get('documents', selectedId);
         if (doc?.status === 'ready') {
           const cs = await db.getAll('chunks', IDBKeyRange.bound(`${selectedId}:`, `${selectedId}:\uffff`));
-          setChunks(cs.sort((a, b) => a.index - b.index));
+          // Rows written before clauses/startKind existed are normalised so the checker can read them.
+          setChunks(
+            cs
+              .map((c) => ({
+                ...c,
+                clauses: c.clauses ?? (c.clauseFrom ? [c.clauseFrom] : []),
+                startKind: c.startKind ?? 'clause',
+              }))
+              .sort((a, b) => a.index - b.index),
+          );
         } else {
           setChunks([]);
         }
@@ -56,6 +66,12 @@ export function IngestPage() {
   useEffect(() => {
     requestPersistence().then(setPersisted);
   }, []);
+
+  // Switching documents must not leave a review panel (and its edited text) pointing at the old one.
+  useEffect(() => {
+    setReviewPageNo(null);
+    setCorrection('');
+  }, [selectedId]);
 
   const selected = docs.find((d) => d.id === selectedId) ?? null;
 
@@ -142,6 +158,7 @@ export function IngestPage() {
 
   const review = pages.filter((p) => !FINAL_PAGE_STATUSES.includes(p.status));
   const reviewPage = pages.find((p) => p.pageNo === reviewPageNo) ?? null;
+  const check = chunks.length > 0 ? checkChunks(chunks, pages.map((p) => ({ pageNo: p.pageNo, text: p.text }))) : null;
 
   async function decide(page: PageRecord, decision: 'accept' | 'correct' | 'blank' | 'unresolved', text?: string) {
     if (!db) return;
@@ -275,23 +292,52 @@ export function IngestPage() {
           <h3>Chunks ({chunks.length})</h3>
           <table border={1} cellPadding={3}>
             <thead>
-              <tr><th>#</th><th>clauses</th><th>pages</th><th>tokens (est)</th><th>heading</th><th>section</th><th>split</th><th>carried</th></tr>
+              <tr><th>#</th><th>clauses</th><th>pages</th><th>tokens (est)</th><th>start</th><th>heading</th><th>section</th><th>split</th></tr>
             </thead>
             <tbody>
               {chunks.map((c) => (
                 <tr key={c.id}>
                   <td>{c.index}</td>
-                  <td>{c.clauseFrom ?? '-'} to {c.clauseTo ?? '-'}</td>
+                  <td>{(c.clauses ?? []).join(', ') || c.clauseFrom || '-'}</td>
                   <td>{c.pageStart}-{c.pageEnd}</td>
                   <td>{c.tokenEst}</td>
+                  <td>{c.startKind}</td>
                   <td>{c.heading ?? ''}</td>
                   <td>{c.parentSection ?? ''}</td>
                   <td>{c.split ? `part ${(c.partIndex ?? 0) + 1}/${c.partCount}` : ''}</td>
-                  <td>{c.carried ? 'yes' : ''}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </>
+      )}
+
+      {check && (
+        <>
+          <h3>Chunk check</h3>
+          <div style={{ fontFamily: 'monospace', fontSize: 13 }}>
+            <div style={{ color: check.ok ? 'green' : 'red', fontWeight: 'bold' }}>
+              {check.ok ? 'PASS' : 'FAIL'}
+            </div>
+            <div>
+              pages covered {check.coveredPages}/{check.pageCount} · gaps {check.counts.gaps} · overlaps {check.counts.overlaps} ·
+              above max {check.counts.aboveMax} · bad starts {check.counts.badStarts} · missing clauses {check.counts.missing} ·
+              repeated clauses {check.counts.repeated} · split clauses {check.counts.split}
+            </div>
+            {check.pageGaps.length > 0 && <div>gaps: pages {check.pageGaps.join(', ')}</div>}
+            {check.pageOverlaps.length > 0 && <div>overlaps: pages {check.pageOverlaps.join(', ')}</div>}
+            {check.badStarts.length > 0 && (
+              <div>bad starts: {check.badStarts.map((b) => `#${b.index} (${b.reason})`).join('; ')}</div>
+            )}
+            {check.missingClauses.length > 0 && <div>missing: {check.missingClauses.join(', ')}</div>}
+            {check.repeatedClauses.length > 0 && <div>repeated: {check.repeatedClauses.join(', ')}</div>}
+            {check.splitClauses.length > 0 && (
+              <div>split by size only: {check.splitClauses.map((s) => `${s.clause} in chunks ${s.chunkIndexes.join('/')}`).join('; ')}</div>
+            )}
+            {check.aboveMax.length > 0 && (
+              <div>above max: {check.aboveMax.map((a) => `#${a.index} ${a.tokenEst}`).join('; ')}</div>
+            )}
+          </div>
         </>
       )}
 

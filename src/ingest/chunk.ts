@@ -15,6 +15,8 @@ export const DEFAULT_CHUNK_CONFIG: ChunkConfig = {
   minTokens: 300,
 };
 
+export type StartKind = 'clause' | 'subclause' | 'section' | 'lettered' | 'preamble' | 'part';
+
 export interface Chunk {
   index: number;
   text: string;
@@ -23,6 +25,8 @@ export interface Chunk {
   pageEnd: number;
   clauseFrom: string | null;
   clauseTo: string | null;
+  clauses: string[];
+  startKind: StartKind;
   heading: string | null;
   parentSection: string | null;
   tokenEst: number;
@@ -34,65 +38,227 @@ export interface Chunk {
 
 export interface Unit {
   clauseNo: string | null;
+  topClause: string | null;
+  startKind: StartKind;
   heading: string | null;
   section: string | null;
   pageStart: number;
   pageEnd: number;
   text: string;
+  gap: string | null;
 }
 
 export type LineKind = { kind: 'clause'; no: string } | { kind: 'section'; label: string } | null;
 
 const SECTION_RE = /^\s*(ARTICLE|Article|SCHEDULE|Schedule|ANNEXURE|Annexure|PART|Part|CHAPTER|Chapter)\s+([0-9]{1,3}|[IVXLCDM]{1,6}|[A-Z])\b/;
-const ROMAN_HEADING_RE = /^\s*([IVXLC]{1,6})\.\s+[A-Z]/;
 const CLAUSE_WORD_RE = /^\s*(CLAUSE|Clause)\s+(\d{1,3}(?:\.\d{1,3}){0,4})\b/;
-const NUMBERED_RE = /^\s*(\d{1,3}(?:\.\d{1,3}){0,4})\.?\s+(?=[A-Z("'“])/;
-const PAREN_NUMBER_RE = /^\s*\((\d{1,3})\)\s+(?=[A-Z])/;
+const PAREN_CLAUSE_RE = /^\s*(\d{1,3})\)\s+\S/;
+const DOTTED_TOP_RE = /^\s*(\d{1,3})\.\s+(?=\S)/;
+const DOTTED_SUB_RE = /^\s*(\d{1,3}(?:\.\d{1,3}){1,3})\.?\s+(?=\S)/;
+const LETTER_RE = /^\s*([A-Z])\.\s+(?=\S)/;
 const SENTENCE_END_RE = /[.!?;]+["')\]]*\s+/g;
+
+// Table detection. A "Sr. / no." header is split over two lines in real PDFs.
+const SR_HEADER_RE = /^\s*Sr\.?\s*$/i;
+const SR_NO_RE = /^\s*Sr\.?\s*no\.?\s*$/i;
+const NO_HEADER_RE = /^\s*No\.?\s*$/i;
+const NUMBER_ROW_RE = /^\s*(\d{1,3})(?:\.\d{1,3})?[.)]?\s+(\S.*)$/;
+const ROW_SIGNAL_RE = /(?:Mr|Mrs|Ms|Shri|Smt)\.?\s|Rs\.?|\/-|\b[A-Z]{1,2}-?\d{1,4}\b/;
+const SUB_HEADING_RE = /^\s*[a-z]\)\s+[A-Z][A-Z0-9 &/()'’.,-]{3,}/;
 
 export function classifyLine(line: string): LineKind {
   const section = SECTION_RE.exec(line);
   if (section) return { kind: 'section', label: `${section[1]} ${section[2]}` };
-  const roman = ROMAN_HEADING_RE.exec(line);
-  if (roman) return { kind: 'section', label: roman[1] };
   const clauseWord = CLAUSE_WORD_RE.exec(line);
   if (clauseWord) return { kind: 'clause', no: clauseWord[2] };
-  const numbered = NUMBERED_RE.exec(line);
-  if (numbered) return { kind: 'clause', no: numbered[1] };
-  const paren = PAREN_NUMBER_RE.exec(line);
-  if (paren) return { kind: 'clause', no: `(${paren[1]})` };
+  const paren = PAREN_CLAUSE_RE.exec(line);
+  if (paren) return { kind: 'clause', no: paren[1] };
+  const sub = DOTTED_SUB_RE.exec(line);
+  if (sub) return { kind: 'clause', no: sub[1] };
+  const dotted = DOTTED_TOP_RE.exec(line);
+  if (dotted) return { kind: 'clause', no: dotted[1] };
   return null;
+}
+
+function isSubHeading(line: string): boolean {
+  return SUB_HEADING_RE.test(line);
+}
+
+function rowLike(line: string): boolean {
+  const m = NUMBER_ROW_RE.exec(line);
+  if (!m) return false;
+  if (line.trim().length > 75) return false;
+  return ROW_SIGNAL_RE.test(line);
+}
+
+function rowRun(lines: string[], i: number): boolean {
+  if (!rowLike(lines[i])) return false;
+  return rowLike(lines[i + 1] ?? '') || rowLike(lines[i + 2] ?? '');
+}
+
+// A table ends at a section heading, a sub-heading like "d) COMMERCIAL UNITS:", or a
+// sequence-continuing clause that is not itself a table row.
+function tableExit(line: string, seq: { lastTop: number | null }): boolean {
+  if (SECTION_RE.test(line) || isSubHeading(line)) return true;
+  const cand = numericCandidate(line);
+  if (!cand || !checkNumericSequence(seq, cand).accept) return false;
+  if (rowLike(line)) return false;
+  if (PAREN_CLAUSE_RE.test(line)) return true;
+  return line.trim().length > 30;
+}
+
+interface NumericCandidate {
+  kind: 'top' | 'sub';
+  no: string;
+  n: number;
+  intPart: number;
+}
+
+function numericCandidate(line: string): NumericCandidate | null {
+  const paren = PAREN_CLAUSE_RE.exec(line);
+  if (paren) {
+    const n = Number(paren[1]);
+    return { kind: 'top', no: paren[1], n, intPart: n };
+  }
+  const word = CLAUSE_WORD_RE.exec(line);
+  if (word) {
+    const n = Number(word[2].split('.')[0]);
+    return { kind: 'top', no: word[2], n, intPart: n };
+  }
+  const sub = DOTTED_SUB_RE.exec(line);
+  if (sub) {
+    const no = sub[1];
+    return { kind: 'sub', no, n: Number(no.split('.')[0]), intPart: Number(no.split('.')[0]) };
+  }
+  const top = DOTTED_TOP_RE.exec(line);
+  if (top) {
+    const n = Number(top[1]);
+    return { kind: 'top', no: top[1], n, intPart: n };
+  }
+  return null;
+}
+
+interface SequenceResult {
+  accept: boolean;
+  gap: string | null;
+}
+
+function checkNumericSequence(state: { lastTop: number | null }, c: NumericCandidate): SequenceResult {
+  if (c.kind === 'sub') {
+    return { accept: state.lastTop !== null && c.intPart === state.lastTop, gap: null };
+  }
+  if (state.lastTop === null) return { accept: true, gap: null };
+  if (c.n === state.lastTop + 1) return { accept: true, gap: null };
+  if (c.n > state.lastTop + 1 && c.n <= state.lastTop + 3) {
+    return { accept: true, gap: `${state.lastTop + 1}-${c.n - 1}` };
+  }
+  return { accept: false, gap: null };
+}
+
+const LETTER_INDEX = (ch: string) => ch.charCodeAt(0) - 64;
+
+interface LetterState {
+  lastLetter: number | null;
+  restarts: number;
+}
+
+function checkLetterSequence(state: LetterState, letter: string): boolean {
+  const idx = LETTER_INDEX(letter);
+  if (!Number.isFinite(idx) || idx < 1 || idx > 26) return false;
+  if (state.lastLetter === null) return true;
+  if (idx === state.lastLetter + 1) return true;
+  if (idx === 1 && state.restarts < 1) return true;
+  return false;
 }
 
 export function buildUnits(pages: PageText[]): Unit[] {
   const units: Unit[] = [];
+  const seq = { lastTop: null as number | null };
+  const letters: LetterState = { lastLetter: null, restarts: 0 };
+  const table = { inTable: false, srArmed: false };
   let section: string | null = null;
   let current: Unit | null = null;
 
-  for (const page of pages) {
-    for (const rawLine of page.text.split('\n')) {
-      const line = rawLine.trimEnd();
-      if (!line.trim()) continue;
-      const kind = classifyLine(line);
+  const pushUnit = (startKind: StartKind, clauseNo: string | null, topClause: string | null, heading: string, pageNo: number, gap: string | null) => {
+    if (current && current.text.trim()) units.push(current);
+    current = { clauseNo, topClause, startKind, heading, section, pageStart: pageNo, pageEnd: pageNo, text: '', gap };
+  };
 
-      if (kind !== null) {
-        if (current && current.text.trim()) units.push(current);
-        const isSection = kind.kind === 'section';
-        if (isSection) section = kind.label;
-        current = {
-          clauseNo: kind.kind === 'clause' ? kind.no : null,
-          heading: line.trim().slice(0, 120),
-          section,
-          pageStart: page.pageNo,
-          pageEnd: page.pageNo,
-          text: '',
-        };
-      } else if (current === null) {
-        current = { clauseNo: null, heading: null, section, pageStart: page.pageNo, pageEnd: page.pageNo, text: '' };
+  const append = (line: string, pageNo: number) => {
+    if (current === null) pushUnit('preamble', null, null, '', pageNo, null);
+    const unit = current as Unit | null;
+    if (unit === null) return;
+    unit.text += (unit.text ? '\n' : '') + line;
+    unit.pageEnd = pageNo;
+  };
+
+  for (const page of pages) {
+    const lines = page.text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trimEnd();
+      if (!line.trim()) continue;
+
+      // Table lines are kept as text, they just never become boundaries.
+      if (table.inTable) {
+        const exits = tableExit(line, seq);
+        if (!exits) {
+          append(line, page.pageNo);
+          continue;
+        }
+        table.inTable = false;
+        table.srArmed = false;
+      } else {
+        if (SR_NO_RE.test(line)) {
+          table.inTable = true;
+          append(line, page.pageNo);
+          continue;
+        }
+        if (SR_HEADER_RE.test(line)) {
+          table.srArmed = true;
+          append(line, page.pageNo);
+          continue;
+        }
+        if (table.srArmed && NO_HEADER_RE.test(line)) {
+          table.inTable = true;
+          table.srArmed = false;
+          append(line, page.pageNo);
+          continue;
+        }
+        if (rowRun(lines, i)) {
+          table.inTable = true;
+          append(line, page.pageNo);
+          continue;
+        }
       }
 
-      current.text += (current.text ? '\n' : '') + line;
-      current.pageEnd = page.pageNo;
+      const sectionMatch = SECTION_RE.exec(line);
+      if (sectionMatch) {
+        section = `${sectionMatch[1]} ${sectionMatch[2]}`;
+        pushUnit('section', null, null, line.trim().slice(0, 120), page.pageNo, null);
+      } else {
+        const cand = numericCandidate(line);
+        if (cand) {
+          const res = checkNumericSequence(seq, cand);
+          if (res.accept) {
+            if (cand.kind === 'top') {
+              seq.lastTop = cand.n;
+              pushUnit('clause', cand.no, cand.no, line.trim().slice(0, 120), page.pageNo, res.gap);
+            } else {
+              pushUnit('subclause', cand.no, seq.lastTop === null ? null : String(seq.lastTop), line.trim().slice(0, 120), page.pageNo, null);
+            }
+          }
+        } else {
+          const letter = LETTER_RE.exec(line);
+          if (letter && checkLetterSequence(letters, letter[1])) {
+            const idx = LETTER_INDEX(letter[1]);
+            if (letters.lastLetter !== null && idx === 1) letters.restarts++;
+            letters.lastLetter = idx;
+            pushUnit('lettered', null, null, line.trim().slice(0, 120), page.pageNo, null);
+          }
+        }
+      }
+
+      append(line, page.pageNo);
     }
   }
   if (current && (current as Unit).text.trim()) units.push(current);
@@ -111,7 +277,7 @@ export function resolveChunkConfig(overrides: Partial<ChunkConfig> = {}): ChunkC
   return cfg;
 }
 
-// Splits text into sentence-ending spans. Joining the spans gives back the exact input.
+// Sentence-ending spans. Joining them gives back the exact input.
 export function sentenceSpans(text: string): string[] {
   const spans: string[] = [];
   let start = 0;
@@ -126,31 +292,12 @@ export function sentenceSpans(text: string): string[] {
   return spans;
 }
 
-function hardSplit(text: string, maxChars: number): string[] {
-  const parts: string[] = [];
-  let rest = text;
-  while (rest.length > maxChars) {
-    let cut = rest.lastIndexOf(' ', maxChars);
-    if (cut <= 0) cut = maxChars;
-    parts.push(rest.slice(0, cut));
-    rest = rest.slice(cut);
-  }
-  if (rest) parts.push(rest);
-  return parts;
-}
-
-// Packs sentences into parts of at most limitTokens. A single sentence longer than the limit is cut at a space.
+// Packs sentences into parts. Splits only between sentences, never inside one.
 export function packSentences(text: string, limitTokens: number): string[] {
   const limitChars = limitTokens * 4;
   const parts: string[] = [];
   let cur = '';
   for (const span of sentenceSpans(text)) {
-    if (span.length > limitChars) {
-      if (cur) parts.push(cur);
-      cur = '';
-      parts.push(...hardSplit(span, limitChars));
-      continue;
-    }
     if (cur && cur.length + span.length > limitChars) {
       parts.push(cur);
       cur = '';
@@ -168,7 +315,7 @@ interface NormalGroup {
 
 interface PartGroup {
   kind: 'part';
-  unit: Unit;
+  units: Unit[];
   text: string;
   partIndex: number;
   partCount: number;
@@ -176,12 +323,42 @@ interface PartGroup {
 
 type Group = NormalGroup | PartGroup;
 
+function unitsToText(units: Unit[]): string {
+  return units.map((u) => u.text).join('\n\n');
+}
+
 function groupTokens(group: Group): number {
   return estimateTokens(group.kind === 'normal' ? group.units.map((u) => u.text).join('\n\n') : group.text);
 }
 
 function groupText(group: Group): string {
   return group.kind === 'normal' ? group.units.map((u) => u.text).join('\n\n') : group.text;
+}
+
+// A clause and its sub-clauses are one atomic group: they are never separated except by a size split.
+function clauseGroups(units: Unit[]): Unit[][] {
+  const groups: Unit[][] = [];
+  let cur: Unit[] = [];
+  let key: string | null = null;
+  for (const unit of units) {
+    if (cur.length > 0 && unit.topClause !== key) {
+      groups.push(cur);
+      cur = [];
+    }
+    cur.push(unit);
+    key = unit.topClause;
+  }
+  if (cur.length) groups.push(cur);
+  return groups;
+}
+
+function topClausesOf(units: Unit[]): string[] {
+  const seen: string[] = [];
+  for (const u of units) {
+    const c = u.topClause;
+    if (c !== null && !seen.includes(c)) seen.push(c);
+  }
+  return seen;
 }
 
 export function chunkUnits(units: Unit[], overrides: Partial<ChunkConfig> = {}): Chunk[] {
@@ -196,27 +373,27 @@ export function chunkUnits(units: Unit[], overrides: Partial<ChunkConfig> = {}):
     curTokens = 0;
   };
 
-  for (const unit of units) {
-    const ut = estimateTokens(unit.text);
-    if (ut > cfg.maxTokens) {
+  for (const clause of clauseGroups(units)) {
+    const text = unitsToText(clause);
+    const ct = estimateTokens(text);
+    if (ct > cfg.maxTokens) {
       closeCur();
-      const parts = packSentences(unit.text, cfg.targetTokens);
-      parts.forEach((text, i) => groups.push({ kind: 'part', unit, text, partIndex: i, partCount: parts.length }));
+      const parts = packSentences(text, cfg.targetTokens);
+      parts.forEach((partText, i) => groups.push({ kind: 'part', units: clause, text: partText, partIndex: i, partCount: parts.length }));
       continue;
     }
     if (cur.length > 0) {
-      const sectionChanged = unit.section !== cur[0].section;
-      const wouldOverflow = curTokens + ut > cfg.maxTokens;
+      const sectionChanged = clause[0].section !== cur[0].section;
+      const wouldOverflow = curTokens + ct > cfg.maxTokens;
       const targetReached = curTokens >= cfg.targetTokens;
       const sectionDone = sectionChanged && curTokens >= cfg.minTokens;
       if (wouldOverflow || targetReached || sectionDone) closeCur();
     }
-    cur.push(unit);
-    curTokens += ut;
+    cur.push(...clause);
+    curTokens += ct;
   }
   closeCur();
 
-  // Merge any small chunk into its previous chunk, if the result still fits the max.
   const merged: Group[] = [];
   for (const group of groups) {
     const prev = merged[merged.length - 1];
@@ -242,35 +419,40 @@ function toChunk(group: Group, index: number, all: Group[]): Chunk {
   const carried = prev ? (prev.kind === 'normal' ? prev.units[prev.units.length - 1].text : prev.text) : null;
 
   if (group.kind === 'part') {
-    const u = group.unit;
+    const first = group.units[0];
+    const clause = first.topClause ?? first.clauseNo;
     return {
       index,
       text,
       carried,
-      pageStart: u.pageStart,
-      pageEnd: u.pageEnd,
-      clauseFrom: u.clauseNo,
-      clauseTo: u.clauseNo,
-      heading: u.heading,
-      parentSection: u.section,
+      pageStart: Math.min(...group.units.map((u) => u.pageStart)),
+      pageEnd: Math.max(...group.units.map((u) => u.pageEnd)),
+      clauseFrom: clause,
+      clauseTo: clause,
+      clauses: clause === null ? [] : [clause],
+      startKind: 'part',
+      heading: first.heading,
+      parentSection: first.section,
       tokenEst: estimateTokens(text),
-      units: 1,
+      units: group.units.length,
       split: true,
       partIndex: group.partIndex,
       partCount: group.partCount,
     };
   }
 
-  const clauses = group.units.map((u) => u.clauseNo).filter((c): c is string => c !== null);
   const first = group.units[0];
+  const clauseUnits = group.units.filter((u) => u.clauseNo !== null);
   return {
     index,
     text,
     carried,
     pageStart: Math.min(...group.units.map((u) => u.pageStart)),
     pageEnd: Math.max(...group.units.map((u) => u.pageEnd)),
-    clauseFrom: clauses[0] ?? null,
-    clauseTo: clauses[clauses.length - 1] ?? null,
+    clauseFrom: clauseUnits[0]?.clauseNo ?? null,
+    clauseTo: clauseUnits[clauseUnits.length - 1]?.clauseNo ?? null,
+    clauses: topClausesOf(group.units),
+    startKind: first.startKind,
     heading: first.heading,
     parentSection: first.section,
     tokenEst: estimateTokens(text),

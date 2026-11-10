@@ -6,3 +6,4 @@ supabase/.temp
 supabase/functions/.env
 tests/fixtures/scanned30.pdf
 __pycache__/
+scratch/

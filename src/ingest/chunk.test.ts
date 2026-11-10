@@ -10,6 +10,7 @@ import {
   type PageText,
   type Unit,
 } from './chunk';
+import { checkChunks } from './checkChunks';
 
 const CFG = DEFAULT_CHUNK_CONFIG;
 const tokens = (s: string) => Math.ceil(s.length / 4);
@@ -72,7 +73,9 @@ describe('numbering variants', () => {
     expect(classifyLine('1.1 Developer means Sunrise.')).toEqual({ kind: 'clause', no: '1.1' });
     expect(classifyLine('3.1.1 First instalment on booking.')).toEqual({ kind: 'clause', no: '3.1.1' });
     expect(classifyLine('Clause 5.2 Stamp duty shall be paid.')).toEqual({ kind: 'clause', no: '5.2' });
-    expect(classifyLine('(1) Each party shall comply.')).toEqual({ kind: 'clause', no: '(1)' });
+    expect(classifyLine('2) Appointment, Scope of work.')).toEqual({ kind: 'clause', no: '2' });
+    // (N) is a sub-item inside a clause, not a clause boundary.
+    expect(classifyLine('(1) Each party shall comply.')).toBeNull();
     expect(classifyLine('Article 5 Registration')).toEqual({ kind: 'section', label: 'Article 5' });
     expect(classifyLine('Schedule A Purchaser Details')).toEqual({ kind: 'section', label: 'Schedule A' });
     expect(classifyLine('Annexure II Plan')).toEqual({ kind: 'section', label: 'Annexure II' });
@@ -161,11 +164,14 @@ describe('oversized clause is split at sentence boundaries', () => {
   const longBody = Array.from({ length: 400 }, (_, i) => `Sentence number ${i} of the clause stays intact.`).join(' ');
   const unit: Unit = {
     clauseNo: '5',
+    topClause: '5',
+    startKind: 'clause',
     heading: '5. Huge clause',
     section: 'Article 2',
     pageStart: 3,
     pageEnd: 4,
     text: `5. Huge clause\n${longBody}`,
+    gap: null,
   };
 
   it('splits it into parts under the max, each marked', () => {
@@ -199,6 +205,136 @@ describe('oversized clause is split at sentence boundaries', () => {
   it('sentenceSpans joins back to the input', () => {
     const s = 'One. Two?! Three;  four\nfive. Six';
     expect(sentenceSpans(s).join('')).toBe(s);
+  });
+});
+
+describe('top-level clause sequence', () => {
+  const clauseNos = (text: string) => buildUnits([{ pageNo: 1, text }]).filter((u) => u.startKind === 'clause').map((u) => u.clauseNo);
+
+  it('accepts N) when it continues the sequence, rejects when it jumps backwards', () => {
+    const text = '1) One\nbody\n2) Two\nbody\n57) Not a clause\nbody\n3) Three\nbody';
+    expect(clauseNos(text)).toEqual(['1', '2', '3']);
+  });
+
+  it('accepts a small forward gap and flags it', () => {
+    const units = buildUnits([{ pageNo: 1, text: '1) One\nbody\n4) Four\nbody' }]);
+    expect(units.map((u) => u.clauseNo)).toEqual(['1', '4']);
+    expect(units[1].gap).toBe('2-3');
+  });
+
+  it('rejects a large forward jump and keeps going from the real sequence', () => {
+    const text = '1) One\nbody\n9) Bogus\nbody\n2) Two\nbody';
+    expect(clauseNos(text)).toEqual(['1', '2']);
+  });
+
+  it('rejects a restarted sub-item like 2) inside clause 30', () => {
+    const text = '30) Obligations\nbody\n2) Mr. Mayuresh Keni shall continue\nmore\n31) Next\nbody';
+    expect(clauseNos(text)).toEqual(['30', '31']);
+  });
+
+  it('keeps (a), (i), a) and (1) inside the current clause', () => {
+    const text = '5) Clause\n(a) sub one\n(i) sub two\na) sub three\n(1) sub four\nmore body\n6) Next';
+    const units = buildUnits([{ pageNo: 1, text }]);
+    expect(units.filter((u) => u.clauseNo).map((u) => u.clauseNo)).toEqual(['5', '6']);
+    expect(units[0].text).toContain('(a) sub one');
+    expect(units[0].text).toContain('(1) sub four');
+  });
+});
+
+describe('table rows are never clauses', () => {
+  it('rejects numbered name rows and bare numbered rows without a marker', () => {
+    const text = [
+      '1) Obligations of the Developer',
+      'Some prose that is long enough to read as a sentence.',
+      '2. Mr. Someone',
+      '3. Mrs. Someone Else',
+      '5 After expiry of 2 years there is escalation',
+      '2) Next clause',
+      'prose',
+    ].join('\n');
+    const units = buildUnits([{ pageNo: 1, text }]);
+    expect(units.filter((u) => u.startKind === 'clause').map((u) => u.clauseNo)).toEqual(['1', '2']);
+  });
+
+  it('rejects a row that would otherwise continue the sequence, after a Sr. / no. header', () => {
+    const text = [
+      '16) Payments',
+      'prose here that is long enough to look like a clause body sentence.',
+      'Sr.',
+      'no.',
+      '17. Mr. A Rs. 100',
+      '18. Mr. B Rs. 200',
+      '19) Next real clause',
+      'prose',
+    ].join('\n');
+    const units = buildUnits([{ pageNo: 1, text }]);
+    expect(units.filter((u) => u.startKind === 'clause').map((u) => u.clauseNo)).toEqual(['16', '19']);
+  });
+
+  it('keeps table text inside the clause instead of dropping it', () => {
+    const text = '16) Payments\nprose\nSr.\nno.\n17. Mr. A Rs. 100\n18) Done';
+    const units = buildUnits([{ pageNo: 1, text }]);
+    expect(units[0].text).toContain('17. Mr. A Rs. 100');
+  });
+});
+
+describe('lettered recitals', () => {
+  it('accepts A..H, one restart at A, then continues', () => {
+    const text = 'A. one\nB. two\nC. three\nA. restart\nB. again\nC. again\nD. end';
+    const units = buildUnits([{ pageNo: 1, text }]);
+    expect(units.filter((u) => u.startKind === 'lettered').length).toBe(7);
+  });
+
+  it('allows only one restart', () => {
+    const text = 'A. one\nB. two\nA. r1\nB. again\nA. r2\nB. more';
+    const units = buildUnits([{ pageNo: 1, text }]);
+    expect(units.filter((u) => u.startKind === 'lettered').length).toBe(4);
+  });
+
+  it('rejects a letter that does not follow the previous one', () => {
+    const text = 'A. one\nC. skipped\nB. two';
+    expect(buildUnits([{ pageNo: 1, text }]).filter((u) => u.startKind === 'lettered').length).toBe(2);
+  });
+});
+
+describe('checkChunks', () => {
+  const pages = pagesFrom(clauseLines(1, 40, 300), 10);
+  const chunks = chunkDocument(pages);
+
+  it('passes on a clean set of chunks', () => {
+    const r = checkChunks(chunks, pages);
+    expect(r.counts.gaps).toBe(0);
+    expect(r.counts.overlaps).toBe(0);
+    expect(r.counts.aboveMax).toBe(0);
+    expect(r.counts.badStarts).toBe(0);
+    expect(r.counts.missing).toBe(0);
+    expect(r.counts.repeated).toBe(0);
+    expect(r.ok).toBe(true);
+    expect(r.coveredPages).toBe(r.pageCount);
+  });
+
+  it('reports an uncovered page', () => {
+    const r = checkChunks(chunks.slice(1), pages);
+    expect(r.pageGaps.length).toBeGreaterThan(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it('reports a real page overlap but allows a shared boundary page', () => {
+    const shifted = chunks.map((c, i) => (i === 1 ? { ...c, pageStart: Math.max(1, c.pageStart - 2) } : c));
+    const r = checkChunks(shifted, pages);
+    expect(r.pageOverlaps.length).toBeGreaterThan(0);
+  });
+
+  it('reports a chunk above the max', () => {
+    const r = checkChunks(chunks, pages, { ...DEFAULT_CHUNK_CONFIG, maxTokens: 10 });
+    expect(r.aboveMax.length).toBe(chunks.length);
+  });
+
+  it('reports missing clause numbers', () => {
+    const middle = Math.floor(chunks.length / 2);
+    const withoutMiddle = chunks.filter((_, i) => i !== middle);
+    const r = checkChunks(withoutMiddle, pages);
+    expect(r.missingClauses.length).toBeGreaterThan(0);
   });
 });
 

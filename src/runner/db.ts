@@ -52,6 +52,8 @@ export interface ChunkRecord {
   pageEnd: number;
   clauseFrom: string | null;
   clauseTo: string | null;
+  clauses: string[];
+  startKind: 'clause' | 'subclause' | 'section' | 'lettered' | 'preamble' | 'part';
   heading: string | null;
   parentSection: string | null;
   tokenEst: number;
