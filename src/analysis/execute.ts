@@ -4,8 +4,26 @@ import { makeTask } from '../tasks/make';
 import { runTask } from '../runner/runTask';
 import { makeCallModel } from '../runner/callModel';
 import { ACTIVE_STATUSES, type ResultRow, type RunConfig, type Task } from '../tasks/types';
-import { estimateCost, BUDGET_FACTOR, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS } from './config';
+import { estimateCost, BUDGET_FACTOR, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS, CONCURRENCY } from './config';
 import type { AnalysisMetrics } from './types';
+
+// Failures that mean the provider or network is struggling; all workers pause for them.
+const RATE_LIMIT_CODES = (code: string | null | undefined) =>
+  code === 'http_429' || code === 'network' || code === 'timeout' || (typeof code === 'string' && /^http_5\d\d$/.test(code));
+
+// One shared pause for every worker, so concurrent tasks do not all retry at the same moment.
+export function createBackoffGate() {
+  let until = 0;
+  return {
+    hold(ms: number) {
+      until = Math.max(until, Date.now() + ms);
+    },
+    async wait(taskNextAt: number) {
+      const delay = Math.max(until, taskNextAt) - Date.now();
+      if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay + Math.random() * 250));
+    },
+  };
+}
 
 export interface ExecuteContext {
   db: HarnessDBHandle;
@@ -115,16 +133,27 @@ export async function executeTasks(
     }
   };
 
+  const gate = createBackoffGate();
   for (let round = 0; round < 60; round++) {
     const all = await ctx.db.getAllFromIndex('tasks', 'byRun', runId);
     const active = all.filter((t) => ACTIVE_STATUSES.includes(t.status));
     if (active.length === 0) break;
-    for (const t of active) {
-      const fresh = await ctx.db.get('tasks', t.id);
-      if (!fresh || !ACTIVE_STATUSES.includes(fresh.status)) continue;
-      const outcome = await runTask(ctx.db, fresh, cfg);
-      ctx.onLog?.(`${fresh.id.slice(-14)}: ${outcome}`);
-    }
+    // Each task id is claimed once per round, so no task runs in two workers at once.
+    const queue = active.map((t) => t.id);
+    const worker = async () => {
+      for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+        const fresh = await ctx.db.get('tasks', id);
+        if (!fresh || !ACTIVE_STATUSES.includes(fresh.status)) continue;
+        await gate.wait(fresh.nextAt);
+        const outcome = await runTask(ctx.db, fresh, cfg);
+        const after = await ctx.db.get('tasks', id);
+        if (after && ACTIVE_STATUSES.includes(after.status) && RATE_LIMIT_CODES(after.failureCode)) {
+          gate.hold(cfg.backoffMs(after.attemptNo));
+        }
+        ctx.onLog?.(`${fresh.id.slice(-14)}: ${outcome}`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
   }
 
   const tasks = await ctx.db.getAllFromIndex('tasks', 'byRun', runId);

@@ -1,4 +1,4 @@
-import { buildUnits, chunkDocument } from '../ingest/chunk';
+import { buildUnits, chunkDocument, documentStrict } from '../ingest/chunk';
 
 // Analysis runs on smaller pieces than embedding/retrieval chunks.
 export const ANALYSIS_CHUNK_CONFIG = { targetTokens: 700, maxTokens: 1200, minTokens: 250 };
@@ -18,8 +18,10 @@ export function buildAnalysisChunks(pages: Map<number, string>): AnalysisChunk[]
   const pageTexts = [...pages.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([pageNo, text]) => ({ pageNo, text }));
+  // Numbering style is decided for the whole document, so each piece reads it the same way.
+  const strict = documentStrict(pageTexts);
   return chunkDocument(pageTexts, ANALYSIS_CHUNK_CONFIG).map((c) => {
-    const units = buildUnits([{ pageNo: c.pageStart, text: c.text }]);
+    const units = buildUnits([{ pageNo: c.pageStart, text: c.text }], { strict });
     const manifest = [...new Set(units.map((u) => u.clauseNo).filter((x): x is string => x !== null))];
     return {
       index: c.index,

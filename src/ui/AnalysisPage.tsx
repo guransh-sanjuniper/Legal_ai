@@ -5,15 +5,21 @@ import type { Task } from '../tasks/types';
 import { RetrievalClient, type SearchResult } from '../retrieval/client';
 import { getDefinitions } from '../retrieval/definitions';
 import { runAnalysis, restoreReportFromSupabase } from '../analysis/runAnalysis';
-import { runJudgement, looksLikeDeveloperObligation, type JudgementResult } from '../analysis/judgement';
+import { runJudgement, looksLikeBurdenOn, partiesOf, type JudgementResult } from '../analysis/judgement';
+import { classifyDocument } from '../analysis/docType';
 import { askRetrieval, type AskResult, type RetrievedChunk } from '../analysis/ask';
 import { runFallbackCheck, runForcedFailure, type FallbackCheckResult } from '../analysis/fallbackCheck';
 import { ANALYSIS_MODEL, FALLBACK_MODEL } from '../analysis/config';
 import type { AnalysisReport } from '../analysis/types';
 import { ledgerSummary } from '../analysis/ledger';
-import { scorePayments, scoreDeveloperFavour } from '../analysis/goldenScore';
-import paymentsGolden from '../../tests/golden/hiramoti_payments.json';
-import developerGolden from '../../tests/golden/hiramoti_developer_favour.json';
+import { scorePayments, scoreFavours, isTuningGolden, type GoldenFile } from '../analysis/goldenScore';
+
+// Every tests/golden/*.json is a scoring file. Holdout files are never shown in the tuning report.
+const GOLDEN_FILES = import.meta.glob('../../tests/golden/*.json', { eager: true, import: 'default' }) as Record<
+  string,
+  GoldenFile
+>;
+const TUNING_GOLDENS = Object.values(GOLDEN_FILES).filter(isTuningGolden);
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -36,7 +42,7 @@ export function AnalysisPage() {
   const [busy, setBusy] = useState(false);
   const [failedTasks, setFailedTasks] = useState<Task[]>([]);
   const [askMode, setAskMode] = useState<'retrieval' | 'whole'>('whole');
-  const [askQuery, setAskQuery] = useState('Which clauses favour the Developer?');
+  const [askQuery, setAskQuery] = useState('');
   const [ask, setAsk] = useState<AskResult | null>(null);
   const [judgement, setJudgement] = useState<JudgementResult | null>(null);
   const [fb, setFb] = useState<FallbackCheckResult | null>(null);
@@ -150,6 +156,30 @@ export function AnalysisPage() {
     }
   }
 
+  async function classify() {
+    if (!db || !docId || !session) return;
+    setBusy(true);
+    try {
+      const t = await classifyDocument({
+        db,
+        supabase: sb,
+        accessToken: session.access_token,
+        userId: session.user.id,
+        functionsUrl: `${SUPABASE_URL}/functions/v1`,
+        anonKey: ANON_KEY,
+        docId,
+        model: ANALYSIS_MODEL,
+        fallbackModel: FALLBACK_MODEL,
+      });
+      setDocs((prev) => prev.map((d) => (d.id === docId ? { ...d, docType: t } : d)));
+      addLog(`document type: ${t}`);
+    } catch (e) {
+      addLog(`classify failed: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runAskOrJudge() {
     if (!db || !docId || !session || !clientRef.current) return;
     setBusy(true);
@@ -184,6 +214,7 @@ export function AnalysisPage() {
           docId,
           question: askQuery,
           sheet,
+          docType: docs.find((d) => d.id === docId)?.docType ?? null,
           model: ANALYSIS_MODEL,
           fallbackModel: FALLBACK_MODEL,
           onLog: addLog,
@@ -258,12 +289,15 @@ export function AnalysisPage() {
     }
   }
 
-  const paymentScore = report ? scorePayments(report, paymentsGolden.expected as never) : null;
-  const developerFavours = judgement
-    ? [...judgement.rows, ...judgement.others].filter((r) => r.direction === 'favours_developer')
+  const golden = report ? TUNING_GOLDENS.find((g) => g.document === report.docName) ?? null : null;
+  const paymentScore = report && golden ? scorePayments(report, golden.expected) : null;
+  const allFavours = judgement
+    ? [...judgement.rows, ...judgement.others].filter((r) => r.direction !== 'neutral')
     : [];
-  const isDeveloperQuestion = /developer|promoter|builder/i.test(askQuery);
-  const favourScore = judgement && isDeveloperQuestion ? scoreDeveloperFavour(judgement.rows, developerGolden.expected) : null;
+  const favourScore =
+    judgement && golden && judgement.parties.a && judgement.parties.b
+      ? scoreFavours(judgement.rows.concat(judgement.others), golden.expected, judgement.parties)
+      : null;
   const paymentRows = report ? report.clauses.flatMap((c) => c.payments.map((p) => ({ ...p, clause: c.clauseNo }))) : [];
 
   return (
@@ -278,6 +312,8 @@ export function AnalysisPage() {
           ))}
         </select>{' '}
         <button disabled={busy || !docId || !session} onClick={analyse}>Run analysis</button>{' '}
+        <button disabled={busy || !docId || !session} onClick={classify}>Classify type</button>{' '}
+        <span style={{ fontSize: 12 }}>type: {docs.find((d) => d.id === docId)?.docType ?? 'not classified'}</span>{' '}
         <button disabled={busy || !docId} onClick={clearLocal}>Clear local analysis</button>{' '}
         <button disabled={busy || !docId} onClick={restore}>Restore from Supabase</button>
       </div>
@@ -323,7 +359,7 @@ export function AnalysisPage() {
               </div>
               {paymentScore.combinedMisses.length > 0 && (
                 <div style={{ fontSize: 12 }}>
-                  still missing: {paymentScore.combinedMisses.map((m) => `${m.clause} ${m.label}`).join('; ')}
+                  still missing: {paymentScore.combinedMisses.map((m) => `${m.clause} ${m.token}`).join('; ')}
                 </div>
               )}
             </>
@@ -414,7 +450,7 @@ export function AnalysisPage() {
           <option value="retrieval">Retrieval answer</option>
           <option value="whole">Whole document / judgement</option>
         </select>{' '}
-        <input value={askQuery} onChange={(e) => setAskQuery(e.target.value)} style={{ width: 520 }} />{' '}
+        <input value={askQuery} onChange={(e) => setAskQuery(e.target.value)} style={{ width: 520 }} placeholder="Which clauses favour <party name>?" />{' '}
         <button disabled={busy || !docId || !session} onClick={runAskOrJudge}>Ask</button>
       </div>
 
@@ -449,21 +485,21 @@ export function AnalysisPage() {
           <div style={{ fontSize: 13 }}>
             Chunks read {judgement.counts.chunksRead} · proposed {judgement.counts.proposed} · verified {judgement.counts.verified} ·
             dropped {JSON.stringify(judgement.counts.dropped)} · page corrected {judgement.counts.pageCorrected} ·
-            directions D/S/N {judgement.counts.directions.favours_developer}/{judgement.counts.directions.favours_society}/{judgement.counts.directions.neutral}
+            sub-item groups {judgement.counts.subGroups} · directions A/B/N {judgement.counts.directions.favours_a}/{judgement.counts.directions.favours_b}/{judgement.counts.directions.neutral}
           </div>
           <div><b>{judgement.summary}</b></div>
           {favourScore && (
             <div>
-              Developer-favour recall <b>{favourScore.found}/{favourScore.expected} ({pct(favourScore.recall)})</b>
-              {favourScore.misses.length > 0 && <span> · misses: {favourScore.misses.join(', ')}</span>}
-              {favourScore.falseFavours.length > 0 && <span style={{ color: '#a00' }}> · false favours: {favourScore.falseFavours.map((f) => f.clause).join(', ')}</span>}
+              Favour recall <b>{favourScore.found}/{favourScore.expected} ({pct(favourScore.recall)})</b>
+              {favourScore.misses.length > 0 && <span> · misses: {favourScore.misses.map((m) => m.clause).join(', ')}</span>}
+              {favourScore.falseFavours.length > 0 && <span style={{ color: '#a00' }}> · favours not in golden list: {favourScore.falseFavours.map((f) => f.clause).join(', ')}</span>}
             </div>
           )}
           <table border={1} cellPadding={3} style={{ marginTop: 6 }}>
             <thead><tr><th>clause</th><th>page</th><th>direction</th><th>why</th><th>verified quote</th></tr></thead>
             <tbody>
-              {judgement.rows.map((r) => (
-                <tr key={r.clause}>
+              {judgement.rows.map((r, i) => (
+                <tr key={`row-${i}-${r.clause}`}>
                   <td>{r.clause}</td><td>{r.page}</td><td>{r.direction}</td>
                   <td style={{ maxWidth: 320 }}>{r.why}</td>
                   <td style={{ maxWidth: 420 }}>{r.quote}</td>
@@ -477,22 +513,24 @@ export function AnalysisPage() {
               <table border={1} cellPadding={3}>
                 <thead><tr><th>clause</th><th>page</th><th>direction</th><th>why</th><th>verified quote</th></tr></thead>
                 <tbody>
-                  {judgement.others.map((r) => (
-                    <tr key={r.clause}><td>{r.clause}</td><td>{r.page}</td><td>{r.direction}</td><td>{r.why}</td><td>{r.quote}</td></tr>
+                  {judgement.others.map((r, i) => (
+                    <tr key={`other-${i}-${r.clause}`}><td>{r.clause}</td><td>{r.page}</td><td>{r.direction}</td><td>{r.why}</td><td>{r.quote}</td></tr>
                   ))}
                 </tbody>
               </table>
             </details>
           )}
 
-          <h4>All favours_developer items ({developerFavours.length}) — review each quote</h4>
+          <h4>All favouring items ({allFavours.length}) — review each quote</h4>
           <table border={1} cellPadding={3}>
-            <thead><tr><th>clause</th><th>page</th><th>why</th><th>quote</th><th>obligation-shaped?</th></tr></thead>
+            <thead><tr><th>clause</th><th>page</th><th>favours</th><th>why</th><th>quote</th><th>burden-shaped?</th></tr></thead>
             <tbody>
-              {developerFavours.map((r) => (
-                <tr key={r.clause}>
-                  <td>{r.clause}</td><td>{r.page}</td><td>{r.why}</td><td>{r.quote}</td>
-                  <td>{looksLikeDeveloperObligation(r.quote, r.why) ? 'YES — check' : ''}</td>
+              {allFavours.map((r, i) => (
+                <tr key={`fav-${i}-${r.clause}`}>
+                  <td>{r.clause}</td><td>{r.page}</td>
+                  <td>{r.direction === 'favours_a' ? judgement.parties.a ?? '[A]' : judgement.parties.b ?? '[B]'}</td>
+                  <td>{r.why}</td><td>{r.quote}</td>
+                  <td>{looksLikeBurdenOn(r.quote, r.why, r.direction === 'favours_a' ? judgement.parties.a : judgement.parties.b) ? 'YES — check' : ''}</td>
                 </tr>
               ))}
             </tbody>

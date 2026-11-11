@@ -53,6 +53,8 @@ export type LineKind = { kind: 'clause'; no: string } | { kind: 'section'; label
 const SECTION_RE = /^\s*(ARTICLE|Article|SCHEDULE|Schedule|ANNEXURE|Annexure|PART|Part|CHAPTER|Chapter)\s+([0-9]{1,3}|[IVXLCDM]{1,6}|[A-Z])\b/;
 const CLAUSE_WORD_RE = /^\s*(CLAUSE|Clause)\s+(\d{1,3}(?:\.\d{1,3}){0,4})\b/;
 const PAREN_CLAUSE_RE = /^\s*(\d{1,3})\)\s+\S/;
+const PAREN_NUM_RE = /^\s*\((\d{1,3})\)\s+(?=\S)/;
+const SECTION_NUM_RE = /^\s*(?:Section|SECTION)\s+(\d{1,3})\b[.:]?\s+(?=\S)/;
 const DOTTED_TOP_RE = /^\s*(\d{1,3})\.\s+(?=\S)/;
 const DOTTED_SUB_RE = /^\s*(\d{1,3}(?:\.\d{1,3}){1,3})\.?\s+(?=\S)/;
 const LETTER_RE = /^\s*([A-Z])\.\s+(?=\S)/;
@@ -77,6 +79,8 @@ export function classifyLine(line: string): LineKind {
   if (sub) return { kind: 'clause', no: sub[1] };
   const dotted = DOTTED_TOP_RE.exec(line);
   if (dotted) return { kind: 'clause', no: dotted[1] };
+  const numbered = PAREN_NUM_RE.exec(line) ?? SECTION_NUM_RE.exec(line);
+  if (numbered) return { kind: 'clause', no: numbered[1] };
   return null;
 }
 
@@ -98,7 +102,7 @@ function rowRun(lines: string[], i: number): boolean {
 
 // A table ends at a section heading, a sub-heading like "d) COMMERCIAL UNITS:", or a
 // sequence-continuing clause that is not itself a table row.
-function tableExit(line: string, seq: { lastTop: number | null }): boolean {
+function tableExit(line: string, seq: SequenceState): boolean {
   if (SECTION_RE.test(line) || isSubHeading(line)) return true;
   const cand = numericCandidate(line);
   if (!cand || !checkNumericSequence(seq, cand).accept) return false;
@@ -107,33 +111,48 @@ function tableExit(line: string, seq: { lastTop: number | null }): boolean {
   return line.trim().length > 30;
 }
 
+// "bracket" = (N) and "word" = Section N. These styles also appear inside clauses as lists, so
+// they only continue a run of the same style; the dotted and paren styles are unrestricted.
+type TopStyle = 'dotted' | 'paren' | 'bracket' | 'word' | 'sub';
+
 interface NumericCandidate {
   kind: 'top' | 'sub';
   no: string;
   n: number;
   intPart: number;
+  style: TopStyle;
 }
 
 function numericCandidate(line: string): NumericCandidate | null {
   const paren = PAREN_CLAUSE_RE.exec(line);
   if (paren) {
     const n = Number(paren[1]);
-    return { kind: 'top', no: paren[1], n, intPart: n };
+    return { kind: 'top', no: paren[1], n, intPart: n, style: 'paren' };
   }
   const word = CLAUSE_WORD_RE.exec(line);
   if (word) {
     const n = Number(word[2].split('.')[0]);
-    return { kind: 'top', no: word[2], n, intPart: n };
+    return { kind: 'top', no: word[2], n, intPart: n, style: 'word' };
   }
   const sub = DOTTED_SUB_RE.exec(line);
   if (sub) {
     const no = sub[1];
-    return { kind: 'sub', no, n: Number(no.split('.')[0]), intPart: Number(no.split('.')[0]) };
+    return { kind: 'sub', no, n: Number(no.split('.')[0]), intPart: Number(no.split('.')[0]), style: 'sub' };
   }
   const top = DOTTED_TOP_RE.exec(line);
   if (top) {
     const n = Number(top[1]);
-    return { kind: 'top', no: top[1], n, intPart: n };
+    return { kind: 'top', no: top[1], n, intPart: n, style: 'dotted' };
+  }
+  const bracket = PAREN_NUM_RE.exec(line);
+  if (bracket) {
+    const n = Number(bracket[1]);
+    return { kind: 'top', no: bracket[1], n, intPart: n, style: 'bracket' };
+  }
+  const section = SECTION_NUM_RE.exec(line);
+  if (section) {
+    const n = Number(section[1]);
+    return { kind: 'top', no: section[1], n, intPart: n, style: 'word' };
   }
   return null;
 }
@@ -143,9 +162,20 @@ interface SequenceResult {
   gap: string | null;
 }
 
-function checkNumericSequence(state: { lastTop: number | null }, c: NumericCandidate): SequenceResult {
+interface SequenceState {
+  lastTop: number | null;
+  lastStyle: TopStyle | null;
+  // True when the document also uses dotted or paren clauses: then a bracket or word style only
+  // continues a run of its own style, so a preamble list cannot start the clause sequence.
+  strict: boolean;
+}
+
+function checkNumericSequence(state: SequenceState, c: NumericCandidate): SequenceResult {
   if (c.kind === 'sub') {
     return { accept: state.lastTop !== null && c.intPart === state.lastTop, gap: null };
+  }
+  if ((c.style === 'bracket' || c.style === 'word') && state.lastStyle !== c.style && (state.strict || state.lastTop !== null)) {
+    return { accept: false, gap: null };
   }
   if (state.lastTop === null) return { accept: true, gap: null };
   if (c.n === state.lastTop + 1) return { accept: true, gap: null };
@@ -171,9 +201,15 @@ function checkLetterSequence(state: LetterState, letter: string): boolean {
   return false;
 }
 
-export function buildUnits(pages: PageText[]): Unit[] {
+// True when the whole document also uses dotted or paren clauses. Computed once per document so
+// that a piece of it (an analysis chunk) gets the same answer as the document.
+export function documentStrict(pages: PageText[]): boolean {
+  return pages.some((p) => p.text.split('\n').some((l) => DOTTED_TOP_RE.test(l) || PAREN_CLAUSE_RE.test(l)));
+}
+
+export function buildUnits(pages: PageText[], opts: { strict?: boolean } = {}): Unit[] {
   const units: Unit[] = [];
-  const seq = { lastTop: null as number | null };
+  const seq: SequenceState = { lastTop: null, lastStyle: null, strict: opts.strict ?? documentStrict(pages) };
   const letters: LetterState = { lastLetter: null, restarts: 0 };
   const table = { inTable: false, srArmed: false };
   let section: string | null = null;
@@ -242,6 +278,7 @@ export function buildUnits(pages: PageText[]): Unit[] {
           if (res.accept) {
             if (cand.kind === 'top') {
               seq.lastTop = cand.n;
+              seq.lastStyle = cand.style;
               pushUnit('clause', cand.no, cand.no, line.trim().slice(0, 120), page.pageNo, res.gap);
             } else {
               pushUnit('subclause', cand.no, seq.lastTop === null ? null : String(seq.lastTop), line.trim().slice(0, 120), page.pageNo, null);

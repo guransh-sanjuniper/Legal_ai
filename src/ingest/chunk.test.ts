@@ -70,12 +70,12 @@ describe('chunk config', () => {
 describe('numbering variants', () => {
   it('detects clause, sub-clause, section and schedule lines', () => {
     expect(classifyLine('1. Definitions')).toEqual({ kind: 'clause', no: '1' });
-    expect(classifyLine('1.1 Developer means Sunrise.')).toEqual({ kind: 'clause', no: '1.1' });
+    expect(classifyLine('1.1 Developer means Acme.')).toEqual({ kind: 'clause', no: '1.1' });
     expect(classifyLine('3.1.1 First instalment on booking.')).toEqual({ kind: 'clause', no: '3.1.1' });
     expect(classifyLine('Clause 5.2 Stamp duty shall be paid.')).toEqual({ kind: 'clause', no: '5.2' });
     expect(classifyLine('2) Appointment, Scope of work.')).toEqual({ kind: 'clause', no: '2' });
     // (N) is a sub-item inside a clause, not a clause boundary.
-    expect(classifyLine('(1) Each party shall comply.')).toBeNull();
+    expect(classifyLine('(1) Each party shall comply.')).toEqual({ kind: 'clause', no: '1' });
     expect(classifyLine('Article 5 Registration')).toEqual({ kind: 'section', label: 'Article 5' });
     expect(classifyLine('Schedule A Purchaser Details')).toEqual({ kind: 'section', label: 'Schedule A' });
     expect(classifyLine('Annexure II Plan')).toEqual({ kind: 'section', label: 'Annexure II' });
@@ -87,7 +87,7 @@ describe('numbering variants', () => {
 
   it('builds units with clause numbers, sections and page ranges', () => {
     const pages = [
-      { pageNo: 1, text: 'Article 1 Definitions\n1. Definitions\n1.1 Developer means Sunrise.' },
+      { pageNo: 1, text: 'Article 1 Definitions\n1. Definitions\n1.1 Developer means Acme.' },
       { pageNo: 2, text: '2. Possession\n2.1 Hand over possession.\n(a) subject to force majeure;\n(b) subject to dues.' },
       { pageNo: 3, text: 'Schedule A Purchaser Details\nName: Asha Kulkarni.' },
     ];
@@ -228,7 +228,7 @@ describe('top-level clause sequence', () => {
   });
 
   it('rejects a restarted sub-item like 2) inside clause 30', () => {
-    const text = '30) Obligations\nbody\n2) Mr. Mayuresh Keni shall continue\nmore\n31) Next\nbody';
+    const text = '30) Obligations\nbody\n2) Mr. Person One shall continue\nmore\n31) Next\nbody';
     expect(clauseNos(text)).toEqual(['30', '31']);
   });
 
@@ -247,7 +247,7 @@ describe('table rows are never clauses', () => {
       '1) Obligations of the Developer',
       'Some prose that is long enough to read as a sentence.',
       '2. Mr. Someone',
-      '3. Mrs. Someone Else',
+      '3. Ms. Person Two',
       '5 After expiry of 2 years there is escalation',
       '2) Next clause',
       'prose',
@@ -262,7 +262,7 @@ describe('table rows are never clauses', () => {
       'prose here that is long enough to look like a clause body sentence.',
       'Sr.',
       'no.',
-      '17. Mr. A Rs. 100',
+      '17. Mr. Alpha Rs. 100',
       '18. Mr. B Rs. 200',
       '19) Next real clause',
       'prose',
@@ -272,9 +272,9 @@ describe('table rows are never clauses', () => {
   });
 
   it('keeps table text inside the clause instead of dropping it', () => {
-    const text = '16) Payments\nprose\nSr.\nno.\n17. Mr. A Rs. 100\n18) Done';
+    const text = '16) Payments\nprose\nSr.\nno.\n17. Mr. Alpha Rs. 100\n18) Done';
     const units = buildUnits([{ pageNo: 1, text }]);
-    expect(units[0].text).toContain('17. Mr. A Rs. 100');
+    expect(units[0].text).toContain('17. Mr. Alpha Rs. 100');
   });
 });
 

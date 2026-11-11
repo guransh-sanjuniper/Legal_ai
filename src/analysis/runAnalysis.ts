@@ -9,7 +9,7 @@ import { extractAmounts, uncapturedAmounts } from './amounts';
 import { groupForRollup, keepCitedSentences, overviewTargetSentenceCount } from './rollup';
 import { buildLedger, type LedgerChunkInput } from './ledger';
 import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
-import { CLAUSE_PROMPT, SECTION_PROMPT, OVERVIEW_PROMPT } from './prompts';
+import { CLAUSE_PROMPT, SECTION_PROMPT, OVERVIEW_PROMPT, checklistFor } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type TaskPlan } from './execute';
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS } from './config';
 import type {
@@ -152,6 +152,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
 
   const doc: DocumentRecord | undefined = await db.get('documents', docId);
   if (!doc || doc.status !== 'ready' || !doc.prepFingerprint) throw new Error('document is not ready');
+  const clausePrompt = `${CLAUSE_PROMPT}\n${checklistFor(doc.docType ?? null)}`;
   const pages = await loadPageMap(db, docId);
   const index = buildAnchorIndex(pages);
   const chunks = buildAnalysisChunks(pages);
@@ -183,7 +184,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   const plans: TaskPlan[] = chunks.map((chunk) => ({
     suffix: `a${chunk.index}`,
     promptVersion: 'clause-analysis-v2',
-    prompt: CLAUSE_PROMPT,
+    prompt: clausePrompt,
     input: clauseInput(chunk, pages, defsContext, chunk.manifest),
     maxTokens: budget,
     validate: isValidClauseItem,
@@ -225,7 +226,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       retryPlans.push({
         suffix: `r${indexNo}`,
         promptVersion: 'clause-analysis-v2',
-        prompt: CLAUSE_PROMPT,
+        prompt: clausePrompt,
         input,
         maxTokens: Math.min(budget, 1200),
         validate: isValidClauseItem,
@@ -269,7 +270,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
 
       const allVerified = [...obligations.verified, ...dates.verified, ...payments.verified, ...risks.verified];
       const codeClause = allVerified.length ? topClause(allVerified[0].item.clause) : rawTop;
-      const base = `C${chunk.index}:${codeClause || rawClause}`;
+      const base = `C${chunk.index}:${seenClauses.size}:${codeClause || rawClause}`;
 
       const vObligations: VerifiedObligation[] = obligations.verified.map((v, i) => ({
         itemId: `${base}:ob${i}`,

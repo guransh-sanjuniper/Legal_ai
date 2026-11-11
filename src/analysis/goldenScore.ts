@@ -1,15 +1,34 @@
-import type { AnalysisReport, VerifiedPayment } from './types';
+import type { AnalysisReport } from './types';
 import type { ExtractedAmount } from './amounts';
-import { parseMoney } from './amounts';
-import { canonicalClause, looksLikeDeveloperObligation, type JudgementRow } from './judgement';
+import { canonicalClause, type JudgementRow, type Parties } from './judgement';
 
-export interface GoldenPayment {
+// tests/golden/<docname>.json. "kind" is "payment" or "favour". For a payment, "token" must appear
+// in the payment's amount, quote, due text or clause summary. For a favour, "token" must appear
+// in the name of the party the row favours.
+export interface GoldenExpectation {
   clause: string;
-  label: string;
-  amount?: number;
-  percent?: number;
-  keyword?: string;
+  token: string;
+  kind: 'payment' | 'favour';
 }
+
+export interface GoldenFile {
+  document?: string;
+  holdout?: boolean;
+  expected: GoldenExpectation[];
+}
+
+// Holdout files are kept out of the tuning report so they are not tuned against.
+export function isTuningGolden(file: GoldenFile): boolean {
+  return file.holdout !== true;
+}
+
+const topOf = (c: string) => canonicalClause(c).replace(/\(.*$/, '');
+// A bare clause expectation matches any sub-item of it; a sub-item expectation needs that sub-item.
+export const clauseMatch = (expected: string, actual: string) =>
+  expected.includes('(') ? canonicalClause(expected) === canonicalClause(actual) : topOf(expected) === topOf(actual);
+// Case-insensitive, without spaces or thousands separators, so "18,000", "18000" and "18.000" match.
+export const normToken = (s: string) =>
+  s.toLowerCase().replace(/(\d)\.(\d{3})(?!\d)/g, '$1$2').replace(/[,\s]/g, '');
 
 export interface PaymentScore {
   expected: number;
@@ -17,85 +36,45 @@ export interface PaymentScore {
   combinedFound: number;
   modelRecall: number;
   combinedRecall: number;
-  modelMisses: GoldenPayment[];
-  combinedMisses: GoldenPayment[];
-}
-
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-
-const topOfClause = (c: string) => canonicalClause(c).replace(/\(.*$/, '');
-
-function paymentMatches(
-  item: GoldenPayment,
-  clause: string,
-  amountText: string,
-  quote: string,
-  due: string,
-  numeric: number | null,
-  summary = '',
-): boolean {
-  // Payments can sit under a sub-item (16(a)); the golden expectation is the clause.
-  if (topOfClause(clause) !== topOfClause(item.clause)) return false;
-  const haystack = `${amountText} ${quote} ${due} ${summary}`;
-  if (item.keyword && !norm(haystack).includes(norm(item.keyword))) return false;
-  if (item.amount !== undefined) {
-    const n = numeric ?? parseMoney(amountText);
-    if (n === null || Math.abs(n - item.amount) > 0.01) return false;
-  }
-  if (item.percent !== undefined) {
-    const m = /(\d+(?:\.\d+)?)\s*%/.exec(`${amountText} ${quote} ${due}`);
-    if (!m || Math.abs(Number(m[1]) - item.percent) > 0.01) return false;
-  }
-  if (item.amount === undefined && item.percent === undefined && !item.keyword) return false;
-  return true;
+  modelMisses: GoldenExpectation[];
+  combinedMisses: GoldenExpectation[];
 }
 
 export function scorePayments(
   report: Pick<AnalysisReport, 'clauses' | 'amounts'>,
-  expected: GoldenPayment[],
+  expected: GoldenExpectation[],
 ): PaymentScore {
-  const payments: VerifiedPayment[] = report.clauses.flatMap((c) => c.payments);
+  const payments = expected.filter((e) => e.kind === 'payment');
   const code: ExtractedAmount[] = (report.amounts?.code ?? []).filter(
     (a) => !a.text.includes('\n') && a.text.trim().length > 2,
   );
-  const summaryByClause = new Map<string, string>();
-  for (const c of report.clauses) {
-    const top = topOfClause(c.clauseNo);
-    summaryByClause.set(top, `${summaryByClause.get(top) ?? ''} ${c.summary}`);
-  }
 
-  const modelHit = (g: GoldenPayment) =>
-    report.clauses.some((c) =>
-      c.payments.some((p) =>
-        paymentMatches(g, c.clauseNo, p.amount, p.quote, p.due, parseMoney(p.amount), c.summary),
-      ),
+  const modelHit = (g: GoldenExpectation) =>
+    report.clauses.some(
+      (c) =>
+        clauseMatch(g.clause, c.clauseNo) &&
+        c.payments.some((p) =>
+          normToken(`${p.amount} ${p.quote} ${p.due} ${c.summary}`).includes(normToken(g.token)),
+        ),
     );
-  const combinedHit = (g: GoldenPayment) =>
+  const combinedHit = (g: GoldenExpectation) =>
     modelHit(g) ||
-    code.some((a) =>
-      paymentMatches(
-        g,
-        a.clause,
-        a.text,
-        a.quote,
-        '',
-        // Percentages are matched from their text; durations only help keyword expectations.
-        a.kind === 'money' ? a.numeric : null,
-        summaryByClause.get(topOfClause(a.clause)) ?? '',
-      ),
+    code.some(
+      (a) =>
+        clauseMatch(g.clause, a.clause) &&
+        normToken(`${a.text} ${a.quote}`).includes(normToken(g.token)),
     );
 
-  const modelMisses = expected.filter((g) => !modelHit(g));
-  const combinedMisses = expected.filter((g) => !combinedHit(g));
-  const modelFound = expected.length - modelMisses.length;
-  const combinedFound = expected.length - combinedMisses.length;
-
+  const modelMisses = payments.filter((g) => !modelHit(g));
+  const combinedMisses = payments.filter((g) => !combinedHit(g));
+  const modelFound = payments.length - modelMisses.length;
+  const combinedFound = payments.length - combinedMisses.length;
   return {
-    expected: expected.length,
+    expected: payments.length,
     modelFound,
     combinedFound,
-    modelRecall: expected.length ? modelFound / expected.length : 0,
-    combinedRecall: expected.length ? combinedFound / expected.length : 0,
+    modelRecall: payments.length ? modelFound / payments.length : 0,
+    combinedRecall: payments.length ? combinedFound / payments.length : 0,
     modelMisses,
     combinedMisses,
   };
@@ -105,26 +84,30 @@ export interface FavourScore {
   expected: number;
   found: number;
   recall: number;
-  misses: string[];
-  falseFavours: { clause: string; quote: string; why: string }[];
+  misses: GoldenExpectation[];
+  falseFavours: { clause: string; quote: string; why: string; party: string | null }[];
 }
 
-function clauseMatches(expected: string, actual: string): boolean {
-  return canonicalClause(expected) === canonicalClause(actual);
-}
-
-export function scoreDeveloperFavour(rows: JudgementRow[], expected: string[]): FavourScore {
-  const developerRows = rows.filter((r) => r.direction === 'favours_developer');
-  const found = expected.filter((e) => developerRows.some((r) => clauseMatches(e, r.clause)));
-  const misses = expected.filter((e) => !found.includes(e));
-  const falseFavours = rows
-    .filter((r) => r.direction === 'favours_developer' && looksLikeDeveloperObligation(r.quote, r.why))
-    .map((r) => ({ clause: r.clause, quote: r.quote, why: r.why }));
+// A favour is found when a favouring row sits in the expected clause and names the expected party.
+export function scoreFavours(rows: JudgementRow[], expected: GoldenExpectation[], parties: Parties): FavourScore {
+  const favours = expected.filter((e) => e.kind === 'favour');
+  const partyName = (r: JudgementRow) =>
+    r.direction === 'favours_a' ? parties.a : r.direction === 'favours_b' ? parties.b : null;
+  const hit = (g: GoldenExpectation) =>
+    rows.some(
+      (r) =>
+        r.direction !== 'neutral' &&
+        clauseMatch(g.clause, r.clause) &&
+        (partyName(r) ?? '').toLowerCase().includes(g.token.toLowerCase()),
+    );
+  const misses = favours.filter((g) => !hit(g));
   return {
-    expected: expected.length,
-    found: found.length,
-    recall: expected.length ? found.length / expected.length : 0,
+    expected: favours.length,
+    found: favours.length - misses.length,
+    recall: favours.length ? (favours.length - misses.length) / favours.length : 0,
     misses,
-    falseFavours,
+    falseFavours: rows
+      .filter((r) => r.direction !== 'neutral' && !favours.some((g) => clauseMatch(g.clause, r.clause)))
+      .map((r) => ({ clause: r.clause, quote: r.quote, why: r.why, party: partyName(r) })),
   };
 }

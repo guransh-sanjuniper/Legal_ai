@@ -42,9 +42,14 @@ export function buildAnchorIndex(pages: Map<number, string>): AnchorIndex {
   const byPage = new Map<number, AnchorSegment[]>();
   let pointer = 0;
 
+  // A unit with no clause number of its own (a lettered or table unit) belongs to the clause before it,
+  // so its sub-items keep that clause as their prefix. A section heading ends the clause.
+  let currentTop: string | null = null;
   for (const unit of units) {
     const lines = unit.text.split('\n');
-    const top = unit.clauseNo;
+    if (unit.startKind === 'section') currentTop = null;
+    const top = unit.clauseNo ?? currentTop;
+    if (unit.startKind === 'clause' && unit.clauseNo !== null) currentTop = unit.clauseNo;
     let label = top ?? (unit.startKind === 'lettered' ? unit.heading?.slice(0, 12) ?? 'preamble' : 'preamble');
     let page = flat[pointer]?.page ?? pageNos[0];
     let text = '';

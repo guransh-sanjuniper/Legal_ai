@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { mergeDefinitions, isValidDefinitionItem, type DefinitionItem } from './definitionsMerge';
 
 const items: DefinitionItem[] = [
-  { kind: 'party', name: 'Hira Moti Nagar Co-operative Housing Society Ltd', clause: 'Recital A', page: 2 },
+  { kind: 'party', name: 'Example Housing Association Ltd', clause: 'Recital A', page: 2 },
   { kind: 'party', name: 'M/s Mandar Constructions & Projects LLP', clause: 'Recital A', page: 2 },
-  { kind: 'party', name: 'hira moti nagar co-operative housing society ltd', page: 3 },
+  { kind: 'party', name: 'example housing association ltd', page: 3 },
   { kind: 'term', term: 'Said Land', definition: 'the land admeasuring 7873.81 square meters', clause: '3', page: 11 },
   { kind: 'term', term: 'said land', definition: 'duplicate with different case', clause: '3', page: 11 },
   { kind: 'term', term: 'New Premises', definition: 'the premises allotted under clause 12', clause: '12', page: 20 },
@@ -17,19 +17,19 @@ describe('definitions sheet merge', () => {
   it('deduplicates parties case-insensitively and keeps order', () => {
     const sheet = mergeDefinitions(items);
     expect(sheet.parties.map((p) => p.name)).toEqual([
-      'Hira Moti Nagar Co-operative Housing Society Ltd',
+      'Example Housing Association Ltd',
       'M/s Mandar Constructions & Projects LLP',
     ]);
   });
 
   it('keeps a role per party and upgrades mentioned to party_to_agreement', () => {
     const sheet = mergeDefinitions([
-      { kind: 'party', name: 'Alpha Society', role: 'mentioned' },
-      { kind: 'party', name: 'alpha society', role: 'party_to_agreement' },
+      { kind: 'party', name: 'Example Party', role: 'mentioned' },
+      { kind: 'party', name: 'example party', role: 'party_to_agreement' },
       { kind: 'party', name: 'Modella Woollens', role: 'mentioned' },
     ]);
     expect(sheet.parties).toEqual([
-      { name: 'Alpha Society', role: 'party_to_agreement' },
+      { name: 'Example Party', role: 'party_to_agreement' },
       { name: 'Modella Woollens', role: 'mentioned' },
     ]);
   });

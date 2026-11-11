@@ -3,14 +3,23 @@ import type { HarnessDBHandle, DocumentRecord } from '../runner/db';
 import { buildAnchorIndex, topClause, type AnchorIndex } from './anchors';
 import { verifyQuotedItems } from './verify';
 import { buildAnalysisChunks } from './analysisChunks';
-import { JUDGE_PROMPT } from './prompts';
+import { JUDGE_PROMPT, checklistFor } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type TaskPlan } from './execute';
-import { loadPageMap } from './runAnalysis';
+import { loadPageMap, pageInput } from './runAnalysis';
 import type { AnalysisMetrics } from './types';
 import type { DefinitionsSheet } from '../retrieval/definitionsMerge';
+import type { DocType } from './docType';
 
-export type Direction = 'favours_developer' | 'favours_society' | 'neutral';
+// A = first party to the agreement in the definitions sheet, B = second. Names come from the sheet only.
+export type Side = 'a' | 'b';
+export type Direction = 'favours_a' | 'favours_b' | 'neutral';
 export type Confidence = 'high' | 'medium' | 'low';
+const DIRECTIONS: Direction[] = ['favours_a', 'favours_b', 'neutral'];
+
+export interface Parties {
+  a: string | null;
+  b: string | null;
+}
 
 export interface JudgementItem {
   itemId: string;
@@ -34,12 +43,14 @@ export interface JudgementRow {
 
 export interface JudgementResult {
   question: string;
-  party: 'developer' | 'society' | null;
+  side: Side | null;
+  parties: Parties;
   rows: JudgementRow[];
   others: JudgementRow[];
   summary: string;
   counts: {
     chunksRead: number;
+    subGroups: number;
     proposed: number;
     verified: number;
     dropped: Record<string, number>;
@@ -49,6 +60,9 @@ export interface JudgementResult {
   metrics: AnalysisMetrics;
   runId: string;
 }
+
+// Characters of sub-item text per task. Sub-items of one clause are packed up to this size.
+export const SUB_GROUP_CHARS = 2400;
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
@@ -104,8 +118,7 @@ export function mergeJudgements(items: JudgementItem[]): { rows: JudgementRow[];
     };
   });
 
-  // One row per clause: merge rows that resolved to the same clause, preferring the
-  // developer-relevant item when both exist.
+  // One row per clause: rows for the same clause merge, keeping a benefit row for either side over neutral.
   const byClause = new Map<string, JudgementRow[]>();
   for (const row of rows) {
     const list = byClause.get(row.clause) ?? [];
@@ -114,14 +127,9 @@ export function mergeJudgements(items: JudgementItem[]): { rows: JudgementRow[];
   }
   const merged = [...byClause.values()].map((list) => {
     if (list.length === 1) return list[0];
-    const developer = list.find((x) => x.direction === 'favours_developer');
-    const society = list.find((x) => x.direction === 'favours_society');
-    const chosen = developer ?? society ?? list[0];
-    return {
-      ...chosen,
-      why: chosen.why,
-      itemIds: [...new Set(list.flatMap((x) => x.itemIds))],
-    };
+    const benefit = list.find((x) => x.direction !== 'neutral');
+    const chosen = benefit ?? list[0];
+    return { ...chosen, itemIds: [...new Set(list.flatMap((x) => x.itemIds))] };
   });
 
   merged.sort((a, b) => {
@@ -130,44 +138,60 @@ export function mergeJudgements(items: JudgementItem[]): { rows: JudgementRow[];
     return ka[0] - kb[0] || ka[1] - kb[1] || ka[2].localeCompare(kb[2]);
   });
 
-  const directions: Record<Direction, number> = { favours_developer: 0, favours_society: 0, neutral: 0 };
+  const directions = { favours_a: 0, favours_b: 0, neutral: 0 } as Record<Direction, number>;
   for (const row of merged) directions[row.direction]++;
   return { rows: merged, directions };
 }
 
-export function detectParty(question: string, sheet: DefinitionsSheet | null): 'developer' | 'society' | null {
-  const q = question.toLowerCase();
-  const asksDeveloper = /\bdeveloper(s)?\b|\bpromoter\b|\bbuilder\b/.test(q);
-  const asksSociety = /\bsociety\b|\bmembers?\b/.test(q);
-  if (asksDeveloper && !asksSociety) return 'developer';
-  if (asksSociety && !asksDeveloper) return 'society';
-  if (sheet) {
-    for (const p of sheet.parties) {
-      if (p.role !== 'party_to_agreement') continue;
-      if (!q.includes(p.name.toLowerCase().slice(0, 12))) continue;
-      return /society/i.test(p.name) ? 'society' : 'developer';
-    }
+// The two parties to the agreement, in definitions-sheet order.
+export function partiesOf(sheet: DefinitionsSheet | null): Parties {
+  const names = (sheet?.parties ?? []).filter((p) => p.role === 'party_to_agreement').map((p) => p.name);
+  return { a: names[0] ?? null, b: names[1] ?? null };
+}
+
+export function partyLineFor(parties: Parties): string {
+  if (parties.a && parties.b) {
+    return `PARTIES: [A] ${parties.a}; [B] ${parties.b}. favours_a = a benefit to [A]; favours_b = a benefit to [B].`;
   }
+  return 'PARTIES: the two parties to the agreement, as named in the text. favours_a = a benefit to the first party; favours_b = a benefit to the second party.';
+}
+
+// The side the question asks about, found by naming a party in the question.
+export function detectSide(question: string, parties: Parties): Side | null {
+  const q = question.toLowerCase();
+  const hitA = !!parties.a && q.includes(parties.a.toLowerCase().slice(0, 12));
+  const hitB = !!parties.b && q.includes(parties.b.toLowerCase().slice(0, 12));
+  if (hitA && !hitB) return 'a';
+  if (hitB && !hitA) return 'b';
   return null;
 }
 
-export function filterByParty(
+export function filterBySide(
   rows: JudgementRow[],
-  party: 'developer' | 'society' | null,
+  side: Side | null,
 ): { matching: JudgementRow[]; others: JudgementRow[] } {
-  if (!party) return { matching: rows, others: [] };
-  const want = party === 'developer' ? 'favours_developer' : 'favours_society';
+  if (!side) return { matching: rows, others: [] };
+  const want: Direction = side === 'a' ? 'favours_a' : 'favours_b';
   return {
     matching: rows.filter((r) => r.direction === want),
     others: rows.filter((r) => r.direction !== want),
   };
 }
 
-// A quote that describes a Developer burden but is labelled as favouring the Developer.
-export function looksLikeDeveloperObligation(quote: string, why: string): boolean {
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A quote that describes a burden on the party it is labelled as favouring. The party is
+// named from the definitions sheet; the wording is general obligation language.
+export function looksLikeBurdenOn(quote: string, why: string, partyName: string | null): boolean {
+  if (!partyName) return false;
   const text = `${quote} ${why}`;
   if (/\b(entitled|right|permission|permitted|option|at its option|may)\b/i.test(text)) return false;
-  return /\bdeveloper(s)?\b[^.]{0,80}\b(shall|must|agrees? to|undertakes? to|is (?:required|liable) to)\b[^.]{0,80}\b(pay|provide|construct|obtain|execute|furnish|complete|maintain)\b/i.test(text);
+  const words = partyName.trim().split(/\s+/).slice(0, 2).map(escapeRe).join('\\s+');
+  const who = `${words}s?`;
+  return new RegExp(
+    `\\b${who}\\b[^.]{0,80}\\b(shall|must|agrees? to|undertakes? to|is (?:required|liable) to)\\b[^.]{0,80}\\b(pay|provide|construct|obtain|execute|furnish|complete|maintain)\\b`,
+    'i',
+  ).test(text);
 }
 
 export interface JudgementOptions {
@@ -180,6 +204,7 @@ export interface JudgementOptions {
   docId: string;
   question: string;
   sheet: DefinitionsSheet | null;
+  docType?: DocType | null;
   model: string;
   fallbackModel: string | null;
   maxTokens?: number;
@@ -191,16 +216,49 @@ export function isValidJudgementItem(x: unknown): boolean {
   const o = x as Record<string, unknown>;
   if (typeof o.quote !== 'string' || typeof o.why !== 'string') return false;
   if (typeof o.page !== 'number' && typeof o.page !== 'string') return false;
-  return ['favours_developer', 'favours_society', 'neutral'].includes(String(o.direction));
+  return DIRECTIONS.includes(o.direction as Direction);
 }
 
-export function pageInput(pages: Map<number, string>, start: number, end: number): string {
-  const parts: string[] = [];
-  for (let p = start; p <= end; p++) {
-    const text = pages.get(p);
-    if (text !== undefined) parts.push(`[[p${p}]]\n${text}`);
+export interface SubGroup {
+  suffix: string;
+  clause: string;
+  pageStart: number;
+  pageEnd: number;
+  text: string;
+}
+
+// Sub-items (lettered or roman, in any clause) are packed per parent clause into small groups,
+// so each group is checked on its own. No clause numbers are referenced here.
+export function subItemGroups(index: AnchorIndex, maxChars = SUB_GROUP_CHARS): SubGroup[] {
+  const groups: SubGroup[] = [];
+  let cur: { top: string; segs: typeof index.segments; chars: number } | null = null;
+  const close = () => {
+    if (!cur || cur.segs.length === 0) return;
+    const pages = cur.segs.map((s) => s.page);
+    const text = cur.segs.map((s) => `[[p${s.page}]]\n${s.text}`).join('\n');
+    groups.push({
+      suffix: `s${groups.length}`,
+      clause: cur.top,
+      pageStart: Math.min(...pages),
+      pageEnd: Math.max(...pages),
+      text,
+    });
+    cur = null;
+  };
+  for (const seg of index.segments) {
+    if (seg.top === null) {
+      close();
+      continue;
+    }
+    // Top-level text of the clause is context, not a sub-item, so it never opens a group.
+    if (seg.clause === seg.top) continue;
+    if (cur && (cur.top !== seg.top || cur.chars + seg.text.length > maxChars)) close();
+    if (!cur) cur = { top: seg.top, segs: [], chars: 0 };
+    cur.segs.push(seg);
+    cur.chars += seg.text.length;
   }
-  return parts.join('\n');
+  close();
+  return groups;
 }
 
 export async function runJudgement(opts: JudgementOptions): Promise<JudgementResult> {
@@ -210,11 +268,9 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
   const pages = await loadPageMap(db, docId);
   const index: AnchorIndex = buildAnchorIndex(pages);
   const chunks = buildAnalysisChunks(pages);
-
-  const parties = (opts.sheet?.parties ?? []).filter((p) => p.role === 'party_to_agreement').map((p) => p.name);
-  const partyLine = parties.length
-    ? `PARTIES: ${parties.join('; ')}. The Developer is the developer/promoter side; the Society is the society side.`
-    : 'PARTIES: the Developer (promoter) and the Society (members).';
+  const parties = partiesOf(opts.sheet);
+  const side = detectSide(opts.question, parties);
+  const prompt = `${JUDGE_PROMPT}\n${partyLineFor(parties)}\n${checklistFor(opts.docType ?? null)}`;
 
   const ctx: ExecuteContext = {
     db,
@@ -231,86 +287,95 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
   };
   const runId = await createRun(ctx, doc);
 
-  const plans: TaskPlan[] = chunks.map((chunk) => ({
-    suffix: `j${chunk.index}`,
-    promptVersion: 'judgement-v1',
-    prompt: `${JUDGE_PROMPT}\n${partyLine}`,
-    input: `QUESTION: ${opts.question}\n\n${pageInput(pages, chunk.pageStart, chunk.pageEnd)}`,
-    maxTokens: opts.maxTokens ?? 1600,
-    validate: isValidJudgementItem,
-  }));
+  // Every task carries the page range it may quote from, keyed by its suffix.
+  const ranges = new Map<string, { start: number; end: number }>();
+  const subs = subItemGroups(index);
+  const plans: TaskPlan[] = [];
+  for (const chunk of chunks) {
+    ranges.set(`j${chunk.index}`, { start: chunk.pageStart, end: chunk.pageEnd });
+    plans.push({
+      suffix: `j${chunk.index}`,
+      promptVersion: 'judgement-v2',
+      prompt,
+      input: `QUESTION: ${opts.question}\n\n${pageInput(pages, chunk.pageStart, chunk.pageEnd)}`,
+      maxTokens: opts.maxTokens ?? 1600,
+      validate: isValidJudgementItem,
+    });
+  }
+  for (const g of subs) {
+    ranges.set(g.suffix, { start: g.pageStart, end: g.pageEnd });
+    plans.push({
+      suffix: g.suffix,
+      promptVersion: 'judgement-sub-v1',
+      prompt,
+      input: `QUESTION: ${opts.question}\nThe excerpt is one group of sub-items of clause ${g.clause}. Judge each sub-item on its own.\n\n${g.text}`,
+      maxTokens: 1000,
+      validate: isValidJudgementItem,
+    });
+  }
 
-  const run = await executeTasks(ctx, runId, doc, plans);
   const items: JudgementItem[] = [];
   const dropped: Record<string, number> = {};
   let proposed = 0;
   let pageCorrected = 0;
 
-  const collect = (collected: { taskId: string; items: unknown[] }[], prefix: string, offset = 0) => {
+  // Verifies every proposed item against the page range of the task that produced it.
+  const ingest = (collected: { taskId: string; items: unknown[] }[]) => {
     for (const c of collected) {
       const suffix = c.taskId.slice(c.taskId.lastIndexOf(':') + 1).split('/')[0];
-      if (!suffix.startsWith(prefix)) continue;
-      const chunkIndex = Number(suffix.slice(prefix.length));
-      addItems(chunkIndex, c.items, offset);
+      const range = ranges.get(suffix);
+      if (!range) continue;
+      c.items.forEach((raw, i) => {
+        proposed++;
+        const item = raw as Record<string, unknown>;
+        const page = Number(item.page);
+        const check = verifyQuotedItems(
+          'judgement',
+          [{ quote: String(item.quote ?? ''), page: Number.isFinite(page) ? page : null }],
+          index,
+          range,
+        );
+        for (const d of check.drops) dropped[d.reason] = (dropped[d.reason] ?? 0) + 1;
+        if (check.verified.length === 0) return;
+        pageCorrected += check.corrected;
+        const v = check.verified[0].item;
+        const direction = String(item.direction) as Direction;
+        const confidence = String(item.confidence) as Confidence;
+        items.push({
+          itemId: `${suffix}:${i}`,
+          clause: v.clause,
+          page: v.page,
+          quote: v.quote,
+          direction: DIRECTIONS.includes(direction) ? direction : 'neutral',
+          why: String(item.why ?? '').trim(),
+          confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : 'low',
+        });
+      });
     }
   };
 
-  const addItems = (chunkIndex: number, rawItems: unknown[], offset: number) => {
-    const chunk = chunks.find((x) => x.index === chunkIndex);
-    if (!chunk) return;
-    rawItems.forEach((raw, i) => {
-      proposed++;
-      const item = raw as Record<string, unknown>;
-      const page = Number(item.page);
-      const check = verifyQuotedItems(
-        'judgement',
-        [{ quote: String(item.quote ?? ''), page: Number.isFinite(page) ? page : null }],
-        index,
-        { start: chunk.pageStart, end: chunk.pageEnd },
-      );
-      for (const d of check.drops) dropped[d.reason] = (dropped[d.reason] ?? 0) + 1;
-      if (check.verified.length === 0) return;
-      pageCorrected += check.corrected;
-      const v = check.verified[0].item;
-      const direction = String(item.direction) as Direction;
-      const confidence = String(item.confidence) as Confidence;
-      items.push({
-        itemId: `J${chunkIndex}:${i}`,
-        clause: v.clause,
-        page: v.page,
-        quote: v.quote,
-        direction: ['favours_developer', 'favours_society', 'neutral'].includes(direction) ? direction : 'neutral',
-        why: String(item.why ?? '').trim(),
-        confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : 'low',
-      });
-    });
-  }
+  const run = await executeTasks(ctx, runId, doc, plans);
+  ingest(run.collected);
 
-  collect(run.collected, 'j');
-
-  // Clauses with no finding at all get one focused retry with only those clauses' text.
-  const coveredTop = new Map<number, Set<string>>();
-  for (const it of items) {
-    const idx = Number(it.itemId.slice(1).split(':')[0]);
-    const set = coveredTop.get(idx) ?? new Set<string>();
-    set.add(topClause(it.clause));
-    coveredTop.set(idx, set);
-  }
+  // Clauses with no finding in their chunk get one focused retry with only their text.
   const retryPlans: TaskPlan[] = [];
   for (const chunk of chunks) {
-    const missing = chunk.manifest.filter((m) => !coveredTop.get(chunk.index)?.has(topClause(m)));
-    if (missing.length === 0) continue;
-    const segments = index.segments.filter(
-      (s) => s.page >= chunk.pageStart && s.page <= chunk.pageEnd && missing.includes(topClause(s.clause)),
+    const covered = new Set(
+      items.filter((it) => it.page >= chunk.pageStart && it.page <= chunk.pageEnd).map((it) => topClause(it.clause)),
     );
-    const text = segments.length
-      ? segments.map((s) => `[[p${s.page}]]\n${s.text}`).join('\n')
-      : pageInput(pages, chunk.pageStart, chunk.pageEnd);
+    const missing = chunk.manifest.filter((m) => !covered.has(topClause(m)));
+    if (missing.length === 0) continue;
+    const text = index.segments
+      .filter((s) => s.page >= chunk.pageStart && s.page <= chunk.pageEnd && missing.includes(topClause(s.clause)))
+      .map((s) => `[[p${s.page}]]\n${s.text}`)
+      .join('\n');
+    const suffix = `k${chunk.index}`;
+    ranges.set(suffix, { start: chunk.pageStart, end: chunk.pageEnd });
     retryPlans.push({
-      suffix: `k${chunk.index}`,
-      promptVersion: 'judgement-v1',
-      prompt: `${JUDGE_PROMPT}\n${partyLine}`,
-      input: `QUESTION: ${opts.question}\nFocus on these clauses: ${missing.join(', ')}\n\n${text}`,
+      suffix,
+      promptVersion: 'judgement-v2',
+      prompt,
+      input: `QUESTION: ${opts.question}\nFocus on these clauses: ${missing.join(', ')}\n\n${text || pageInput(pages, chunk.pageStart, chunk.pageEnd)}`,
       maxTokens: 1400,
       validate: isValidJudgementItem,
     });
@@ -318,36 +383,42 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
   if (retryPlans.length) {
     opts.onLog?.(`judgement retry for ${retryPlans.length} chunks`);
     const retry = await executeTasks(ctx, runId, doc, retryPlans);
-    collect(retry.collected, 'k', 1000);
+    ingest(retry.collected);
   }
 
-  // A clear Developer burden must never be presented as a Developer favour.
+  // A burden on a party must never be presented as a benefit to that party.
+  const nameOf = (d: Direction) => (d === 'favours_a' ? parties.a : d === 'favours_b' ? parties.b : null);
   const corrected = items.map((it) =>
-    it.direction === 'favours_developer' && looksLikeDeveloperObligation(it.quote, it.why)
-      ? { ...it, direction: 'neutral' as Direction }
-      : it,
+    looksLikeBurdenOn(it.quote, it.why, nameOf(it.direction)) ? { ...it, direction: 'neutral' as Direction } : it,
   );
 
   const { rows, directions } = mergeJudgements(corrected);
-  const party = detectParty(opts.question, opts.sheet);
-  const { matching, others } = filterByParty(rows, party);
+  const { matching, others } = filterBySide(rows, side);
+  const who = side ? (side === 'a' ? parties.a : parties.b) : null;
   const summary = `${matching.length} clause${matching.length === 1 ? '' : 's'} ${
-    party ? `favouring the ${party}` : 'grouped'
-  }: ${directions.favours_developer} pro-Developer, ${directions.favours_society} pro-Society, ${directions.neutral} neutral.`;
+    who ? `favouring ${who}` : 'grouped'
+  }: ${directions.favours_a} favour ${parties.a ?? '[A]'}, ${directions.favours_b} favour ${parties.b ?? '[B]'}, ${directions.neutral} neutral.`;
 
   const metrics = await computeMetrics(db, await db.getAllFromIndex('tasks', 'byRun', runId));
   await opts.supabase.from('runs').update({ status: 'complete', updated_at: new Date().toISOString() }).eq('id', runId);
 
   return {
     question: opts.question,
-    party,
+    side,
+    parties,
     rows: matching,
     others,
     summary,
-    counts: { chunksRead: chunks.length, proposed, verified: items.length, dropped, pageCorrected, directions },
+    counts: {
+      chunksRead: chunks.length,
+      subGroups: subs.length,
+      proposed,
+      verified: items.length,
+      dropped,
+      pageCorrected,
+      directions,
+    },
     metrics,
     runId,
   };
 }
-
-export { topClause };

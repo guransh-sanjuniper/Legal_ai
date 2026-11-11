@@ -19,6 +19,8 @@ export interface DocumentRecord {
   pageCount: number;
   prepFingerprint: string | null;
   chunkCount: number;
+  // Set by one classification call; used only to choose prompt hints.
+  docType?: 'agreement' | 'lease' | 'deed' | 'notice' | 'other' | null;
 }
 
 export interface PageRecord {
