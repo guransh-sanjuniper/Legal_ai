@@ -33,6 +33,7 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - Idempotency: `task_results` is unique on `(task_id, fingerprint)`. The fingerprint excludes the model.
 - Each attempt has an `attempt_id`. Results from superseded attempts are dropped.
 - Retry only: `timeout`, `network`, `stream_interrupted`, `bad_json`, `validation`, `http_429`, `http_5xx`. Max 3 retries, then the fallback model on the last attempt.
+- The proxy returns the provider's error message with `http_4xx`/`http_5xx`; `runTask` stores it as `failureMessage` on the task and `failure_message` on `task_results`, and the failed-task table shows it.
 - `http_401`, `http_400`, `http_403` and `length` at the minimum size fail immediately.
 - A task found in `requesting` on startup becomes `uncertain` and gets one new call.
 - A task in `received` with a saved raw response is parsed and saved again with no new AI call.

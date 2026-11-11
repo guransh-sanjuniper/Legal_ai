@@ -455,12 +455,16 @@ export function AnalysisPage() {
 
       <h4>Failed tasks (last run)</h4>
       <table border={1} cellPadding={3}>
-        <thead><tr><th>task</th><th>attempts</th><th>failure</th><th>finish</th><th>model</th></tr></thead>
+        <thead><tr><th>task</th><th>attempts</th><th>failure</th><th>message</th><th>finish</th><th>model</th></tr></thead>
         <tbody>
           {failedTasks.map((t) => (
-            <tr key={t.id}><td>{t.id.slice(-12)}</td><td>{t.attemptNo}</td><td>{t.failureCode}</td><td>{t.finishReason}</td><td>{t.model}</td></tr>
+            <tr key={t.id}>
+              <td>{t.id.slice(-12)}</td><td>{t.attemptNo}</td><td>{t.failureCode}</td>
+              <td style={{ maxWidth: 520, fontSize: 11 }}>{t.failureMessage ?? ''}</td>
+              <td>{t.finishReason}</td><td>{t.model}</td>
+            </tr>
           ))}
-          {failedTasks.length === 0 && <tr><td colSpan={5}>(none)</td></tr>}
+          {failedTasks.length === 0 && <tr><td colSpan={6}>(none)</td></tr>}
         </tbody>
       </table>
       {forced && <div>Forced failure check: <b style={{ color: forced.pass ? 'green' : 'red' }}>{forced.pass ? 'PASS' : 'FAIL'}</b> — {forced.detail}</div>}

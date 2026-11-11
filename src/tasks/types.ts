@@ -38,6 +38,7 @@ export interface Task extends TaskSpec {
   model: string | null;
   nextAt: number;
   failureCode: string | null;
+  failureMessage: string | null;
   finishReason: string | null;
   provider: string | null;
   promptTokens: number | null;
@@ -94,6 +95,7 @@ export interface ResultRow {
   completion_tokens: number | null;
   duration_ms: number | null;
   failure_code: string | null;
+  failure_message: string | null;
   rejected_items: number;
   payload: unknown | null;
 }

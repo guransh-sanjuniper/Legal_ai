@@ -73,6 +73,19 @@ describe('runTask', () => {
     expect(after.attemptNo).toBe(1);
   });
 
+  it('stores the provider message with the failed task and result row', async () => {
+    const saved: ResultRow[] = [];
+    const t = await newTask(db);
+    const message =
+      "This endpoint's maximum context length is 128000 tokens. However, you requested about 325606 tokens.";
+    const out = await runTask(db, t, cfgWith([async () => { throw new CallError('http_400', message); }], saved));
+    const after = (await db.get('tasks', t.id))!;
+    expect(out).toBe('failed');
+    expect(after.failureCode).toBe('http_400');
+    expect(after.failureMessage).toBe(message);
+    expect(saved[0].failure_message).toBe(message);
+  });
+
   it('finish_reason=length splits into two children', async () => {
     const saved: ResultRow[] = [];
     const t = await newTask(db, 'a clause line\n'.repeat(20));

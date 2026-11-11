@@ -90,7 +90,7 @@ async function drive(msg: StartMessage) {
       post({ type: 'step', taskId: t.id, outcome });
     } catch (e) {
       post({ type: 'error', taskId: t.id, message: String(e) });
-      await db.put('tasks', { ...fresh, status: 'failed', failureCode: 'internal', nextAt: 0, updatedAt: Date.now() });
+      await db.put('tasks', { ...fresh, status: 'failed', failureCode: 'internal', failureMessage: String(e), nextAt: 0, updatedAt: Date.now() });
     }
   };
 

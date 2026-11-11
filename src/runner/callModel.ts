@@ -41,8 +41,8 @@ export function makeCallModel(opts: { functionsUrl: string; anonKey: string; acc
         throw new CallError(timedOut ? 'timeout' : 'network');
       }
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { code?: string };
-        throw new CallError(body.code ?? `http_${res.status}`);
+        const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string };
+        throw new CallError(body.code ?? `http_${res.status}`, body.message);
       }
       return await readStream(res, () => timedOut, started);
     } finally {
@@ -58,10 +58,10 @@ async function readStream(res: Response, timedOut: () => boolean, started: numbe
 
   const handle = (line: string) => {
     if (!line.trim()) return;
-    const ev = JSON.parse(line) as { t: string; c?: string; code?: string } & StreamEnd;
+    const ev = JSON.parse(line) as { t: string; c?: string; code?: string; message?: string } & StreamEnd;
     if (ev.t === 'd') state.text += ev.c ?? '';
     else if (ev.t === 'end') state.end = ev;
-    else if (ev.t === 'error') throw new CallError(ev.code ?? 'stream_interrupted');
+    else if (ev.t === 'error') throw new CallError(ev.code ?? 'stream_interrupted', ev.message);
   };
 
   try {

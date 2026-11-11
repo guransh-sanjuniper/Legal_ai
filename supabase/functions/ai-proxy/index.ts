@@ -63,8 +63,16 @@ Deno.serve(async (req) => {
 
   if (!upstream.ok) {
     clearTimeout(timer);
-    await upstream.body?.cancel();
-    return json(upstream.status, { code: `http_${upstream.status}` });
+    const raw = await upstream.text().catch(() => '');
+    let message = raw.slice(0, 1000);
+    try {
+      const parsed = JSON.parse(raw) as { error?: { message?: unknown }; message?: unknown };
+      const m = parsed.error?.message ?? parsed.message;
+      if (typeof m === 'string') message = m.slice(0, 1000);
+    } catch {
+      // Keep the raw body when it is not JSON.
+    }
+    return json(upstream.status, { code: `http_${upstream.status}`, message: message || null });
   }
 
   // Normalised NDJSON: {t:"d",c} deltas, then one {t:"end",...} with provider, finish_reason, usage.

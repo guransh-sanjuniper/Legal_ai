@@ -139,7 +139,7 @@ export function TestPage() {
       <table border={1} cellPadding={4}>
         <thead>
           <tr>
-            <th>id</th><th>status</th><th>attempt</th><th>failure</th><th>finish</th><th>provider</th>
+            <th>id</th><th>status</th><th>attempt</th><th>failure</th><th>message</th><th>finish</th><th>provider</th>
             <th>tokens in/out</th><th>ms</th>
           </tr>
         </thead>
@@ -147,6 +147,7 @@ export function TestPage() {
           {tasks.map((t) => (
             <tr key={t.id}>
               <td>{t.id}</td><td>{t.status}</td><td>{t.attemptNo}</td><td>{t.failureCode ?? ''}</td>
+              <td style={{ maxWidth: 420, fontSize: 11 }}>{t.failureMessage ?? ''}</td>
               <td>{t.finishReason ?? ''}</td><td>{t.provider ?? ''}</td>
               <td>{t.promptTokens ?? ''} / {t.completionTokens ?? ''}</td><td>{t.durationMs ?? ''}</td>
             </tr>

@@ -42,6 +42,7 @@ async function attempt(db: HarnessDBHandle, task: Task, cfg: RunConfig): Promise
     model,
     nextAt: 0,
     failureCode: null,
+    failureMessage: null,
     finishReason: null,
     provider: null,
     updatedAt: started,
@@ -60,7 +61,8 @@ async function attempt(db: HarnessDBHandle, task: Task, cfg: RunConfig): Promise
     });
   } catch (e) {
     const code = e instanceof CallError ? e.code : 'network';
-    return fail(db, requesting, code, cfg, cfg.now() - started);
+    const message = e instanceof CallError ? e.message : String(e);
+    return fail(db, requesting, code, cfg, cfg.now() - started, message);
   }
 
   const raw: RawResponse = {
@@ -144,17 +146,25 @@ async function finishFromRaw(db: HarnessDBHandle, task: Task, raw: RawResponse, 
     return 'save_pending';
   }
 
-  await db.put('tasks', { ...task, status: 'done', rejectedItems: parsed.rejected, nextAt: 0, failureCode: null, updatedAt: now });
+  await db.put('tasks', { ...task, status: 'done', rejectedItems: parsed.rejected, nextAt: 0, failureCode: null, failureMessage: null, updatedAt: now });
   return 'done';
 }
 
-async function fail(db: HarnessDBHandle, task: Task, code: string, cfg: RunConfig, durationMs?: number): Promise<StepOutcome> {
+async function fail(
+  db: HarnessDBHandle,
+  task: Task,
+  code: string,
+  cfg: RunConfig,
+  durationMs?: number,
+  message?: string | null,
+): Promise<StepOutcome> {
   const now = cfg.now();
   const canRetry = isRetryable(code) && task.attemptNo < cfg.maxRetries + 1;
   const next: Task = {
     ...task,
     status: canRetry ? 'retry_wait' : 'failed',
     failureCode: code,
+    failureMessage: message ?? null,
     nextAt: canRetry ? now + cfg.backoffMs(task.attemptNo) : 0,
     durationMs: durationMs ?? task.durationMs,
     updatedAt: now,
@@ -186,6 +196,7 @@ function toRow(task: Task, payload: unknown | null, failureCode: string | null, 
     completion_tokens: task.completionTokens,
     duration_ms: task.durationMs,
     failure_code: failureCode,
+    failure_message: task.failureMessage,
     rejected_items: rejected,
     payload,
   };

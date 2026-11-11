@@ -11,6 +11,7 @@ export async function makeTask(spec: TaskSpec, now: number): Promise<Task> {
     model: null,
     nextAt: 0,
     failureCode: null,
+    failureMessage: null,
     finishReason: null,
     provider: null,
     promptTokens: null,
