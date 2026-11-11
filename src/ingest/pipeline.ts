@@ -5,7 +5,8 @@ import { openPdf, closePdf, extractNativePage, renderPageInto, type PdfDoc } fro
 import { assessNativeText } from './quality';
 import { checkOcrOutput, type OcrCheck, type OcrLang } from './ocrCheck';
 import { OcrEngine } from './ocr';
-import { chunkDocument, DEFAULT_CHUNK_CONFIG } from './chunk';
+import { DEFAULT_CHUNK_CONFIG } from './chunk';
+import { chunkDocumentWithConfidence } from './chunkQuality';
 
 export const EXTRACTOR_VERSION = 'pdfjs-v1+tesseract-v1';
 const BATCH_PAGES = 5;
@@ -126,13 +127,13 @@ async function writePages(db: HarnessDBHandle, records: PageRecord[]): Promise<v
   await tx.done;
 }
 
-async function prepFingerprint(docHash: string, ocrLangs: string, pages: PageRecord[]): Promise<string> {
-  // Chunk sizes are part of the fingerprint: changing them rebuilds chunks and embeddings.
+async function prepFingerprint(docHash: string, ocrLangs: string, pages: PageRecord[], chunkMode = 'structure'): Promise<string> {
+  // Chunk sizes and mode are part of the fingerprint: changing them rebuilds chunks and embeddings.
   const rows: unknown[] = [
     EXTRACTOR_VERSION,
     docHash,
     ocrLangs,
-    `chunk:${DEFAULT_CHUNK_CONFIG.targetTokens}/${DEFAULT_CHUNK_CONFIG.maxTokens}/${DEFAULT_CHUNK_CONFIG.minTokens}`,
+    `chunk:${DEFAULT_CHUNK_CONFIG.targetTokens}/${DEFAULT_CHUNK_CONFIG.maxTokens}/${DEFAULT_CHUNK_CONFIG.minTokens}:${chunkMode}`,
   ];
   for (const p of pages) rows.push([p.pageNo, p.status, await sha256Hex(p.text)]);
   return sha256Hex(JSON.stringify(rows));
@@ -190,8 +191,9 @@ async function finalize(deps: PipelineDeps, docId: string): Promise<void> {
     return;
   }
 
-  const chunks = chunkDocument(pages.map((p) => ({ pageNo: p.pageNo, text: p.text })));
-  const prep = await prepFingerprint(doc.hash, doc.ocrLangs, pages);
+  const chunking = chunkDocumentWithConfidence(pages.map((p) => ({ pageNo: p.pageNo, text: p.text })));
+  const chunks = chunking.chunks;
+  const prep = await prepFingerprint(doc.hash, doc.ocrLangs, pages, chunking.mode);
   const records: ChunkRecord[] = chunks.map((c) => ({ ...c, id: `${docId}:${c.index}`, docId, prepFingerprint: prep }));
   const previousPrep = doc.prepFingerprint;
 
@@ -205,6 +207,8 @@ async function finalize(deps: PipelineDeps, docId: string): Promise<void> {
     pageCount: pages.length,
     prepFingerprint: prep,
     chunkCount: records.length,
+    chunkMode: chunking.mode,
+    chunkModeReason: chunking.modeReason,
   });
   await tx.done;
 

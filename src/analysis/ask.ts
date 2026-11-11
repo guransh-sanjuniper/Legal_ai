@@ -43,6 +43,7 @@ export interface RetrievalAskOptions {
   db: HarnessDBHandle;
   supabase: SupabaseClient;
   accessToken: string;
+  refreshAccessToken?: (force?: boolean) => Promise<string | null>;
   userId?: string | null;
   functionsUrl: string;
   anonKey: string;
@@ -87,6 +88,7 @@ export async function askRetrieval(opts: RetrievalAskOptions): Promise<AskResult
     db: opts.db,
     supabase: opts.supabase,
     accessToken: opts.accessToken,
+    refreshAccessToken: opts.refreshAccessToken,
     userId: opts.userId,
     functionsUrl: opts.functionsUrl,
     anonKey: opts.anonKey,

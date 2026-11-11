@@ -44,6 +44,7 @@ export interface AnalysisOptions {
   db: HarnessDBHandle;
   supabase: SupabaseClient;
   accessToken: string;
+  refreshAccessToken?: (force?: boolean) => Promise<string | null>;
   userId?: string | null;
   functionsUrl: string;
   anonKey: string;
@@ -116,7 +117,7 @@ function clauseInput(chunk: AnalysisChunk, pages: Map<number, string>, defsConte
   return [
     defsContext,
     `CLAUSE NUMBERS IN THIS EXCERPT: ${clauses.join(', ')}`,
-    pageInput(pages, chunk.pageStart, chunk.pageEnd),
+    chunk.pageMarkedText,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -168,6 +169,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     db,
     supabase,
     accessToken: opts.accessToken,
+    refreshAccessToken: opts.refreshAccessToken,
     userId: opts.userId,
     functionsUrl: opts.functionsUrl,
     anonKey: opts.anonKey,
@@ -218,6 +220,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     if (missing.length) missingByChunk.set(chunk.index, missing);
   }
 
+  let retryTasks: typeof first.tasks = [];
   if (missingByChunk.size > 0) {
     const retryPlans: TaskPlan[] = [];
     for (const [indexNo, missing] of missingByChunk) {
@@ -234,8 +237,23 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     }
     progress(`retrying ${retryPlans.length} chunks with skipped clauses`);
     const retry = await executeTasks(ctx, runId, doc, retryPlans);
+    retryTasks = retry.tasks;
     collect(retry.collected, 'r');
   }
+
+  // Clauses still not received after the focused retry are skipped, not silently treated as empty.
+  const stillMissing = new Set<number>();
+  for (const chunk of chunks) {
+    const received = new Set(
+      (rawByChunk.get(chunk.index) ?? [])
+        .filter(isValidClauseItem)
+        .map((x) => topClause(String((x as Record<string, unknown>).clause_no ?? ''))),
+    );
+    if (chunk.manifest.some((c) => !received.has(topClause(c)))) stillMissing.add(chunk.index);
+  }
+  const clauseTasks = [...first.tasks, ...retryTasks].filter((t) => /:(?:a|r)\d+(?:\/|$)/.test(t.id));
+  const failedClauseTasks = clauseTasks.filter((t) => t.status === 'failed');
+  const partialNow = failedClauseTasks.length > 0 || stillMissing.size > 0;
 
   // 3. Verification (code) + law lookup for risks. Page and clause come from the resolver.
   const lawCache = new Map<string, LawPassageRef[]>();
@@ -440,7 +458,9 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     if (checked && !found) {
       gaps.push({
         kind: 'gap',
-        text: `No structured item covers ${candidate.label}; the whole-document hybrid search found nothing relevant either.`,
+        text: partialNow
+          ? `Unverified (some clauses not analysed): no structured item covers ${candidate.label}; the whole-document hybrid search found nothing relevant either.`
+          : `No structured item covers ${candidate.label}; the whole-document hybrid search found nothing relevant either.`,
         itemIds: [],
         severity: 'medium',
       });
@@ -510,6 +530,35 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
 
   const metrics = await computeMetrics(db, await db.getAllFromIndex('tasks', 'byRun', runId));
 
+  const totalClauses = ledger.totals.clausesDetected;
+  const analysedClauses = ledger.totals.clausesAnalysed;
+  const notAnalysed = Math.max(0, totalClauses - analysedClauses);
+  const partial = partialNow || notAnalysed > 0;
+  const unreliable = clauseTasks.length > 0 && failedClauseTasks.length / clauseTasks.length > 0.1;
+  const failedClauses = failedClauseTasks.map((t) => {
+    const suffix = t.id.slice(t.id.lastIndexOf(':') + 1).split('/')[0];
+    const indexNo = Number(suffix.slice(1));
+    const chunk = chunks.find((c) => c.index === indexNo);
+    return {
+      taskId: t.id,
+      clause: chunk ? chunk.clauses.join(', ') || chunk.clauseFrom || 'unknown' : 'unknown',
+      pages: [chunk?.pageStart ?? 0, chunk?.pageEnd ?? 0] as [number, number],
+      failureCode: t.failureCode,
+      message: t.failureMessage,
+    };
+  });
+  if (partial) {
+    overview = [...overview, { text: `${notAnalysed} of ${totalClauses} clauses not analysed.`, cites: [] }];
+  }
+  const chunking = {
+    mode: chunks[0]?.mode ?? 'structure',
+    modeReason: chunks[0]?.modeReason ?? '',
+    chunkCount: chunks.length,
+    longestChunkTokens: chunks.reduce((n, c) => Math.max(n, Math.ceil(c.text.length / 4)), 0),
+    sectionBreaks: chunks.filter((c) => c.sectionBreak).length,
+    longClauses: new Set(chunks.filter((c) => c.unusuallyLong).flatMap((c) => c.clauses)).size,
+  };
+
   const report: AnalysisReport = {
     docId,
     docHash: doc.hash,
@@ -536,7 +585,14 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       'AI-assisted, requires lawyer review.',
       'Law passages are PLACEHOLDER test data; every law-based risk is applicability unverified.',
       'Only quotes verified against the stored page text are shown.',
+      ...(partial ? [`Report is partial: ${notAnalysed} of ${totalClauses} clauses were not analysed.`] : []),
+      ...(unreliable ? ['Unreliable: more than 10% of clause units failed.'] : []),
     ],
+    partial,
+    unreliable,
+    failedClauses,
+    coverage: { totalClauses, analysedClauses, notAnalysed },
+    chunking,
   };
 
   await db.put('analysis_reports', { runId, docId, report, savedAt: Date.now() });

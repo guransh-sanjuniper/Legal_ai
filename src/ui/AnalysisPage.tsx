@@ -5,6 +5,7 @@ import type { Task } from '../tasks/types';
 import { RetrievalClient, type SearchResult } from '../retrieval/client';
 import { getDefinitions } from '../retrieval/definitions';
 import { runAnalysis, restoreReportFromSupabase } from '../analysis/runAnalysis';
+import { retryFailedClauseTasks, type RetryOutcome } from '../analysis/retryFailed';
 import { runJudgement, looksLikeBurdenOn, partiesOf, type JudgementResult } from '../analysis/judgement';
 import { classifyDocument } from '../analysis/docType';
 import { askRetrieval, type AskResult, type RetrievedChunk } from '../analysis/ask';
@@ -47,9 +48,19 @@ export function AnalysisPage() {
   const [judgement, setJudgement] = useState<JudgementResult | null>(null);
   const [fb, setFb] = useState<FallbackCheckResult | null>(null);
   const [forced, setForced] = useState<{ pass: boolean; detail: string } | null>(null);
+  const [retryResult, setRetryResult] = useState<RetryOutcome | null>(null);
   const clientRef = useRef<RetrievalClient | null>(null);
 
   const addLog = (line: string) => setLog((l) => [...l.slice(-300), `${new Date().toLocaleTimeString()} ${line}`]);
+
+  async function freshToken(force = false): Promise<string | null> {
+    if (force) {
+      const { data, error } = await sb.auth.refreshSession();
+      if (!error && data.session) return data.session.access_token;
+    }
+    const { data } = await sb.auth.getSession();
+    return data.session?.access_token ?? null;
+  }
 
   useEffect(() => {
     openHarnessDb().then(async (handle) => {
@@ -128,6 +139,7 @@ export function AnalysisPage() {
         db,
         supabase: sb,
         accessToken: session.access_token,
+        refreshAccessToken: freshToken,
         userId: session.user.id,
         functionsUrl: `${SUPABASE_URL}/functions/v1`,
         anonKey: ANON_KEY,
@@ -156,9 +168,43 @@ export function AnalysisPage() {
     }
   }
 
-  async function classify() {
-    if (!db || !docId || !session) return;
+  async function retryFailed() {
+    if (!db || !docId || !session || !report) return;
+    const doc = docs.find((d) => d.id === docId);
+    if (!doc) return;
     setBusy(true);
+    setRetryResult(null);
+    try {
+      const r = await retryFailedClauseTasks(
+        {
+          db,
+          supabase: sb,
+          accessToken: session.access_token,
+          refreshAccessToken: freshToken,
+          userId: session.user.id,
+          functionsUrl: `${SUPABASE_URL}/functions/v1`,
+          anonKey: ANON_KEY,
+          model: ANALYSIS_MODEL,
+          fallbackModel: FALLBACK_MODEL,
+          reasoning: { effort: 'minimal' },
+          timeoutMs: 110_000,
+        },
+        doc,
+        report.runId,
+        { limit: 5 },
+      );
+      setRetryResult(r);
+      addLog(`retry failed: ${r.retried} unit(s) split into ${r.splitInto} piece(s), ${r.done} done, ${r.failed} failed`);
+      await loadFailed(report.runId);
+    } catch (e) {
+      addLog(`retry failed: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function classify() {
+    if (!db || !docId || !session) return;    setBusy(true);
     try {
       const t = await classifyDocument({
         db,
@@ -190,6 +236,7 @@ export function AnalysisPage() {
             db,
             supabase: sb,
             accessToken: session.access_token,
+            refreshAccessToken: freshToken,
             userId: session.user.id,
             functionsUrl: `${SUPABASE_URL}/functions/v1`,
             anonKey: ANON_KEY,
@@ -208,6 +255,7 @@ export function AnalysisPage() {
           db,
           supabase: sb,
           accessToken: session.access_token,
+          refreshAccessToken: freshToken,
           userId: session.user.id,
           functionsUrl: `${SUPABASE_URL}/functions/v1`,
           anonKey: ANON_KEY,
@@ -283,7 +331,7 @@ export function AnalysisPage() {
     setBusy(true);
     try {
       const r = await runFallbackCheck(
-        { db, supabase: sb, accessToken: session.access_token, userId: session.user.id, functionsUrl: `${SUPABASE_URL}/functions/v1`, anonKey: ANON_KEY, model: ANALYSIS_MODEL, fallbackModel: FALLBACK_MODEL },
+        { db, supabase: sb, accessToken: session.access_token, refreshAccessToken: freshToken, userId: session.user.id, functionsUrl: `${SUPABASE_URL}/functions/v1`, anonKey: ANON_KEY, model: ANALYSIS_MODEL, fallbackModel: FALLBACK_MODEL },
         doc,
       );
       setFb(r);
@@ -299,7 +347,7 @@ export function AnalysisPage() {
     setBusy(true);
     try {
       const r = await runForcedFailure(
-        { db, supabase: sb, accessToken: session.access_token, userId: session.user.id, functionsUrl: `${SUPABASE_URL}/functions/v1`, anonKey: ANON_KEY, model: ANALYSIS_MODEL, fallbackModel: FALLBACK_MODEL },
+        { db, supabase: sb, accessToken: session.access_token, refreshAccessToken: freshToken, userId: session.user.id, functionsUrl: `${SUPABASE_URL}/functions/v1`, anonKey: ANON_KEY, model: ANALYSIS_MODEL, fallbackModel: FALLBACK_MODEL },
         doc,
       );
       setForced(r);
@@ -334,6 +382,9 @@ export function AnalysisPage() {
           ))}
         </select>{' '}
         <button disabled={busy || !docId || !session} onClick={analyse}>Run analysis</button>{' '}
+        <button disabled={busy || !docId || !session || !report} onClick={retryFailed} title="Retries up to 5 failed clause units; oversized inputs are split first">
+          Retry failed only
+        </button>{' '}
         <button disabled={busy || !docId || !session} onClick={classify}>Classify type</button>{' '}
         <span style={{ fontSize: 12 }}>type: {docs.find((d) => d.id === docId)?.docType ?? 'not classified'}</span>{' '}
         <button disabled={busy || !docId} onClick={clearLocal}>Clear local analysis</button>{' '}
@@ -348,6 +399,19 @@ export function AnalysisPage() {
           <h3>Report</h3>
           <div>{report.docName} · run {report.runId.slice(0, 8)} · {new Date(report.createdAt).toLocaleString()}</div>
           <div><b>{ledgerSummary(report.ledger)}</b></div>
+          {report.partial && (
+            <div style={{ color: '#a60', fontWeight: 'bold' }}>
+              PARTIAL — {report.coverage ? `${report.coverage.notAnalysed} of ${report.coverage.totalClauses} clauses not analysed` : 'some clauses not analysed'}
+              {report.unreliable ? ' · UNRELIABLE (more than 10% of clause units failed)' : ''}
+            </div>
+          )}
+          {report.chunking && (
+            <div style={{ fontSize: 12, color: '#555' }}>
+              analysis chunks: {report.chunking.chunkCount} · mode {report.chunking.mode}
+              {report.chunking.modeReason ? ` (${report.chunking.modeReason})` : ''} · longest {report.chunking.longestChunkTokens} tokens ·
+              section breaks {report.chunking.sectionBreaks} · long clauses {report.chunking.longClauses}
+            </div>
+          )}
           <div style={{ fontSize: 12, color: '#555' }}>
             skipped clauses: {report.resolution?.skippedClauses ?? 0} · pages corrected: {report.resolution?.pageCorrected ?? 0} ·
             dropped items: {report.resolution?.dropped ?? report.drops.length} · pages checked: {report.ledger.totals.citedPages.length}
@@ -454,6 +518,22 @@ export function AnalysisPage() {
       )}
 
       <h4>Failed tasks (last run)</h4>
+      {report?.failedClauses && report.failedClauses.length > 0 && (
+        <>
+          <h4>Failed clauses ({report.failedClauses.length})</h4>
+          <table border={1} cellPadding={3}>
+            <thead><tr><th>clause</th><th>pages</th><th>failure</th><th>message</th></tr></thead>
+            <tbody>
+              {report.failedClauses.map((f, i) => (
+                <tr key={i}>
+                  <td>{f.clause}</td><td>{f.pages[0]}-{f.pages[1]}</td><td>{f.failureCode ?? ''}</td>
+                  <td style={{ maxWidth: 620, fontSize: 11 }}>{f.message ?? ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
       <table border={1} cellPadding={3}>
         <thead><tr><th>task</th><th>attempts</th><th>failure</th><th>message</th><th>finish</th><th>model</th></tr></thead>
         <tbody>
@@ -468,6 +548,12 @@ export function AnalysisPage() {
         </tbody>
       </table>
       {forced && <div>Forced failure check: <b style={{ color: forced.pass ? 'green' : 'red' }}>{forced.pass ? 'PASS' : 'FAIL'}</b> — {forced.detail}</div>}
+      {retryResult && (
+        <div>
+          Retry failed only: {retryResult.retried} unit(s) split into {retryResult.splitInto} piece(s), {retryResult.done} done,{' '}
+          {retryResult.failed} failed. Rebuild the report to incorporate successful retries.
+        </div>
+      )}
       {fb && <div>Fallback check: <b style={{ color: fb.pass ? 'green' : 'red' }}>{fb.pass ? 'PASS' : 'FAIL'}</b> — {fb.detail}</div>}
 
       <h4>Ask / Judge</h4>

@@ -34,6 +34,15 @@ export function SearchPage() {
   const clientRef = useRef<RetrievalClient | null>(null);
   const embedStart = useRef<number | null>(null);
 
+  async function freshToken(force = false): Promise<string | null> {
+    if (force) {
+      const { data, error } = await sb.auth.refreshSession();
+      if (!error && data.session) return data.session.access_token;
+    }
+    const { data } = await sb.auth.getSession();
+    return data.session?.access_token ?? null;
+  }
+
   useEffect(() => {
     openHarnessDb().then(async (handle) => {
       setDb(handle);
@@ -121,6 +130,7 @@ export function SearchPage() {
         db,
         supabase: sb,
         accessToken: session.access_token,
+        refreshAccessToken: freshToken,
         userId: session.user.id,
         docId,
         model: LLM_MODEL,

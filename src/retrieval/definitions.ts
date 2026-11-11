@@ -54,6 +54,7 @@ export interface DefinitionsOptions {
   db: HarnessDBHandle;
   supabase: SupabaseClient;
   accessToken: string;
+  refreshAccessToken?: (force?: boolean) => Promise<string | null>;
   userId?: string | null;
   docId: string;
   model: string;
@@ -113,7 +114,12 @@ export async function buildDefinitionsSheet(opts: DefinitionsOptions): Promise<D
 
   const items: DefinitionItem[] = [];
   const cfg: RunConfig = {
-    callModel: makeCallModel({ functionsUrl: opts.functionsUrl, anonKey: opts.anonKey, accessToken: opts.accessToken }),
+    callModel: makeCallModel({
+      functionsUrl: opts.functionsUrl,
+      anonKey: opts.anonKey,
+      accessToken: opts.accessToken,
+      refreshToken: opts.refreshAccessToken,
+    }),
     saveResult: async (row: ResultRow) => {
       const { error } = await supabase.rpc('save_task_result', { p_row: row });
       if (error) throw error;

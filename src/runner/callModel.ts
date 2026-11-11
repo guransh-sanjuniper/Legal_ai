@@ -7,7 +7,12 @@ interface StreamEnd {
   completion_tokens?: number | null;
 }
 
-export function makeCallModel(opts: { functionsUrl: string; anonKey: string; accessToken: string }) {
+export function makeCallModel(opts: {
+  functionsUrl: string;
+  anonKey: string;
+  accessToken: string;
+  refreshToken?: (force?: boolean) => Promise<string | null>;
+}) {
   return async (req: CallRequest): Promise<CallResult> => {
     const started = Date.now();
     const ctrl = new AbortController();
@@ -17,14 +22,23 @@ export function makeCallModel(opts: { functionsUrl: string; anonKey: string; acc
       ctrl.abort();
     }, req.timeoutMs);
     try {
-      let res: Response;
-      try {
-        res = await fetch(`${opts.functionsUrl}/ai-proxy`, {
+      let token = opts.accessToken;
+      if (opts.refreshToken) {
+        try {
+          const fresh = await opts.refreshToken();
+          if (fresh) token = fresh;
+        } catch {
+          // Use the supplied token if a refresh is not possible.
+        }
+      }
+
+      const send = (accessToken: string): Promise<Response> =>
+        fetch(`${opts.functionsUrl}/ai-proxy`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             apikey: opts.anonKey,
-            authorization: `Bearer ${opts.accessToken}`,
+            authorization: `Bearer ${accessToken}`,
           },
           body: JSON.stringify({
             model: req.model,
@@ -37,6 +51,18 @@ export function makeCallModel(opts: { functionsUrl: string; anonKey: string; acc
           }),
           signal: ctrl.signal,
         });
+
+      let res: Response;
+      try {
+        res = await send(token);
+        if (res.status === 401 && opts.refreshToken) {
+          const fresh = await opts.refreshToken(true).catch(() => null);
+          if (fresh && fresh !== token) {
+            await res.body?.cancel().catch(() => undefined);
+            token = fresh;
+            res = await send(token);
+          }
+        }
       } catch {
         throw new CallError(timedOut ? 'timeout' : 'network');
       }

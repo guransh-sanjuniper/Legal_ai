@@ -21,6 +21,9 @@ export interface DocumentRecord {
   chunkCount: number;
   // Set by one classification call; used only to choose prompt hints.
   docType?: 'agreement' | 'lease' | 'deed' | 'notice' | 'other' | null;
+  // Which chunking mode was used, and why the structured mode was rejected.
+  chunkMode?: 'structure' | 'structure-free' | null;
+  chunkModeReason?: string | null;
 }
 
 export interface PageRecord {
@@ -109,7 +112,7 @@ export interface ChunkRecord {
   clauseFrom: string | null;
   clauseTo: string | null;
   clauses: string[];
-  startKind: 'clause' | 'subclause' | 'section' | 'lettered' | 'preamble' | 'part';
+  startKind: 'clause' | 'subclause' | 'section' | 'lettered' | 'preamble' | 'part' | 'free';
   heading: string | null;
   parentSection: string | null;
   tokenEst: number;
@@ -117,6 +120,9 @@ export interface ChunkRecord {
   split: boolean;
   partIndex: number | null;
   partCount: number | null;
+  sectionBreak: boolean;
+  unusuallyLong: boolean;
+  pageMarkedText: string;
 }
 
 export interface HarnessDB extends DBSchema {

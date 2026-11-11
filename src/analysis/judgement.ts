@@ -5,7 +5,7 @@ import { verifyQuotedItems } from './verify';
 import { buildAnalysisChunks } from './analysisChunks';
 import { JUDGE_PROMPT, checklistFor } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type TaskPlan } from './execute';
-import { loadPageMap, pageInput } from './runAnalysis';
+import { loadPageMap } from './runAnalysis';
 import type { AnalysisMetrics } from './types';
 import type { DefinitionsSheet } from '../retrieval/definitionsMerge';
 import type { DocType } from './docType';
@@ -198,6 +198,7 @@ export interface JudgementOptions {
   db: HarnessDBHandle;
   supabase: SupabaseClient;
   accessToken: string;
+  refreshAccessToken?: (force?: boolean) => Promise<string | null>;
   userId?: string | null;
   functionsUrl: string;
   anonKey: string;
@@ -276,6 +277,7 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
     db,
     supabase: opts.supabase,
     accessToken: opts.accessToken,
+    refreshAccessToken: opts.refreshAccessToken,
     userId: opts.userId,
     functionsUrl: opts.functionsUrl,
     anonKey: opts.anonKey,
@@ -297,7 +299,7 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
       suffix: `j${chunk.index}`,
       promptVersion: 'judgement-v3',
       prompt,
-      input: `QUESTION: ${opts.question}\n\n${pageInput(pages, chunk.pageStart, chunk.pageEnd)}`,
+      input: `QUESTION: ${opts.question}\n\n${chunk.pageMarkedText}`,
       maxTokens: opts.maxTokens ?? 1600,
       validate: isValidJudgementItem,
     });
@@ -375,7 +377,7 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
       suffix,
       promptVersion: 'judgement-v3',
       prompt,
-      input: `QUESTION: ${opts.question}\nFocus on these clauses: ${missing.join(', ')}\n\n${text || pageInput(pages, chunk.pageStart, chunk.pageEnd)}`,
+      input: `QUESTION: ${opts.question}\nFocus on these clauses: ${missing.join(', ')}\n\n${text || chunk.pageMarkedText}`,
       maxTokens: 1400,
       validate: isValidJudgementItem,
     });

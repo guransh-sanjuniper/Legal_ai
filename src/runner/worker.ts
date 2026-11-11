@@ -12,6 +12,7 @@ export interface StartMessage {
   supabaseUrl: string;
   anonKey: string;
   accessToken: string;
+  refreshToken: string;
   model: string;
   fallbackModel: string | null;
   timeoutMs: number;
@@ -52,12 +53,26 @@ async function readRunStatus(sb: SupabaseClient, runId: string): Promise<string 
 async function drive(msg: StartMessage) {
   const db: HarnessDBHandle = await openHarnessDb();
   const sb = createClient(msg.supabaseUrl, msg.anonKey, {
-    global: { headers: { Authorization: `Bearer ${msg.accessToken}` } },
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
+  await sb.auth.setSession({ access_token: msg.accessToken, refresh_token: msg.refreshToken });
+
+  const refreshAccessToken = async (force = false): Promise<string | null> => {
+    if (force) {
+      const { data, error } = await sb.auth.refreshSession();
+      if (!error && data.session) return data.session.access_token;
+    }
+    const { data } = await sb.auth.getSession();
+    return data.session?.access_token ?? null;
+  };
 
   const cfg: RunConfig = {
-    callModel: makeCallModel({ functionsUrl: `${msg.supabaseUrl}/functions/v1`, anonKey: msg.anonKey, accessToken: msg.accessToken }),
+    callModel: makeCallModel({
+      functionsUrl: `${msg.supabaseUrl}/functions/v1`,
+      anonKey: msg.anonKey,
+      accessToken: msg.accessToken,
+      refreshToken: refreshAccessToken,
+    }),
     saveResult: async (row: ResultRow) => {
       const { error } = await sb.rpc('save_task_result', { p_row: row });
       if (error) throw error;

@@ -10,6 +10,7 @@ export interface CheckContext {
   db: HarnessDBHandle;
   supabase: SupabaseClient;
   accessToken: string;
+  refreshAccessToken?: (force?: boolean) => Promise<string | null>;
   userId?: string | null;
   functionsUrl: string;
   anonKey: string;
@@ -109,7 +110,12 @@ export async function runForcedFailure(ctx: CheckContext, doc: DocumentRecord): 
   const runId = await createRun(exec, doc);
   const task = await seedTask(ctx, doc, runId, 80);
   const cfg = makeRunConfig({ ...exec, model: 'invalid/does-not-exist' });
-  cfg.callModel = makeCallModel({ functionsUrl: ctx.functionsUrl, anonKey: ctx.anonKey, accessToken: ctx.accessToken });
+  cfg.callModel = makeCallModel({
+    functionsUrl: ctx.functionsUrl,
+    anonKey: ctx.anonKey,
+    accessToken: ctx.accessToken,
+    refreshToken: ctx.refreshAccessToken,
+  });
   await runTask(ctx.db, (await ctx.db.get('tasks', task.id))!, cfg);
   const final = (await ctx.db.get('tasks', task.id))!;
   const pass = final.status === 'failed' && final.attemptNo === 1 && !!final.failureCode;

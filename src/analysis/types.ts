@@ -141,4 +141,22 @@ export interface AnalysisReport {
   resolution: { pageCorrected: number; dropped: number; skippedClauses: number };
   notices: string[];
   judgement?: JudgementSnapshot;
+  partial?: boolean;
+  unreliable?: boolean;
+  failedClauses?: {
+    taskId: string;
+    clause: string;
+    pages: [number, number];
+    failureCode: string | null;
+    message: string | null;
+  }[];
+  coverage?: { totalClauses: number; analysedClauses: number; notAnalysed: number };
+  chunking?: {
+    mode: 'structure' | 'structure-free';
+    modeReason: string;
+    chunkCount: number;
+    longestChunkTokens: number;
+    sectionBreaks: number;
+    longClauses: number;
+  };
 }

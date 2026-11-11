@@ -73,6 +73,21 @@ describe('runTask', () => {
     expect(after.attemptNo).toBe(1);
   });
 
+  it('fails locally with input_too_large and never calls the model', async () => {
+    const saved: ResultRow[] = [];
+    let calls = 0;
+    const cfg = cfgWith([async () => { calls++; return result(); }], saved);
+    cfg.model = 'openai/gpt-4o-mini';
+    const t = await newTask(db, 'x'.repeat(600_000), 2600);
+    const out = await runTask(db, t, cfg);
+    const after = (await db.get('tasks', t.id))!;
+    expect(out).toBe('failed');
+    expect(after.failureCode).toBe('input_too_large');
+    expect(after.failureMessage).toMatch(/estimated \d+ input tokens; limit \d+/);
+    expect(calls).toBe(0);
+    expect(saved[0].failure_code).toBe('input_too_large');
+  });
+
   it('stores the provider message with the failed task and result row', async () => {
     const saved: ResultRow[] = [];
     const t = await newTask(db);

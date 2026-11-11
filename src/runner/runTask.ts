@@ -2,6 +2,7 @@ import type { HarnessDBHandle } from './db';
 import { rawKey } from './db';
 import { parseItems } from '../tasks/parse';
 import { makeTask } from '../tasks/make';
+import { estimateInputTokens, inputLimitFor } from '../tasks/limits';
 import { splitInput } from '../tasks/split';
 import {
   CallError,
@@ -48,6 +49,20 @@ async function attempt(db: HarnessDBHandle, task: Task, cfg: RunConfig): Promise
     updatedAt: started,
   };
   await db.put('tasks', requesting);
+
+  // Pre-flight: never send a unit that is over the model's input budget.
+  const estimatedInput = estimateInputTokens(`${task.prompt}\n${task.input}`);
+  const inputLimit = inputLimitFor(model, task.maxTokens);
+  if (estimatedInput > inputLimit) {
+    return fail(
+      db,
+      requesting,
+      'input_too_large',
+      cfg,
+      0,
+      `estimated ${estimatedInput} input tokens; limit ${inputLimit} for ${model} with ${task.maxTokens} output tokens`,
+    );
+  }
 
   let res: CallResult;
   try {

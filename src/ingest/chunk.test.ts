@@ -11,6 +11,7 @@ import {
   type Unit,
 } from './chunk';
 import { checkChunks } from './checkChunks';
+import { chunkDocumentWithConfidence } from './chunkQuality';
 
 const CFG = DEFAULT_CHUNK_CONFIG;
 const tokens = (s: string) => Math.ceil(s.length / 4);
@@ -49,8 +50,15 @@ function expectedClauseNos(count: number): string[] {
 }
 
 describe('chunk config', () => {
-  it('defaults are 1250 target, 2500 max, 300 min', () => {
-    expect(DEFAULT_CHUNK_CONFIG).toEqual({ targetTokens: 1250, maxTokens: 2500, minTokens: 300 });
+  it('defaults are 1250 target, 2500 max, 300 min, 15 pages and 6000 tokens per clause', () => {
+    expect(DEFAULT_CHUNK_CONFIG).toEqual({
+      targetTokens: 1250,
+      maxTokens: 2500,
+      minTokens: 300,
+      maxClausePages: 15,
+      maxClauseTokens: 6000,
+      restartMinRun: 5,
+    });
   });
 
   it('rejects an inconsistent config', () => {
@@ -172,6 +180,9 @@ describe('oversized clause is split at sentence boundaries', () => {
     pageEnd: 4,
     text: `5. Huge clause\n${longBody}`,
     gap: null,
+    linePages: [3, 4],
+    sectionBreak: false,
+    unusuallyLong: false,
   };
 
   it('splits it into parts under the max, each marked', () => {
@@ -193,13 +204,17 @@ describe('oversized clause is split at sentence boundaries', () => {
     for (const p of parts.slice(0, -1)) expect(p.trimEnd().endsWith('.')).toBe(true);
   });
 
-  it('keeps page range, heading and parent section on each part', () => {
-    for (const c of chunkUnits([unit])) {
-      expect(c.pageStart).toBe(3);
-      expect(c.pageEnd).toBe(4);
+  it('keeps each part on the pages its own text came from', () => {
+    const chunks = chunkUnits([unit]);
+    expect(chunks[0].pageStart).toBe(3);
+    expect(chunks[0].pageEnd).toBe(4);
+    for (const c of chunks) {
+      expect(c.pageStart).toBeGreaterThanOrEqual(3);
+      expect(c.pageEnd).toBeLessThanOrEqual(4);
       expect(c.heading).toBe('5. Huge clause');
       expect(c.parentSection).toBe('Article 2');
     }
+    expect(chunks.some((c) => c.pageStart === 4)).toBe(true);
   });
 
   it('sentenceSpans joins back to the input', () => {
@@ -349,5 +364,76 @@ describe('65-page contract', () => {
     expect(chunks.length).toBeLessThanOrEqual(70);
     for (const c of chunks) expect(classifyLine(c.text.split('\n')[0])).not.toBeNull();
     expect(clauseUnitsInOrder(chunks)).toEqual(expectedClauseNos(800));
+  });
+});
+
+describe('numbering restarts and section breaks', () => {
+  it('accepts a new run that restarts at 1 after a long sequence', () => {
+    const body = 'Body text for this clause. '.repeat(4);
+    const text = [
+      ...Array.from({ length: 8 }, (_, i) => `${i + 1}. Clause ${i + 1}\n${body}`),
+      'SCHEDULE A',
+      '1. Payment',
+      body,
+      '2. Registration',
+      body,
+    ].join('\n');
+    const units = buildUnits(pagesFrom(text, 50));
+    const tops = units.filter((u) => u.startKind === 'clause').map((u) => u.clauseNo);
+    expect(tops).toContain('1');
+    expect(tops.filter((n) => n === '1')).toHaveLength(2);
+    const sectionBreak = units.find((u) => u.startKind === 'section' && u.sectionBreak);
+    expect(sectionBreak?.heading).toMatch(/SCHEDULE A/i);
+    const firstAfterBreak = units.find((u) => u.clauseNo === '1' && u.pageStart === sectionBreak!.pageStart);
+    expect(firstAfterBreak).toBeDefined();
+  });
+
+  it('does not treat a numbered table row as a restart', () => {
+    const text = [
+      '30. Obligations',
+      'Body text for clause thirty. '.repeat(4),
+      'Sr.',
+      'no.',
+      '1. First row in a table',
+      '2. Second row in a table',
+      '3. Third row in a table',
+      '31. Next clause heading with a long enough line to end the table',
+      'Body text for clause thirty one.',
+    ].join('\n');
+    const units = buildUnits(pagesFrom(text, 50));
+    const tops = units.filter((u) => u.startKind === 'clause').map((u) => u.clauseNo);
+    expect(tops).toEqual(['30', '31']);
+  });
+});
+
+describe('unusually long clauses', () => {
+  it('force-closes an over-long clause at the next heading-like line', () => {
+    const pages: PageText[] = [];
+    pages.push({ pageNo: 1, text: '1. Definitions\nThe following terms apply.' });
+    for (let p = 2; p <= 20; p++) pages.push({ pageNo: p, text: `Unbroken body line ${p} without a clause number.` });
+    pages.push({ pageNo: 21, text: 'SCHEDULE A\n1. Payment\nPayment body.' });
+
+    const units = buildUnits(pages, { maxClausePages: 15 });
+    const first = units.find((u) => u.clauseNo === '1');
+    expect(first?.unusuallyLong).toBe(true);
+    const schedule = units.find((u) => u.startKind === 'section' && u.sectionBreak);
+    expect(schedule?.pageStart).toBe(21);
+
+    const check = checkChunks(chunkDocument(pages, { maxClausePages: 15 }), pages, { ...DEFAULT_CHUNK_CONFIG, maxClausePages: 15 });
+    expect(check.longClauses.length).toBeGreaterThan(0);
+    expect(check.ok).toBe(false);
+  });
+});
+
+describe('structure-free fallback', () => {
+  it('rebuilds when the structured chunking is not trustworthy', () => {
+    const pages: PageText[] = [];
+    pages.push({ pageNo: 1, text: '1. Definitions\nThe following terms apply.' });
+    for (let p = 2; p <= 24; p++) pages.push({ pageNo: p, text: `A long unnumbered paragraph ${p}. ${'More text. '.repeat(20)}` });
+    const result = chunkDocumentWithConfidence(pages, { maxClausePages: 15 });
+    expect(result.mode).toBe('structure-free');
+    expect(result.modeReason).toMatch(/over 15 pages|long/i);
+    expect(result.check.mode).toBe('structure-free');
+    expect(result.check.aboveMax).toEqual([]);
   });
 });

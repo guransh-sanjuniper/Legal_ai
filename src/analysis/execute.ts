@@ -29,6 +29,7 @@ export interface ExecuteContext {
   db: HarnessDBHandle;
   supabase: SupabaseClient;
   accessToken: string;
+  refreshAccessToken?: (force?: boolean) => Promise<string | null>;
   userId?: string | null;
   functionsUrl: string;
   anonKey: string;
@@ -70,7 +71,12 @@ export async function createRun(ctx: ExecuteContext, doc: DocumentRecord): Promi
 
 export function makeRunConfig(ctx: ExecuteContext): RunConfig {
   return {
-    callModel: makeCallModel({ functionsUrl: ctx.functionsUrl, anonKey: ctx.anonKey, accessToken: ctx.accessToken }),
+    callModel: makeCallModel({
+      functionsUrl: ctx.functionsUrl,
+      anonKey: ctx.anonKey,
+      accessToken: ctx.accessToken,
+      refreshToken: ctx.refreshAccessToken,
+    }),
     saveResult: async (row: ResultRow) => {
       const { error } = await ctx.supabase.rpc('save_task_result', { p_row: row });
       if (error) throw error;

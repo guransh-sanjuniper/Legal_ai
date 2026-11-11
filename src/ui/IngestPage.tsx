@@ -6,6 +6,9 @@ import { openPdf, renderPageInto, closePdf, type PdfDoc } from '../ingest/pdfPag
 import type { IngestMessage } from '../ingest/ingest.worker';
 import type { IngestEvent } from '../ingest/pipeline';
 import { checkChunks } from '../ingest/checkChunks';
+import { chunkDocumentWithConfidence } from '../ingest/chunkQuality';
+import { DEFAULT_CHUNK_CONFIG } from '../ingest/chunk';
+import type { ChunkCheck } from '../ingest/checkChunks';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
 const MB = (n: number) => (n / 1048576).toFixed(1) + ' MB';
@@ -16,6 +19,7 @@ export function IngestPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pages, setPages] = useState<PageRecord[]>([]);
   const [chunks, setChunks] = useState<ChunkRecord[]>([]);
+  const [analysisCheck, setAnalysisCheck] = useState<ChunkCheck | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number; skipped: number } | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [storage, setStorage] = useState<StorageReport | null>(null);
@@ -50,6 +54,9 @@ export function IngestPage() {
                 ...c,
                 clauses: c.clauses ?? (c.clauseFrom ? [c.clauseFrom] : []),
                 startKind: c.startKind ?? 'clause',
+                sectionBreak: c.sectionBreak ?? false,
+                unusuallyLong: c.unusuallyLong ?? false,
+                pageMarkedText: c.pageMarkedText ?? c.text,
               }))
               .sort((a, b) => a.index - b.index),
           );
@@ -156,9 +163,30 @@ export function IngestPage() {
     if (reviewPageNo !== null) reviewImage(reviewPageNo).catch((e) => addLog(`render failed: ${String(e)}`));
   }, [reviewPageNo, selectedId]);
 
+  useEffect(() => {
+    if (!selected || selected.status !== 'ready' || pages.length === 0 || busy) {
+      setAnalysisCheck(null);
+      return;
+    }
+    let cancelled = false;
+    const pageTexts = pages.map((p) => ({ pageNo: p.pageNo, text: p.text }));
+    const result = chunkDocumentWithConfidence(pageTexts, { targetTokens: 700, maxTokens: 1200, minTokens: 250 }, { inputLimit: 100_000 });
+    if (!cancelled) setAnalysisCheck(result.check);
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id, selected?.prepFingerprint, selected?.chunkMode, pages.length, busy]);
+
   const review = pages.filter((p) => !FINAL_PAGE_STATUSES.includes(p.status));
   const reviewPage = pages.find((p) => p.pageNo === reviewPageNo) ?? null;
-  const check = chunks.length > 0 ? checkChunks(chunks, pages.map((p) => ({ pageNo: p.pageNo, text: p.text }))) : null;
+  const check =
+    chunks.length > 0
+      ? checkChunks(chunks, pages.map((p) => ({ pageNo: p.pageNo, text: p.text })), DEFAULT_CHUNK_CONFIG, {
+          mode: selected?.chunkMode ?? 'structure',
+          modeReason: selected?.chunkModeReason ?? '',
+          inputLimit: 100_000,
+        })
+      : null;
 
   async function decide(page: PageRecord, decision: 'accept' | 'correct' | 'blank' | 'unresolved', text?: string) {
     if (!db) return;
@@ -317,12 +345,18 @@ export function IngestPage() {
           <h3>Chunk check</h3>
           <div style={{ fontFamily: 'monospace', fontSize: 13 }}>
             <div style={{ color: check.ok ? 'green' : 'red', fontWeight: 'bold' }}>
-              {check.ok ? 'PASS' : 'FAIL'}
+              {check.ok ? 'PASS' : 'FAIL'} · mode {check.mode}
+              {check.modeReason ? ` (${check.modeReason})` : ''}
             </div>
             <div>
-              pages covered {check.coveredPages}/{check.pageCount} · gaps {check.counts.gaps} · overlaps {check.counts.overlaps} ·
-              above max {check.counts.aboveMax} · bad starts {check.counts.badStarts} · missing clauses {check.counts.missing} ·
+              chunks {check.chunkCount} · longest {check.longestChunkTokens} tokens · pages covered {check.coveredPages}/{check.pageCount} ·
+              gaps {check.counts.gaps} · overlaps {check.counts.overlaps} · above max {check.counts.aboveMax} · above model input{' '}
+              {check.counts.aboveInputLimit} · bad starts {check.counts.badStarts} · missing clauses {check.counts.missing} ·
               repeated clauses {check.counts.repeated} · split clauses {check.counts.split}
+            </div>
+            <div>
+              section breaks {check.counts.sectionBreaks} · long clauses {check.counts.longClauses} · shared page ranges{' '}
+              {check.counts.repeatedRanges}
             </div>
             {check.pageGaps.length > 0 && <div>gaps: pages {check.pageGaps.join(', ')}</div>}
             {check.pageOverlaps.length > 0 && <div>overlaps: pages {check.pageOverlaps.join(', ')}</div>}
@@ -337,7 +371,53 @@ export function IngestPage() {
             {check.aboveMax.length > 0 && (
               <div>above max: {check.aboveMax.map((a) => `#${a.index} ${a.tokenEst}`).join('; ')}</div>
             )}
+            {check.aboveInputLimit.length > 0 && (
+              <div>above model input: {check.aboveInputLimit.map((a) => `#${a.index} ${a.tokenEst} > ${a.limit}`).join('; ')}</div>
+            )}
+            {check.longClauses.length > 0 && (
+              <div>
+                clauses over {DEFAULT_CHUNK_CONFIG.maxClausePages} pages:{' '}
+                {check.longClauses.map((l) => `${l.clause} pages ${l.pageStart}-${l.pageEnd} (${l.pages}p, ${l.tokenEst} tok)`).join('; ')}
+              </div>
+            )}
+            {check.repeatedRanges.length > 0 && (
+              <div style={{ color: '#a00' }}>
+                shared page ranges:{' '}
+                {check.repeatedRanges.map((r) => `${r.pageStart}-${r.pageEnd} ×${r.count} (chunks ${r.chunkIndexes.slice(0, 8).join('/')}${r.chunkIndexes.length > 8 ? '…' : ''})`).join('; ')}
+              </div>
+            )}
+            {check.sectionBreaks.length > 0 && (
+              <div>section breaks: {check.sectionBreaks.map((s) => `p${s.page} ${s.label}`).join('; ')}</div>
+            )}
           </div>
+
+          {analysisCheck && (
+            <>
+              <h3>Analysis chunk check</h3>
+              <div style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                <div style={{ color: analysisCheck.ok ? 'green' : 'red', fontWeight: 'bold' }}>
+                  {analysisCheck.ok ? 'PASS' : 'FAIL'} · mode {analysisCheck.mode}
+                  {analysisCheck.modeReason ? ` (${analysisCheck.modeReason})` : ''}
+                </div>
+                <div>
+                  chunks {analysisCheck.chunkCount} · longest {analysisCheck.longestChunkTokens} tokens · above model input{' '}
+                  {analysisCheck.counts.aboveInputLimit} · long clauses {analysisCheck.counts.longClauses} · shared page ranges{' '}
+                  {analysisCheck.counts.repeatedRanges} · section breaks {analysisCheck.counts.sectionBreaks}
+                </div>
+                {analysisCheck.repeatedRanges.length > 0 && (
+                  <div style={{ color: '#a00' }}>
+                    shared page ranges:{' '}
+                    {analysisCheck.repeatedRanges.map((r) => `${r.pageStart}-${r.pageEnd} ×${r.count}`).join('; ')}
+                  </div>
+                )}
+                {analysisCheck.longClauses.length > 0 && (
+                  <div>
+                    long clauses: {analysisCheck.longClauses.map((l) => `${l.clause} ${l.pages}p`).join('; ')}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
 
