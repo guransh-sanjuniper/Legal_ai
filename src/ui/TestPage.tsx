@@ -130,6 +130,7 @@ export function TestPage() {
 
   return (
     <div style={{ padding: 16, fontFamily: 'sans-serif' }}>
+      <div style={{ marginBottom: 10, fontSize: 13 }}><a href="/?page=ingest">Start at ingest →</a></div>
       <h2>Pipeline harness: hand-made task</h2>
       <textarea rows={8} cols={90} value={input} onChange={(e) => setInput(e.target.value)} />
       <div>

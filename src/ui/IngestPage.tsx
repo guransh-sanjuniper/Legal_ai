@@ -9,6 +9,7 @@ import { checkChunks } from '../ingest/checkChunks';
 import { chunkDocumentWithConfidence } from '../ingest/chunkQuality';
 import { DEFAULT_CHUNK_CONFIG } from '../ingest/chunk';
 import type { ChunkCheck } from '../ingest/checkChunks';
+import { PageNav } from './PageNav';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
 const MB = (n: number) => (n / 1048576).toFixed(1) + ' MB';
@@ -210,6 +211,7 @@ export function IngestPage() {
 
   return (
     <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1200 }}>
+      <PageNav current="ingest" />
       <h2>Ingestion</h2>
 
       <div>

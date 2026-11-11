@@ -24,6 +24,7 @@ import {
   type StoredScore,
 } from '../quality/history';
 import { runRepeatComparison, type RepeatComparison } from '../quality/repeat';
+import { PageNav } from './PageNav';
 
 const GOLDEN_FILES = import.meta.glob('../../tests/golden/*.json', { eager: true, import: 'default' }) as Record<
   string,
@@ -219,6 +220,7 @@ export function QualityPage() {
 
   return (
     <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1500 }}>
+      <PageNav current="quality" />
       <h2>Quality suite</h2>
       <div style={{ fontSize: 12, color: '#555', maxWidth: 980 }}>
         Scores are read from saved runs. No model call is made here except the repeat-run comparison.

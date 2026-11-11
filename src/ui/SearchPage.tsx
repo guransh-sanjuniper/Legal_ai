@@ -6,6 +6,7 @@ import { buildDefinitionsSheet, getDefinitions, definitionsContext } from '../re
 import type { DefinitionsSheet } from '../retrieval/definitionsMerge';
 import { EMBED_MODEL_VERSION, LAW_STANDIN_VERSION } from '../retrieval/config';
 import { LAW_NOTICE } from '../retrieval/lawSearch';
+import { PageNav } from './PageNav';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const ANON_KEY = import.meta.env.VITE_ANON_KEY ?? (import.meta.env.VITE_SUPABASE_ANON_KEY as string);
@@ -151,6 +152,7 @@ export function SearchPage() {
 
   return (
     <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1100 }}>
+      <PageNav current="search" />
       <h2>Search</h2>
       <div>
         Document:{' '}

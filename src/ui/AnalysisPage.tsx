@@ -14,6 +14,7 @@ import { ANALYSIS_MODEL, FALLBACK_MODEL } from '../analysis/config';
 import type { AnalysisReport } from '../analysis/types';
 import { ledgerSummary } from '../analysis/ledger';
 import { scorePayments, scoreFavours, isTuningGolden, goldenDocName, type GoldenFile } from '../analysis/goldenScore';
+import { PageNav } from './PageNav';
 
 // Every tests/golden/*.json is a scoring file. Holdout files are never shown in the tuning report.
 const GOLDEN_FILES = import.meta.glob('../../tests/golden/*.json', { eager: true, import: 'default' }) as Record<
@@ -374,6 +375,7 @@ export function AnalysisPage() {
 
   return (
     <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1240 }}>
+      <PageNav current="analysis" />
       <h2>Analysis</h2>
       <div>
         Document:{' '}
