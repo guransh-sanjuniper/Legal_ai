@@ -9,6 +9,11 @@ export interface GoldenExpectation {
   clause: string;
   token: string;
   kind: 'payment' | 'favour';
+  // Optional: the verified quote must contain this text, which narrows an expectation to one part
+  // of a mixed clause.
+  contains?: string;
+  // Why an expectation was narrowed or removed. Documentation only; ignored by scoring.
+  reason?: string;
 }
 
 export interface GoldenFile {
@@ -21,6 +26,8 @@ export interface GoldenFile {
 export function isTuningGolden(file: GoldenFile): boolean {
   return file.holdout !== true;
 }
+
+const normText = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
 const topOf = (c: string) => canonicalClause(c).replace(/\(.*$/, '');
 // A bare clause expectation matches any sub-item of it; a sub-item expectation needs that sub-item.
@@ -98,7 +105,8 @@ export function scoreFavours(rows: JudgementRow[], expected: GoldenExpectation[]
       (r) =>
         r.direction !== 'neutral' &&
         clauseMatch(g.clause, r.clause) &&
-        (partyName(r) ?? '').toLowerCase().includes(g.token.toLowerCase()),
+        (partyName(r) ?? '').toLowerCase().includes(g.token.toLowerCase()) &&
+        (!g.contains || normText(r.quote).includes(normText(g.contains))),
     );
   const misses = favours.filter((g) => !hit(g));
   return {

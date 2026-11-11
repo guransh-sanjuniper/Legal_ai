@@ -1,5 +1,6 @@
 {
   "document": "HIRAMOTI NAGAR CHSL DA DRAFT FOR MEMBERS 290626.pdf",
+  "note": "burden rule: an obligation or payment by a party is not a favour to it, but it can favour the counterparty",
   "pages": 65,
   "tolerance": 1,
   "expectedClauseFirstPage": {
@@ -16,43 +17,201 @@
     "59": 63
   },
   "expected": [
-    { "clause": "13", "token": "18,000", "kind": "payment" },
-    { "clause": "14", "token": "18,000", "kind": "payment" },
-    { "clause": "15", "token": "20,000", "kind": "payment" },
-    { "clause": "16", "token": "1,000", "kind": "payment" },
-    { "clause": "16", "token": "50%", "kind": "payment" },
-    { "clause": "19", "token": "52.50", "kind": "payment" },
-    { "clause": "19", "token": "57.75", "kind": "payment" },
-    { "clause": "19", "token": "63.50", "kind": "payment" },
-    { "clause": "19", "token": "70.00", "kind": "payment" },
-    { "clause": "19", "token": "150", "kind": "payment" },
-    { "clause": "19", "token": "165", "kind": "payment" },
-    { "clause": "19", "token": "10%", "kind": "payment" },
-    { "clause": "19", "token": "deposit", "kind": "payment" },
-    { "clause": "19", "token": "brokerage", "kind": "payment" },
-    { "clause": "19", "token": "20,000", "kind": "payment" },
-    { "clause": "19", "token": "cheque", "kind": "payment" },
-    { "clause": "22", "token": "50,00,000", "kind": "payment" },
-    { "clause": "22", "token": "18%", "kind": "payment" },
-    { "clause": "25", "token": "1,00,000", "kind": "payment" },
-    { "clause": "25", "token": "10%", "kind": "payment" },
-    { "clause": "33", "token": "500", "kind": "payment" },
-
-    { "clause": "2", "token": "mandar", "kind": "favour" },
-    { "clause": "7", "token": "mandar", "kind": "favour" },
-    { "clause": "17", "token": "mandar", "kind": "favour" },
-    { "clause": "23(a)", "token": "mandar", "kind": "favour" },
-    { "clause": "23(f)", "token": "mandar", "kind": "favour" },
-    { "clause": "24", "token": "mandar", "kind": "favour" },
-    { "clause": "25(a)", "token": "mandar", "kind": "favour" },
-    { "clause": "26", "token": "mandar", "kind": "favour" },
-    { "clause": "28", "token": "mandar", "kind": "favour" },
-    { "clause": "30(l)", "token": "mandar", "kind": "favour" },
-    { "clause": "30(m)", "token": "mandar", "kind": "favour" },
-    { "clause": "30(hh)", "token": "mandar", "kind": "favour" },
-    { "clause": "32", "token": "mandar", "kind": "favour" },
-    { "clause": "39", "token": "mandar", "kind": "favour" },
-    { "clause": "41", "token": "mandar", "kind": "favour" },
-    { "clause": "44", "token": "mandar", "kind": "favour" }
+    {
+      "clause": "13",
+      "token": "18,000",
+      "kind": "payment"
+    },
+    {
+      "clause": "14",
+      "token": "18,000",
+      "kind": "payment"
+    },
+    {
+      "clause": "15",
+      "token": "20,000",
+      "kind": "payment"
+    },
+    {
+      "clause": "16",
+      "token": "1,000",
+      "kind": "payment"
+    },
+    {
+      "clause": "16",
+      "token": "50%",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "52.50",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "57.75",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "63.50",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "70.00",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "150",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "165",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "10%",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "deposit",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "brokerage",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "20,000",
+      "kind": "payment"
+    },
+    {
+      "clause": "19",
+      "token": "cheque",
+      "kind": "payment"
+    },
+    {
+      "clause": "22",
+      "token": "50,00,000",
+      "kind": "payment"
+    },
+    {
+      "clause": "22",
+      "token": "18%",
+      "kind": "payment"
+    },
+    {
+      "clause": "25",
+      "token": "1,00,000",
+      "kind": "payment"
+    },
+    {
+      "clause": "25",
+      "token": "10%",
+      "kind": "payment"
+    },
+    {
+      "clause": "33",
+      "token": "500",
+      "kind": "payment"
+    },
+    {
+      "clause": "2",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "7",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "23(f)",
+      "token": "mandar",
+      "kind": "favour",
+      "contains": "extension",
+      "reason": "Narrowed to the time extension. The 7-day force majeure letter is a separate obligation."
+    },
+    {
+      "clause": "24",
+      "token": "mandar",
+      "kind": "favour",
+      "contains": "grace",
+      "reason": "Narrowed to the grace period. Obtaining the occupation certificate within it is a separate obligation."
+    },
+    {
+      "clause": "26",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "28",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "30(l)",
+      "token": "mandar",
+      "kind": "favour",
+      "contains": "debris",
+      "reason": "Narrowed to the right to keep the debris and its sale proceeds. Demolishing at its own cost is a burden, not a favour."
+    },
+    {
+      "clause": "30(m)",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "30(hh)",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "32",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "39",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "41",
+      "token": "mandar",
+      "kind": "favour"
+    },
+    {
+      "clause": "44",
+      "token": "mandar",
+      "kind": "favour"
+    }
+  ],
+  "removed": [
+    {
+      "clause": "17",
+      "token": "mandar",
+      "kind": "favour",
+      "reason": "Mixed clause: the part relied on says stamp duty and registration on the agreement, power of attorney and permanent alternate accommodation agreement shall be borne and paid by the Developers. That is an obligation on the developer, not a benefit to it. The member and transferee cost shifts are separate."
+    },
+    {
+      "clause": "23(a)",
+      "token": "mandar",
+      "kind": "favour",
+      "reason": "The developer must obtain approvals, permissions and permits within 12 months. A duty on the developer benefits the counterparty, not the developer."
+    },
+    {
+      "clause": "25(a)",
+      "token": "mandar",
+      "kind": "favour",
+      "reason": "The developer is liable to pay rent, an additional 10% and a monthly penalty for delay. A penalty on the developer is a burden, not a benefit to it."
+    }
   ]
 }

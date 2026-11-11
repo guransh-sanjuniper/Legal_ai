@@ -75,6 +75,20 @@ describe('favour recall', () => {
     expect(r.falseFavours.map((f) => f.clause)).toEqual(['40']);
   });
 
+  it('narrows an expectation to the part of a mixed clause named by contains', () => {
+    const mixed: JudgementRow[] = [
+      { clause: '30', page: 50, why: 'cost', quote: 'the developer shall demolish at its own cost', direction: 'favours_a', confidence: 'high', itemIds: [] },
+    ];
+    const broad = scoreFavours(mixed, [{ clause: '30', token: 'alpha', kind: 'favour' }], parties);
+    const narrow = scoreFavours(
+      mixed,
+      [{ clause: '30', token: 'alpha', kind: 'favour', contains: 'debris' }],
+      parties,
+    );
+    expect(broad.found).toBe(1);
+    expect(narrow.found).toBe(0);
+  });
+
   it('a sub-item expectation is not satisfied by another sub-item', () => {
     const r = scoreFavours([rows[0]], [{ clause: '2(c)', token: 'alpha', kind: 'favour' }], parties);
     expect(r.found).toBe(0);
