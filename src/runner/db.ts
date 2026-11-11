@@ -68,11 +68,26 @@ export interface EmbeddingStateRecord {
   completedAt: number | null;
 }
 
+export interface AnalysisReportRecord {
+  runId: string;
+  docId: string;
+  report: unknown;
+  savedAt: number;
+}
+
+export interface AnalysisStateRecord {
+  docId: string;
+  lastRunId: string;
+  maxTokens: number | null;
+  p95CompletionTokens: number | null;
+  updatedAt: number;
+}
+
 export interface DefinitionsRecord {
   docId: string;
   prepFingerprint: string;
   sheet: {
-    parties: string[];
+    parties: { name: string; role: 'party_to_agreement' | 'mentioned' }[];
     defined_terms: { term: string; definition: string; clause: string | null; page: number | null }[];
     key_dates: { date: string; description: string; clause: string | null; page: number | null }[];
     sources: { chunkId: string; pageStart: number; pageEnd: number }[];
@@ -110,6 +125,8 @@ export interface HarnessDB extends DBSchema {
   embedding_windows: { key: string; value: EmbeddingWindowRecord; indexes: { byDoc: string } };
   embedding_state: { key: string; value: EmbeddingStateRecord };
   definitions: { key: string; value: DefinitionsRecord };
+  analysis_reports: { key: string; value: AnalysisReportRecord; indexes: { byDoc: string } };
+  analysis_state: { key: string; value: AnalysisStateRecord };
   tasks: { key: string; value: Task; indexes: { byRun: string } };
   raw_responses: { key: string; value: RawResponse };
   ocr_decisions: { key: [string, number]; value: OcrDecision };
@@ -119,7 +136,7 @@ export interface HarnessDB extends DBSchema {
 export type HarnessDBHandle = IDBPDatabase<HarnessDB>;
 
 export function openHarnessDb(): Promise<HarnessDBHandle> {
-  return openDB<HarnessDB>('pipeline-harness', 2, {
+  return openDB<HarnessDB>('pipeline-harness', 3, {
     upgrade(db, oldVersion) {
       if (oldVersion < 1) {
         db.createObjectStore('documents', { keyPath: 'id' });
@@ -137,6 +154,11 @@ export function openHarnessDb(): Promise<HarnessDBHandle> {
         windows.createIndex('byDoc', 'docId');
         db.createObjectStore('embedding_state', { keyPath: 'docId' });
         db.createObjectStore('definitions', { keyPath: 'docId' });
+      }
+      if (oldVersion < 3) {
+        const reports = db.createObjectStore('analysis_reports', { keyPath: 'runId' });
+        reports.createIndex('byDoc', 'docId');
+        db.createObjectStore('analysis_state', { keyPath: 'docId' });
       }
     },
   });

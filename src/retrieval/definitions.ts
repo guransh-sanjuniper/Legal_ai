@@ -4,16 +4,23 @@ import { makeTask } from '../tasks/make';
 import { runTask } from '../runner/runTask';
 import { makeCallModel } from '../runner/callModel';
 import { ACTIVE_STATUSES, type ReasoningEffort, type ResultRow, type RunConfig } from '../tasks/types';
-import { isValidDefinitionItem, mergeDefinitions, type DefinitionItem, type DefinitionsSheet } from './definitionsMerge';
+import {
+  isValidDefinitionItem,
+  mergeDefinitions,
+  normalizeSheetParties,
+  type DefinitionItem,
+  type DefinitionsSheet,
+} from './definitionsMerge';
 
 export const DEFINITIONS_PROMPT_VERSION = 'definitions-v1';
 
 export const DEFINITIONS_PROMPT = [
   'You extract parties, defined terms and key dates from one excerpt of a legal contract.',
   'Return ONLY a JSON array, with no prose. Each item is one of:',
-  '{"kind":"party","name":"...","clause":"...","page":number}',
+  '{"kind":"party","name":"...","role":"party_to_agreement"|"mentioned","clause":"...","page":number}',
   '{"kind":"term","term":"...","definition":"...","clause":"...","page":number}',
   '{"kind":"date","date":"...","description":"...","clause":"...","page":number}',
+  'role is "party_to_agreement" only for the actual signatories to this agreement; use "mentioned" for everyone else.',
   'Copy names, terms and dates exactly as written. Use null when a clause or page is unknown.',
   'Return at most 30 items. Keep each definition under 200 characters.',
   'Return an empty array if the excerpt has no parties, definitions or dates.',
@@ -145,13 +152,15 @@ export async function buildDefinitionsSheet(opts: DefinitionsOptions): Promise<D
 
 export async function getDefinitions(db: HarnessDBHandle, docId: string): Promise<DefinitionsSheet | null> {
   const record = await db.get('definitions', docId);
-  return record?.sheet ?? null;
+  return record?.sheet ? normalizeSheetParties(record.sheet) : null;
 }
 
 // Compact text appended to later tasks.
 export function definitionsContext(sheet: DefinitionsSheet | null | undefined): string {
   if (!sheet) return '';
-  const parties = sheet.parties.length ? `Parties: ${sheet.parties.join('; ')}` : '';
+  // Only the actual agreement parties are attached; people merely mentioned are omitted.
+  const agreementParties = sheet.parties.filter((p) => p.role === 'party_to_agreement').map((p) => p.name);
+  const parties = agreementParties.length ? `Parties to this agreement: ${agreementParties.join('; ')}` : '';
   const terms = sheet.defined_terms
     .map((t) => `${t.term} = ${t.definition}${t.clause ? ` [clause ${t.clause}]` : ''}`)
     .join('; ');

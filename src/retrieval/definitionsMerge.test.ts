@@ -16,10 +16,27 @@ const items: DefinitionItem[] = [
 describe('definitions sheet merge', () => {
   it('deduplicates parties case-insensitively and keeps order', () => {
     const sheet = mergeDefinitions(items);
-    expect(sheet.parties).toEqual([
+    expect(sheet.parties.map((p) => p.name)).toEqual([
       'Hira Moti Nagar Co-operative Housing Society Ltd',
       'M/s Mandar Constructions & Projects LLP',
     ]);
+  });
+
+  it('keeps a role per party and upgrades mentioned to party_to_agreement', () => {
+    const sheet = mergeDefinitions([
+      { kind: 'party', name: 'Alpha Society', role: 'mentioned' },
+      { kind: 'party', name: 'alpha society', role: 'party_to_agreement' },
+      { kind: 'party', name: 'Modella Woollens', role: 'mentioned' },
+    ]);
+    expect(sheet.parties).toEqual([
+      { name: 'Alpha Society', role: 'party_to_agreement' },
+      { name: 'Modella Woollens', role: 'mentioned' },
+    ]);
+  });
+
+  it('defaults a missing role to mentioned', () => {
+    const sheet = mergeDefinitions([{ kind: 'party', name: 'Someone' }]);
+    expect(sheet.parties[0].role).toBe('mentioned');
   });
 
   it('deduplicates terms by normalised term', () => {

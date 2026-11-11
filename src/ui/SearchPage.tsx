@@ -224,7 +224,10 @@ export function SearchPage() {
       {sheet && (
         <>
           <h3>Definitions sheet</h3>
-          <div>Parties: {sheet.parties.join(' · ') || '(none)'}</div>
+          <div>
+            Parties:{' '}
+            {sheet.parties.map((p) => `${p.name} [${p.role === 'party_to_agreement' ? 'agreement' : 'mentioned'}]`).join(' · ') || '(none)'}
+          </div>
           <table border={1} cellPadding={3} style={{ marginTop: 6 }}>
             <thead>
               <tr><th>term</th><th>definition</th><th>clause</th><th>page</th></tr>

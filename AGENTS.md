@@ -44,12 +44,17 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - `/` the Prompt 1 task test page
 - `/?page=ingest` the ingestion page (upload PDF, OCR language, Start/resume, Recheck, review, chunks)
 - `/?page=search` embedding progress, hybrid document search, law stand-in search, definitions sheet
+- `/?page=analysis` clause analysis, verification, roll-up, cross-clause pass, ledger, metrics, Ask (retrieval / whole-document), custom prompt, restore, forced-failure and fallback checks
 - Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing.
 - Chunking: top-level clauses must continue the numeric sequence (`N)` primarily, `N.` legacy). `(a)`, `(i)`, `a)`, `(N)` stay inside the clause. Lettered recitals continue A..Z with one restart allowed. Table rows are never boundaries (Sr./no. headers, numbered name/amount rows, bare `N text`).
 - `checkChunks` (shown as the "Chunk check" panel) reports page gaps/overlaps, above-max chunks, bad starts, missing/repeated clauses and size-only clause splits.
 - Golden test: `tests/golden/hiramoti.test.ts` reads `HIRAMOTI_PDF` (or a known local path) and skips if the PDF is absent.
 - Embeddings: `Xenova/multilingual-e5-small` q8, version `...@q8-v1`, `passage:` for chunks, `query:` for questions, windows ≤400 tokens pointing at a parent chunk. Vectors store model + modelVersion + prepFingerprint; a mismatch re-embeds.
 - Definitions use a non-reasoning model: set `VITE_SEARCH_MODEL` (e.g. `openai/gpt-4o-mini`). Reasoning models can spend the whole output budget on reasoning and return no JSON; that now fails as `empty_output` instead of splitting.
+- Analysis uses `VITE_ANALYSIS_MODEL` (fallback `VITE_SEARCH_MODEL`, then `VITE_MODEL`), reasoning minimal. Prices per 1M tokens: `VITE_PRICE_INPUT_PER_M` / `VITE_PRICE_OUTPUT_PER_M`. Budget starts at 2600 and is replaced by ~1.5× the measured p95 completion tokens after a run.
+- Every quoted item is verified against the cited stored page (whitespace/quote/dash/hyphen normalised). Unverified items are dropped and counted, never shown. Roll-up sentences must cite a valid item ID or they are dropped.
+- The report is saved to `reports` (Supabase) and `analysis_reports` (IndexedDB); with local state cleared, the page restores it from Supabase.
+- `VITE_FALLBACK_MODEL` is used by the fallback check (three forced transient failures, then the fallback on attempt 4).
 
 ## Commands
 - `npm run dev` the SPA

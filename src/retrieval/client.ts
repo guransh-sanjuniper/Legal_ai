@@ -40,14 +40,16 @@ export class RetrievalClient {
     this.worker.onmessage = (e: MessageEvent<RetrievalEvent>) => {
       const data = e.data;
       const requestId = data.requestId as string | undefined;
-      if (requestId && this.pending.has(requestId)) {
+      const terminal = ['embed-done', 'search-results', 'law-results', 'status', 'error'];
+      if (requestId && this.pending.has(requestId) && terminal.includes(data.type)) {
         const p = this.pending.get(requestId)!;
         this.pending.delete(requestId);
         if (data.type === 'error') p.reject(new Error(String(data.message)));
         else p.resolve(data);
-      } else {
-        this.onEvent(data);
+        return;
       }
+      // Progress and model-loading events are not responses; they go to the listener.
+      this.onEvent(data);
     };
   }
 
