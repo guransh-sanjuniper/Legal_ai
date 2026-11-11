@@ -400,7 +400,13 @@ export function AnalysisPage() {
         <>
           <h3>Report</h3>
           <div>{report.docName} · run {report.runId.slice(0, 8)} · {new Date(report.createdAt).toLocaleString()}</div>
-          <div><b>{ledgerSummary(report.ledger)}</b></div>
+          <div>
+            <b>
+              {structureFree && report.coverage
+                ? `${report.coverage.analysedChunks} of ${report.coverage.totalChunks} chunks analysed, pages covered ${report.coverage.pagesCovered} of ${report.coverage.totalPages}`
+                : ledgerSummary(report.ledger)}
+            </b>
+          </div>
           {report.partial && (
             <div style={{ color: '#a60', fontWeight: 'bold' }}>
               PARTIAL —{' '}
@@ -426,8 +432,10 @@ export function AnalysisPage() {
             </div>
           )}
           <div style={{ fontSize: 12, color: '#555' }}>
-            skipped clauses: {report.resolution?.skippedClauses ?? 0} · pages corrected: {report.resolution?.pageCorrected ?? 0} ·
-            dropped items: {report.resolution?.dropped ?? report.drops.length} · pages checked: {report.ledger.totals.citedPages.length}
+            {structureFree ? 'failed chunks' : 'skipped clauses'}:{' '}
+            {structureFree ? (report.coverage?.failedChunks?.length ?? 0) : report.resolution?.skippedClauses ?? 0} · pages corrected:{' '}
+            {report.resolution?.pageCorrected ?? 0} · dropped items: {report.resolution?.dropped ?? report.drops.length} · pages checked:{' '}
+            {report.ledger.totals.citedPages.length}
           </div>
           <ul>
             {report.overview.map((s, i) => (
