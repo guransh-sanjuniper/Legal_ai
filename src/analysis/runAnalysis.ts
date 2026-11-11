@@ -1,9 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { HarnessDBHandle, ChunkRecord, DocumentRecord, PageRecord } from '../runner/db';
+import type { HarnessDBHandle, DocumentRecord } from '../runner/db';
 import { getDefinitions, definitionsContext } from '../retrieval/definitions';
 import { LAW_STANDIN_VERSION } from '../retrieval/config';
-import { buildUnits } from '../ingest/chunk';
+import { buildAnchorIndex, topClause, type AnchorIndex } from './anchors';
+import { buildAnalysisChunks, type AnalysisChunk } from './analysisChunks';
 import { verifyQuotedItems } from './verify';
+import { extractAmounts, uncapturedAmounts } from './amounts';
 import { groupForRollup, keepCitedSentences, overviewTargetSentenceCount } from './rollup';
 import { buildLedger, type LedgerChunkInput } from './ledger';
 import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
@@ -98,21 +100,49 @@ interface RawRisk {
 
 export async function loadPageMap(db: HarnessDBHandle, docId: string): Promise<Map<number, string>> {
   const pages = await db.getAll('pages', IDBKeyRange.bound([docId, 0], [docId, Number.MAX_SAFE_INTEGER]));
-  return new Map((pages as PageRecord[]).map((p) => [p.pageNo, p.text]));
+  return new Map(pages.map((p) => [p.pageNo, p.text]));
 }
 
-function chunkInput(chunk: ChunkRecord, pages: Map<number, string>, defsContext: string): string {
+export function pageInput(pages: Map<number, string>, start: number, end: number): string {
   const parts: string[] = [];
-  for (let p = chunk.pageStart; p <= chunk.pageEnd; p++) {
+  for (let p = start; p <= end; p++) {
     const text = pages.get(p);
-    if (text !== undefined) parts.push(`[page ${p}]\n${text}`);
+    if (text !== undefined) parts.push(`[[p${p}]]\n${text}`);
   }
-  return [defsContext, parts.join('\n')].filter(Boolean).join('\n\n');
+  return parts.join('\n');
 }
 
-function detectedClauses(chunk: ChunkRecord): string[] {
-  const units = buildUnits([{ pageNo: chunk.pageStart, text: chunk.text }]);
-  return [...new Set(units.map((u) => u.clauseNo).filter((c): c is string => c !== null))];
+function clauseInput(chunk: AnalysisChunk, pages: Map<number, string>, defsContext: string, clauses: string[]): string {
+  return [
+    defsContext,
+    `CLAUSE NUMBERS IN THIS EXCERPT: ${clauses.join(', ')}`,
+    pageInput(pages, chunk.pageStart, chunk.pageEnd),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function subsetInput(
+  chunk: AnalysisChunk,
+  missing: string[],
+  index: AnchorIndex,
+  defsContext: string,
+): string {
+  const segments = index.segments.filter(
+    (s) => s.page >= chunk.pageStart && s.page <= chunk.pageEnd && missing.includes(topClause(s.clause)),
+  );
+  if (segments.length === 0) return '';
+  const byPage = new Map<number, string[]>();
+  for (const s of segments) {
+    const list = byPage.get(s.page) ?? [];
+    list.push(s.text);
+    byPage.set(s.page, list);
+  }
+  const text = [...byPage.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([p, parts]) => `[[p${p}]]\n${parts.join('\n')}`)
+    .join('\n');
+  return `${defsContext}\n\nCLAUSE NUMBERS IN THIS EXCERPT: ${missing.join(', ')}\n\n${text}`;
 }
 
 export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport> {
@@ -122,15 +152,16 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
 
   const doc: DocumentRecord | undefined = await db.get('documents', docId);
   if (!doc || doc.status !== 'ready' || !doc.prepFingerprint) throw new Error('document is not ready');
-  const chunks = (await db.getAll('chunks', IDBKeyRange.bound(`${docId}:`, `${docId}:\uffff`))).sort((a, b) => a.index - b.index);
   const pages = await loadPageMap(db, docId);
+  const index = buildAnchorIndex(pages);
+  const chunks = buildAnalysisChunks(pages);
   const sheet = await getDefinitions(db, docId);
   if (!sheet) throw new Error('build the definitions sheet on the Search page first');
   const defsContext = definitionsContext(sheet);
 
   const state = await db.get('analysis_state', docId);
   const budget = opts.maxTokens ?? state?.maxTokens ?? INITIAL_MAX_TOKENS;
-  progress(`analysis budget: ${budget} max_tokens per task`);
+  progress(`analysis budget: ${budget} max_tokens · ${chunks.length} analysis chunks`);
 
   const ctx: ExecuteContext = {
     db,
@@ -148,53 +179,101 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
 
   const runId = await createRun(ctx, doc);
 
-  // 1. Clause analysis, one task per chunk, definitions sheet attached.
-  const plans: TaskPlan[] = chunks.map((chunk, i) => ({
-    suffix: `a${i}`,
-    promptVersion: 'clause-analysis-v1',
+  // 1. Clause analysis, one task per analysis chunk, every clause number requested.
+  const plans: TaskPlan[] = chunks.map((chunk) => ({
+    suffix: `a${chunk.index}`,
+    promptVersion: 'clause-analysis-v2',
     prompt: CLAUSE_PROMPT,
-    input: chunkInput(chunk, pages, defsContext),
+    input: clauseInput(chunk, pages, defsContext, chunk.manifest),
     maxTokens: budget,
     validate: isValidClauseItem,
   }));
   progress(`analysing ${plans.length} chunks`);
-  const clauseRun = await executeTasks(ctx, runId, doc, plans);
+  const first = await executeTasks(ctx, runId, doc, plans);
 
-  const clausesByChunk = new Map<number, unknown[]>();
-  for (const c of clauseRun.collected) {
-    const suffix = c.taskId.slice(c.taskId.lastIndexOf(':') + 1).split('/')[0];
-    const index = Number(suffix.replace(/^a/, ''));
-    if (!Number.isFinite(index)) continue;
-    const list = clausesByChunk.get(index) ?? [];
-    list.push(...c.items);
-    clausesByChunk.set(index, list);
+  const rawByChunk = new Map<number, unknown[]>();
+  const collect = (collected: { taskId: string; items: unknown[] }[], prefix: string) => {
+    for (const c of collected) {
+      const suffix = c.taskId.slice(c.taskId.lastIndexOf(':') + 1).split('/')[0];
+      if (!suffix.startsWith(prefix)) continue;
+      const idx = Number(suffix.slice(prefix.length));
+      if (!Number.isFinite(idx)) continue;
+      const list = rawByChunk.get(idx) ?? [];
+      list.push(...c.items);
+      rawByChunk.set(idx, list);
+    }
+  };
+  collect(first.collected, 'a');
+
+  // 2. Clauses with no entry are retried once with a smaller, clause-only input.
+  const missingByChunk = new Map<number, string[]>();
+  for (const chunk of chunks) {
+    const received = new Set(
+      (rawByChunk.get(chunk.index) ?? [])
+        .filter(isValidClauseItem)
+        .map((x) => topClause(String((x as Record<string, unknown>).clause_no ?? ''))),
+    );
+    const missing = chunk.manifest.filter((c) => !received.has(topClause(c)));
+    if (missing.length) missingByChunk.set(chunk.index, missing);
   }
 
-  // 2. Verification (code) + 3. law lookup for risks.
+  if (missingByChunk.size > 0) {
+    const retryPlans: TaskPlan[] = [];
+    for (const [indexNo, missing] of missingByChunk) {
+      const chunk = chunks.find((c) => c.index === indexNo)!;
+      const input = subsetInput(chunk, missing, index, defsContext) || clauseInput(chunk, pages, defsContext, missing);
+      retryPlans.push({
+        suffix: `r${indexNo}`,
+        promptVersion: 'clause-analysis-v2',
+        prompt: CLAUSE_PROMPT,
+        input,
+        maxTokens: Math.min(budget, 1200),
+        validate: isValidClauseItem,
+      });
+    }
+    progress(`retrying ${retryPlans.length} chunks with skipped clauses`);
+    const retry = await executeTasks(ctx, runId, doc, retryPlans);
+    collect(retry.collected, 'r');
+  }
+
+  // 3. Verification (code) + law lookup for risks. Page and clause come from the resolver.
   const lawCache = new Map<string, LawPassageRef[]>();
   const verifiedClauses: VerifiedClause[] = [];
   const drops: DropRecord[] = [];
   let lawCalls = 0;
+  let pageCorrected = 0;
 
   for (const chunk of chunks) {
-    const rawItems = clausesByChunk.get(chunk.index) ?? [];
+    const rawItems = rawByChunk.get(chunk.index) ?? [];
+    const seenClauses = new Set<string>();
     let emitted = 0;
+
     for (const raw of rawItems) {
       if (!isValidClauseItem(raw)) continue;
       const item = raw as Record<string, unknown>;
-      const clauseNo = str(item.clause_no).trim() || `#${++emitted}`;
-      const base = `C${chunk.index}:${clauseNo}`;
+      const rawClause = str(item.clause_no).trim() || `#${++emitted}`;
+      const rawTop = topClause(rawClause);
+      if (chunk.manifest.length > 0 && !chunk.manifest.some((m) => topClause(m) === rawTop)) continue;
+      if (seenClauses.has(rawTop)) continue;
+      seenClauses.add(rawTop);
 
-      const obligations = verifyQuotedItems<RawObligation>('obligation', arrOf<RawObligation>(item.obligations), pages);
-      const dates = verifyQuotedItems<RawDate>('date', arrOf<RawDate>(item.dates), pages);
-      const payments = verifyQuotedItems<RawPayment>('payment', arrOf<RawPayment>(item.payments), pages);
-      const risks = verifyQuotedItems<RawRisk>('risk', arrOf<RawRisk>(item.risks), pages);
+      const range = { start: chunk.pageStart, end: chunk.pageEnd };
+      const obligations = verifyQuotedItems<RawObligation>('obligation', arrOf<RawObligation>(item.obligations), index, range);
+      const dates = verifyQuotedItems<RawDate>('date', arrOf<RawDate>(item.dates), index, range);
+      const payments = verifyQuotedItems<RawPayment>('payment', arrOf<RawPayment>(item.payments), index, range);
+      const risks = verifyQuotedItems<RawRisk>('risk', arrOf<RawRisk>(item.risks), index, range);
+      pageCorrected += obligations.corrected + dates.corrected + payments.corrected + risks.corrected;
       for (const r of [...obligations.drops, ...dates.drops, ...payments.drops, ...risks.drops]) {
-        drops.push({ clauseNo, kind: r.kind, reason: r.reason, page: r.page, quote: r.quote });
+        drops.push({ clauseNo: rawClause, kind: r.kind, reason: r.reason, page: r.page, quote: r.quote });
       }
+
+      const allVerified = [...obligations.verified, ...dates.verified, ...payments.verified, ...risks.verified];
+      const codeClause = allVerified.length ? topClause(allVerified[0].item.clause) : rawTop;
+      const base = `C${chunk.index}:${codeClause || rawClause}`;
 
       const vObligations: VerifiedObligation[] = obligations.verified.map((v, i) => ({
         itemId: `${base}:ob${i}`,
+        clause: v.item.clause,
         party: str(v.item.party),
         text: str(v.item.text),
         page: v.item.page,
@@ -203,6 +282,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       }));
       const vDates: VerifiedDate[] = dates.verified.map((v, i) => ({
         itemId: `${base}:d${i}`,
+        clause: v.item.clause,
         text: str(v.item.text),
         timing_type: ['fixed', 'event_relative', 'none'].includes(str(v.item.timing_type))
           ? (v.item.timing_type as VerifiedDate['timing_type'])
@@ -213,6 +293,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       }));
       const vPayments: VerifiedPayment[] = payments.verified.map((v, i) => ({
         itemId: `${base}:p${i}`,
+        clause: v.item.clause,
         amount: str(v.item.amount),
         payer: str(v.item.payer),
         payee: str(v.item.payee),
@@ -227,21 +308,15 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         const v = risks.verified[i];
         const riskText = str(v.item.text);
         let passages: LawPassageRef[] = [];
-        if (lawCalls < 40) {
-          const key = `${clauseNo}|${riskText}`;
+        if (lawCalls < 45) {
+          const key = `${codeClause}|${riskText}`;
           if (lawCache.has(key)) passages = lawCache.get(key)!;
           else {
             try {
               const hits = await opts.lawSearch(`${str(item.summary)} ${riskText}`, 3);
-              passages = hits.map((h) => ({
-                id: h.id,
-                title: h.title,
-                text: h.text,
-                fused: h.fused,
-                lawVersion: h.lawVersion,
-              }));
+              passages = hits.map((h) => ({ id: h.id, title: h.title, text: h.text, fused: h.fused, lawVersion: h.lawVersion }));
             } catch (e) {
-              log(`law search failed for clause ${clauseNo}: ${String(e)}`);
+              log(`law search failed for clause ${codeClause}: ${String(e)}`);
             }
             lawCalls++;
             lawCache.set(key, passages);
@@ -249,6 +324,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         }
         vRisks.push({
           itemId: `${base}:r${i}`,
+          clause: v.item.clause,
           text: riskText,
           severity: ['high', 'medium', 'low'].includes(str(v.item.severity))
             ? (v.item.severity as VerifiedRisk['severity'])
@@ -261,13 +337,12 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         });
       }
 
-      const verifiedItems = vObligations.length + vDates.length + vPayments.length + vRisks.length;
       verifiedClauses.push({
         itemId: base,
-        clauseNo,
+        clauseNo: codeClause || rawClause,
         type: str(item.type) || 'other',
         summary: str(item.summary),
-        chunkId: chunk.id,
+        chunkId: `analysis:${chunk.index}`,
         chunkIndex: chunk.index,
         pageStart: chunk.pageStart,
         pageEnd: chunk.pageEnd,
@@ -275,13 +350,13 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         dates: vDates,
         payments: vPayments,
         risks: vRisks,
-        verifiedItems,
+        verifiedItems: vObligations.length + vDates.length + vPayments.length + vRisks.length,
       });
     }
   }
-  progress(`verified ${verifiedClauses.length} clauses, dropped ${drops.length} unverified items`);
+  progress(`verified ${verifiedClauses.length} clauses, dropped ${drops.length} unverified items, corrected ${pageCorrected} pages`);
 
-  // 4. Roll-up as dependent tasks: section summaries, then the overview.
+  // 4. Roll-up as dependent tasks.
   const rollupItems = verifiedClauses.map((c) => ({
     id: c.itemId,
     clause: c.clauseNo,
@@ -309,13 +384,12 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     const sectionRun = await executeTasks(ctx, runId, doc, sectionPlans);
     for (const c of sectionRun.collected) {
       const suffix = c.taskId.slice(c.taskId.lastIndexOf(':') + 1).split('/')[0];
-      const index = Number(suffix.replace(/^s/, ''));
-      if (!Number.isFinite(index) || !sections[index]) continue;
-      const valid = new Set(sections[index].itemIds);
+      const idx = Number(suffix.replace(/^s/, ''));
+      if (!Number.isFinite(idx) || !sections[idx]) continue;
+      const valid = new Set(sections[idx].itemIds);
       const kept = keepCitedSentences(c.items as never[], valid);
-      sections[index].sentences.push(...kept.kept);
-      sections[index].dropped += kept.dropped;
-      // Uncited or invalid-ID sentences are dropped, never shown.
+      sections[idx].sentences.push(...kept.kept);
+      sections[idx].dropped += kept.dropped;
     }
   }
 
@@ -335,17 +409,12 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       validate: (x) => typeof x === 'object' && x !== null,
     };
     const ovRun = await executeTasks(ctx, runId, doc, [overviewPlan]);
-    // An overview sentence may cite a section id, or a clause item id that a kept section
-    // sentence already cited. Both are valid.
     const valid = new Set(sectionSentences.map((s) => s.id));
     for (const s of sectionSentences) for (const cite of s.cites) valid.add(cite);
-    for (const c of ovRun.collected) {
-      const kept = keepCitedSentences(c.items as never[], valid);
-      overview.push(...kept.kept);
-    }
+    for (const c of ovRun.collected) overview.push(...keepCitedSentences(c.items as never[], valid).kept);
   }
 
-  // 5. Cross-clause pass on structured data; no "missing" without a document search.
+  // 5. Cross-clause pass + whole-document search before any "missing" claim.
   const structure = verifiedClauses.map((c) => ({
     clause: c.clauseNo,
     itemId: c.itemId,
@@ -364,7 +433,6 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       if (!Array.isArray(hits)) throw new Error('document search returned no result list');
       found = hits.some((h) => h.fused > 0);
     } catch (e) {
-      // If the search itself failed we cannot claim the topic is missing.
       checked = false;
       log(`document search failed for "${candidate.label}": ${String(e)}`);
     }
@@ -394,27 +462,35 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     ),
   };
 
-  // 6. Coverage ledger.
+  // 6. Coverage ledger, including skipped clauses.
   const ledgerInput: LedgerChunkInput[] = chunks.map((chunk) => {
     const prefix = `${runId}:a${chunk.index}`;
-    const processed = clauseRun.tasks.some((t) => (t.id === prefix || t.id.startsWith(`${prefix}/`)) && t.status === 'done');
-    const analysed = (clausesByChunk.get(chunk.index) ?? []).filter(isValidClauseItem).map((c) => str((c as Record<string, unknown>).clause_no));
-    const verified = verifiedClauses.filter((c) => c.chunkIndex === chunk.index && c.verifiedItems > 0).map((c) => c.clauseNo);
-    const itemsAnalysed = (clausesByChunk.get(chunk.index) ?? [])
+    const processed = first.tasks.some((t) => (t.id === prefix || t.id.startsWith(`${prefix}/`)) && t.status === 'done');
+    const analysed = (rawByChunk.get(chunk.index) ?? [])
+      .filter(isValidClauseItem)
+      .map((c) => topClause(String((c as Record<string, unknown>).clause_no ?? '')))
+      .filter((c) => chunk.manifest.some((m) => topClause(m) === c));
+    const verified = verifiedClauses
+      .filter((c) => c.chunkIndex === chunk.index && c.verifiedItems > 0)
+      .map((c) => topClause(c.clauseNo));
+    const analysedSet = new Set(analysed);
+    const skipped = chunk.manifest.map((m) => topClause(m)).filter((m) => !analysedSet.has(m));
+    const itemsAnalysed = (rawByChunk.get(chunk.index) ?? [])
       .filter(isValidClauseItem)
       .reduce<number>((n, c) => {
         const o = c as Record<string, unknown>;
         return n + ['obligations', 'dates', 'payments', 'risks'].reduce<number>((m, k) => m + arrOf(o[k]).length, 0);
       }, 0);
     return {
-      chunkId: chunk.id,
+      chunkId: `analysis:${chunk.index}`,
       index: chunk.index,
       pageStart: chunk.pageStart,
       pageEnd: chunk.pageEnd,
       processed,
-      detectedClauses: detectedClauses(chunk),
-      analysedClauses: analysed,
-      verifiedClauses: verified,
+      detectedClauses: [...new Set(chunk.manifest.map((m) => topClause(m)))],
+      analysedClauses: [...new Set(analysed)],
+      verifiedClauses: [...new Set(verified)],
+      skippedClauses: [...new Set(skipped)],
       itemsAnalysed,
       itemsVerified: verifiedClauses.filter((c) => c.chunkIndex === chunk.index).reduce((n, c) => n + c.verifiedItems, 0),
     };
@@ -424,7 +500,13 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     [...c.obligations, ...c.dates, ...c.payments, ...c.risks].map((i) => i.page),
   ))].sort((a, b) => a - b);
 
-  // 10. Metrics over every task in this run (clause, section and overview tasks).
+  // 7. Deterministic amount extraction and coverage.
+  const codeAmounts = extractAmounts(index);
+  const uncaptured = uncapturedAmounts(
+    codeAmounts,
+    verifiedClauses.flatMap((c) => c.payments.map((p) => ({ clause: c.clauseNo, amount: p.amount, quote: p.quote }))),
+  );
+
   const metrics = await computeMetrics(db, await db.getAllFromIndex('tasks', 'byRun', runId));
 
   const report: AnalysisReport = {
@@ -447,6 +529,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     ledger,
     metrics,
     drops,
+    amounts: { code: codeAmounts, uncaptured },
+    resolution: { pageCorrected, dropped: drops.length, skippedClauses: ledger.totals.clausesSkipped },
     notices: [
       'AI-assisted, requires lawyer review.',
       'Law passages are PLACEHOLDER test data; every law-based risk is applicability unverified.',
@@ -469,10 +553,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   return report;
 }
 
-export async function restoreReportFromSupabase(
-  supabase: SupabaseClient,
-  docId: string,
-): Promise<AnalysisReport | null> {
+export async function restoreReportFromSupabase(supabase: SupabaseClient, docId: string): Promise<AnalysisReport | null> {
   const { data, error } = await supabase
     .from('reports')
     .select('body,created_at')

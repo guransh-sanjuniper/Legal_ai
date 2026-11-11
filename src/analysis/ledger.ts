@@ -7,6 +7,7 @@ export interface LedgerChunkInput {
   detectedClauses: string[];
   analysedClauses: string[];
   verifiedClauses: string[];
+  skippedClauses?: string[];
   itemsAnalysed: number;
   itemsVerified: number;
 }
@@ -25,6 +26,7 @@ export interface LedgerChunk {
   detected: number;
   analysed: number;
   verified: number;
+  skipped: string[];
   clauses: LedgerClause[];
   itemsAnalysed: number;
   itemsVerified: number;
@@ -38,6 +40,7 @@ export interface Ledger {
     clausesDetected: number;
     clausesAnalysed: number;
     clausesVerified: number;
+    clausesSkipped: number;
     itemsAnalysed: number;
     itemsVerified: number;
     citedPages: number[];
@@ -59,6 +62,7 @@ export function buildLedger(entries: LedgerChunkInput[]): Ledger {
       detected: detected.length,
       analysed: [...analysed].filter((c) => detected.includes(c)).length,
       verified: [...verified].filter((c) => detected.includes(c)).length,
+      skipped: (e.skippedClauses ?? []).filter((c) => detected.includes(c) && !analysed.has(c)),
       clauses: detected.map((clause) => ({
         clause,
         analysed: analysed.has(clause),
@@ -75,6 +79,7 @@ export function buildLedger(entries: LedgerChunkInput[]): Ledger {
     clausesDetected: chunks.reduce((n, c) => n + c.detected, 0),
     clausesAnalysed: chunks.reduce((n, c) => n + c.analysed, 0),
     clausesVerified: chunks.reduce((n, c) => n + c.verified, 0),
+    clausesSkipped: chunks.reduce((n, c) => n + c.skipped.length, 0),
     itemsAnalysed: chunks.reduce((n, c) => n + c.itemsAnalysed, 0),
     itemsVerified: chunks.reduce((n, c) => n + c.itemsVerified, 0),
     citedPages: [] as number[],

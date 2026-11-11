@@ -3,13 +3,17 @@ import { createClient, type Session } from '@supabase/supabase-js';
 import { openHarnessDb, type HarnessDBHandle, type AnalysisReportRecord, type DocumentRecord } from '../runner/db';
 import type { Task } from '../tasks/types';
 import { RetrievalClient, type SearchResult } from '../retrieval/client';
+import { getDefinitions } from '../retrieval/definitions';
 import { runAnalysis, restoreReportFromSupabase } from '../analysis/runAnalysis';
-import { runCustomPrompt, type CustomResult } from '../analysis/custom';
-import { askRetrieval, NOT_FOUND_ANSWER, type AskResult, type RetrievedChunk } from '../analysis/ask';
+import { runJudgement, looksLikeDeveloperObligation, type JudgementResult } from '../analysis/judgement';
+import { askRetrieval, type AskResult, type RetrievedChunk } from '../analysis/ask';
 import { runFallbackCheck, runForcedFailure, type FallbackCheckResult } from '../analysis/fallbackCheck';
 import { ANALYSIS_MODEL, FALLBACK_MODEL } from '../analysis/config';
 import type { AnalysisReport } from '../analysis/types';
 import { ledgerSummary } from '../analysis/ledger';
+import { scorePayments, scoreDeveloperFavour } from '../analysis/goldenScore';
+import paymentsGolden from '../../tests/golden/hiramoti_payments.json';
+import developerGolden from '../../tests/golden/hiramoti_developer_favour.json';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -18,6 +22,7 @@ const TEST_PASSWORD = import.meta.env.VITE_TEST_PASSWORD as string | undefined;
 
 const sb = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
 const money = (n: number) => `$${n.toFixed(4)}`;
+const pct = (n: number) => `${(n * 100).toFixed(0)}%`;
 
 export function AnalysisPage() {
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
@@ -30,16 +35,15 @@ export function AnalysisPage() {
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [failedTasks, setFailedTasks] = useState<Task[]>([]);
-  const [askMode, setAskMode] = useState<'retrieval' | 'whole'>('retrieval');
-  const [askQuery, setAskQuery] = useState('list all payment dates');
+  const [askMode, setAskMode] = useState<'retrieval' | 'whole'>('whole');
+  const [askQuery, setAskQuery] = useState('Which clauses favour the Developer?');
   const [ask, setAsk] = useState<AskResult | null>(null);
-  const [customPrompt, setCustomPrompt] = useState('List every obligation of the developer with its clause.');
-  const [custom, setCustom] = useState<CustomResult | null>(null);
+  const [judgement, setJudgement] = useState<JudgementResult | null>(null);
   const [fb, setFb] = useState<FallbackCheckResult | null>(null);
   const [forced, setForced] = useState<{ pass: boolean; detail: string } | null>(null);
   const clientRef = useRef<RetrievalClient | null>(null);
 
-  const addLog = (line: string) => setLog((l) => [...l.slice(-200), `${new Date().toLocaleTimeString()} ${line}`]);
+  const addLog = (line: string) => setLog((l) => [...l.slice(-300), `${new Date().toLocaleTimeString()} ${line}`]);
 
   useEffect(() => {
     openHarnessDb().then(async (handle) => {
@@ -88,8 +92,7 @@ export function AnalysisPage() {
 
   async function loadFailed(runId: string) {
     if (!db) return;
-    const tasks = await db.getAllFromIndex('tasks', 'byRun', runId);
-    setFailedTasks(tasks.filter((t) => t.status === 'failed'));
+    setFailedTasks((await db.getAllFromIndex('tasks', 'byRun', runId)).filter((t) => t.status === 'failed'));
   }
 
   function searchAdapter(): ((q: string, k: number) => Promise<RetrievedChunk[]>) | null {
@@ -127,7 +130,11 @@ export function AnalysisPage() {
         fallbackModel: FALLBACK_MODEL,
         reasoning: { effort: 'minimal' },
         lawSearch: async (text, k) => clientRef.current!.lawSearch(text, k).then((x) => x.results),
-        docSearch: async (q, k) => (await clientRef.current!.search(docId, q, k)).results,
+        docSearch: async (q, k) => {
+          const r = await clientRef.current!.search(docId, q, k);
+          if (!r || !Array.isArray(r.results)) throw new Error('search returned no result list');
+          return r.results;
+        },
         onProgress: (m) => setProgress(m),
         onLog: addLog,
       });
@@ -143,28 +150,31 @@ export function AnalysisPage() {
     }
   }
 
-  async function runAsk() {
+  async function runAskOrJudge() {
     if (!db || !docId || !session || !clientRef.current) return;
     setBusy(true);
     try {
       if (askMode === 'retrieval') {
-        const r = await askRetrieval({
-          db,
-          supabase: sb,
-          accessToken: session.access_token,
-          userId: session.user.id,
-          functionsUrl: `${SUPABASE_URL}/functions/v1`,
-          anonKey: ANON_KEY,
-          docId,
-          query: askQuery,
-          model: ANALYSIS_MODEL,
-          fallbackModel: FALLBACK_MODEL,
-          search: searchAdapter()!,
-          onLog: addLog,
-        });
-        setAsk(r);
+        setAsk(
+          await askRetrieval({
+            db,
+            supabase: sb,
+            accessToken: session.access_token,
+            userId: session.user.id,
+            functionsUrl: `${SUPABASE_URL}/functions/v1`,
+            anonKey: ANON_KEY,
+            docId,
+            query: askQuery,
+            model: ANALYSIS_MODEL,
+            fallbackModel: FALLBACK_MODEL,
+            search: searchAdapter()!,
+            onLog: addLog,
+          }),
+        );
+        setJudgement(null);
       } else {
-        const c = await runCustomPrompt({
+        const sheet = await getDefinitions(db, docId);
+        const j = await runJudgement({
           db,
           supabase: sb,
           accessToken: session.access_token,
@@ -172,51 +182,18 @@ export function AnalysisPage() {
           functionsUrl: `${SUPABASE_URL}/functions/v1`,
           anonKey: ANON_KEY,
           docId,
-          prompt: askQuery,
+          question: askQuery,
+          sheet,
           model: ANALYSIS_MODEL,
           fallbackModel: FALLBACK_MODEL,
           onLog: addLog,
         });
-        setCustom(c);
-        setAsk({
-          mode: 'retrieval',
-          query: askQuery,
-          answer: c.items.map((i) => i.text).join(' ') || NOT_FOUND_ANSWER,
-          citations: c.items.map((i) => ({ text: i.text, page: i.page, quote: i.quote, clause_no: i.clause_no })),
-          chunks: [],
-          notFound: c.items.length === 0,
-          runId: c.runId,
-          metrics: c.metrics,
-        });
+        setJudgement(j);
+        setAsk(null);
+        addLog(`judgement: ${j.summary}`);
       }
     } catch (e) {
       addLog(`ask failed: ${String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function runCustom() {
-    if (!db || !docId || !session) return;
-    setBusy(true);
-    try {
-      setCustom(
-        await runCustomPrompt({
-          db,
-          supabase: sb,
-          accessToken: session.access_token,
-          userId: session.user.id,
-          functionsUrl: `${SUPABASE_URL}/functions/v1`,
-          anonKey: ANON_KEY,
-          docId,
-          prompt: customPrompt,
-          model: ANALYSIS_MODEL,
-          fallbackModel: FALLBACK_MODEL,
-          onLog: addLog,
-        }),
-      );
-    } catch (e) {
-      addLog(`custom job failed: ${String(e)}`);
     } finally {
       setBusy(false);
     }
@@ -232,7 +209,7 @@ export function AnalysisPage() {
     setReport(null);
     setSource(null);
     setAsk(null);
-    setCustom(null);
+    setJudgement(null);
     addLog('cleared local analysis state; use Restore to load from Supabase');
   }
 
@@ -244,9 +221,7 @@ export function AnalysisPage() {
       setSource('supabase');
       addLog('restored report from Supabase');
       await loadFailed(remote.runId);
-    } else {
-      addLog('no report found in Supabase for this document');
-    }
+    } else addLog('no report found in Supabase for this document');
   }
 
   async function checkFallback() {
@@ -283,12 +258,16 @@ export function AnalysisPage() {
     }
   }
 
-  const paymentRows = report
-    ? report.clauses.flatMap((c) => c.payments.map((p) => ({ ...p, clause: c.clauseNo })))
+  const paymentScore = report ? scorePayments(report, paymentsGolden.expected as never) : null;
+  const developerFavours = judgement
+    ? [...judgement.rows, ...judgement.others].filter((r) => r.direction === 'favours_developer')
     : [];
+  const isDeveloperQuestion = /developer|promoter|builder/i.test(askQuery);
+  const favourScore = judgement && isDeveloperQuestion ? scoreDeveloperFavour(judgement.rows, developerGolden.expected) : null;
+  const paymentRows = report ? report.clauses.flatMap((c) => c.payments.map((p) => ({ ...p, clause: c.clauseNo }))) : [];
 
   return (
-    <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1180 }}>
+    <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1240 }}>
       <h2>Analysis</h2>
       <div>
         Document:{' '}
@@ -312,7 +291,8 @@ export function AnalysisPage() {
           <div>{report.docName} · run {report.runId.slice(0, 8)} · {new Date(report.createdAt).toLocaleString()}</div>
           <div><b>{ledgerSummary(report.ledger)}</b></div>
           <div style={{ fontSize: 12, color: '#555' }}>
-            pages checked: {report.ledger.totals.citedPages.length} · dropped unverified items: {report.drops.length}
+            skipped clauses: {report.resolution?.skippedClauses ?? 0} · pages corrected: {report.resolution?.pageCorrected ?? 0} ·
+            dropped items: {report.resolution?.dropped ?? report.drops.length} · pages checked: {report.ledger.totals.citedPages.length}
           </div>
           <ul>
             {report.overview.map((s, i) => (
@@ -334,19 +314,30 @@ export function AnalysisPage() {
             </tbody>
           </table>
 
+          {paymentScore && (
+            <>
+              <h4>Payment recall (golden)</h4>
+              <div>
+                model-only <b>{paymentScore.modelFound}/{paymentScore.expected} ({pct(paymentScore.modelRecall)})</b> ·
+                model + code <b>{paymentScore.combinedFound}/{paymentScore.expected} ({pct(paymentScore.combinedRecall)})</b>
+              </div>
+              {paymentScore.combinedMisses.length > 0 && (
+                <div style={{ fontSize: 12 }}>
+                  still missing: {paymentScore.combinedMisses.map((m) => `${m.clause} ${m.label}`).join('; ')}
+                </div>
+              )}
+            </>
+          )}
+
           <h4>Coverage ledger</h4>
-          <div>
-            {report.ledger.totals.clausesAnalysed} of {report.ledger.totals.clausesDetected} clauses analysed ·{' '}
-            {report.ledger.totals.clausesVerified} verified · {report.ledger.totals.chunksProcessed}/{report.ledger.totals.chunks} chunks processed
-          </div>
           <table border={1} cellPadding={3}>
-            <thead><tr><th>chunk</th><th>pages</th><th>processed</th><th>detected</th><th>analysed</th><th>verified</th><th>items</th></tr></thead>
+            <thead><tr><th>chunk</th><th>pages</th><th>processed</th><th>detected</th><th>analysed</th><th>verified</th><th>skipped</th><th>items</th></tr></thead>
             <tbody>
               {report.ledger.chunks.map((c) => (
                 <tr key={c.chunkId}>
                   <td>{c.index}</td><td>{c.pages[0]}-{c.pages[1]}</td><td>{c.processed ? 'yes' : 'no'}</td>
                   <td>{c.detected}</td><td>{c.analysed}</td><td>{c.verified}</td>
-                  <td>{c.itemsVerified}/{c.itemsAnalysed}</td>
+                  <td>{(c.skipped ?? []).join(', ')}</td><td>{c.itemsVerified}/{c.itemsAnalysed}</td>
                 </tr>
               ))}
             </tbody>
@@ -361,27 +352,21 @@ export function AnalysisPage() {
               ))}
             </tbody>
           </table>
-          {report.crossClause.payments.length > 0 && (
-            <>
-              <h4>Payment totals</h4>
-              <table border={1} cellPadding={3}>
-                <thead><tr><th>payer</th><th>payee</th><th>count</th><th>amounts</th><th>numeric total</th></tr></thead>
-                <tbody>
-                  {report.crossClause.payments.map((p, i) => (
-                    <tr key={i}><td>{p.payer}</td><td>{p.payee}</td><td>{p.count}</td><td>{p.amounts.join(' / ')}</td><td>{p.numericTotal ?? 'not summable'}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
 
-          <h4>Cross-clause findings ({report.crossClause.findings.length})</h4>
-          <ul>
-            {report.crossClause.findings.map((f, i) => (
-              <li key={i}><b>{f.kind}</b> ({f.severity}): {f.text} <span style={{ color: '#888', fontSize: 11 }}>[{f.itemIds.join(', ')}]</span></li>
-            ))}
-            {report.crossClause.findings.length === 0 && <li>(none)</li>}
-          </ul>
+          <h4>Code-extracted amounts (unclassified) — {(report.amounts?.code ?? []).length}</h4>
+          <div style={{ fontSize: 12, color: '#666' }}>Found by code; not model payments. Shown separately and never merged into the verified payments.</div>
+          <table border={1} cellPadding={3} style={{ marginTop: 6 }}>
+            <thead><tr><th>clause</th><th>kind</th><th>text</th><th>page</th></tr></thead>
+            <tbody>
+              {(report.amounts?.code ?? []).slice(0, 60).map((a, i) => (
+                <tr key={i}><td>{a.clause}</td><td>{a.kind}</td><td>{a.text}</td><td>{a.page}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 6 }}>
+            <b>Uncaptured amounts ({(report.amounts?.uncaptured ?? []).length}):</b>{' '}
+            {(report.amounts?.uncaptured ?? []).map((a) => `${a.clause}:${a.text}`).join(' · ') || '(none)'}
+          </div>
 
           <h4>Clauses ({report.clauses.length})</h4>
           <table border={1} cellPadding={3}>
@@ -423,15 +408,16 @@ export function AnalysisPage() {
       {forced && <div>Forced failure check: <b style={{ color: forced.pass ? 'green' : 'red' }}>{forced.pass ? 'PASS' : 'FAIL'}</b> — {forced.detail}</div>}
       {fb && <div>Fallback check: <b style={{ color: fb.pass ? 'green' : 'red' }}>{fb.pass ? 'PASS' : 'FAIL'}</b> — {fb.detail}</div>}
 
-      <h4>Ask</h4>
+      <h4>Ask / Judge</h4>
       <div>
         <select value={askMode} onChange={(e) => setAskMode(e.target.value as 'retrieval' | 'whole')}>
           <option value="retrieval">Retrieval answer</option>
-          <option value="whole">Whole document</option>
+          <option value="whole">Whole document / judgement</option>
         </select>{' '}
-        <input value={askQuery} onChange={(e) => setAskQuery(e.target.value)} style={{ width: 460 }} />{' '}
-        <button disabled={busy || !docId || !session} onClick={runAsk}>Ask</button>
+        <input value={askQuery} onChange={(e) => setAskQuery(e.target.value)} style={{ width: 520 }} />{' '}
+        <button disabled={busy || !docId || !session} onClick={runAskOrJudge}>Ask</button>
       </div>
+
       {ask && (
         <div style={{ marginTop: 8 }}>
           <div><b>{ask.notFound ? 'NOT FOUND' : 'Answer'}:</b> {ask.answer}</div>
@@ -458,19 +444,59 @@ export function AnalysisPage() {
         </div>
       )}
 
-      <h4>Custom prompt</h4>
-      <div>
-        <input value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} style={{ width: 600 }} />{' '}
-        <button disabled={busy || !docId || !session} onClick={runCustom}>Run on every chunk</button>
-      </div>
-      {custom && (
+      {judgement && (
         <div style={{ marginTop: 8 }}>
-          <div>{custom.items.length} merged item(s), {custom.dropped} unverified dropped.</div>
-          <ul>
-            {custom.items.slice(0, 40).map((i) => (
-              <li key={i.itemId}>{i.text} <span style={{ color: '#888' }}>[p{i.page} {i.clause_no}]</span></li>
-            ))}
-          </ul>
+          <div style={{ fontSize: 13 }}>
+            Chunks read {judgement.counts.chunksRead} · proposed {judgement.counts.proposed} · verified {judgement.counts.verified} ·
+            dropped {JSON.stringify(judgement.counts.dropped)} · page corrected {judgement.counts.pageCorrected} ·
+            directions D/S/N {judgement.counts.directions.favours_developer}/{judgement.counts.directions.favours_society}/{judgement.counts.directions.neutral}
+          </div>
+          <div><b>{judgement.summary}</b></div>
+          {favourScore && (
+            <div>
+              Developer-favour recall <b>{favourScore.found}/{favourScore.expected} ({pct(favourScore.recall)})</b>
+              {favourScore.misses.length > 0 && <span> · misses: {favourScore.misses.join(', ')}</span>}
+              {favourScore.falseFavours.length > 0 && <span style={{ color: '#a00' }}> · false favours: {favourScore.falseFavours.map((f) => f.clause).join(', ')}</span>}
+            </div>
+          )}
+          <table border={1} cellPadding={3} style={{ marginTop: 6 }}>
+            <thead><tr><th>clause</th><th>page</th><th>direction</th><th>why</th><th>verified quote</th></tr></thead>
+            <tbody>
+              {judgement.rows.map((r) => (
+                <tr key={r.clause}>
+                  <td>{r.clause}</td><td>{r.page}</td><td>{r.direction}</td>
+                  <td style={{ maxWidth: 320 }}>{r.why}</td>
+                  <td style={{ maxWidth: 420 }}>{r.quote}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {judgement.others.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary>Other findings ({judgement.others.length})</summary>
+              <table border={1} cellPadding={3}>
+                <thead><tr><th>clause</th><th>page</th><th>direction</th><th>why</th><th>verified quote</th></tr></thead>
+                <tbody>
+                  {judgement.others.map((r) => (
+                    <tr key={r.clause}><td>{r.clause}</td><td>{r.page}</td><td>{r.direction}</td><td>{r.why}</td><td>{r.quote}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
+          )}
+
+          <h4>All favours_developer items ({developerFavours.length}) — review each quote</h4>
+          <table border={1} cellPadding={3}>
+            <thead><tr><th>clause</th><th>page</th><th>why</th><th>quote</th><th>obligation-shaped?</th></tr></thead>
+            <tbody>
+              {developerFavours.map((r) => (
+                <tr key={r.clause}>
+                  <td>{r.clause}</td><td>{r.page}</td><td>{r.why}</td><td>{r.quote}</td>
+                  <td>{looksLikeDeveloperObligation(r.quote, r.why) ? 'YES — check' : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -482,6 +508,9 @@ export function AnalysisPage() {
 
       <h4>Log</h4>
       <pre style={{ maxHeight: 260, overflow: 'auto' }}>{log.join('\n')}</pre>
+      <div style={{ fontSize: 11, color: '#666' }}>
+        {judgement && `judgement calls ${judgement.metrics.calls}, completion ${judgement.metrics.completionTokens}, cost ${money(judgement.metrics.costUsd)}. `}
+      </div>
     </div>
   );
 }

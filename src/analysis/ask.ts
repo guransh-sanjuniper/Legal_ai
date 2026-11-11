@@ -2,8 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { HarnessDBHandle, DocumentRecord } from '../runner/db';
 import { ASK_RETRIEVAL_PROMPT } from './prompts';
 import { executeTasks, computeMetrics, createRun, type ExecuteContext, type TaskPlan } from './execute';
-import { verifyQuote } from './verify';
-import { loadPageMap } from './runAnalysis';
+import { verifyQuotedItems } from './verify';
+import { buildAnchorIndex } from './anchors';
+import { loadPageMap, pageInput } from './runAnalysis';
 import type { AnalysisMetrics } from './types';
 
 export interface RetrievedChunk {
@@ -79,6 +80,8 @@ export async function askRetrieval(opts: RetrievalAskOptions): Promise<AskResult
   const doc: DocumentRecord | undefined = await opts.db.get('documents', opts.docId);
   if (!doc?.prepFingerprint) throw new Error('document is not ready');
   const pages = await loadPageMap(opts.db, opts.docId);
+  const index = buildAnchorIndex(pages);
+  const lastPage = Math.max(...pages.keys());
 
   const ctx: ExecuteContext = {
     db: opts.db,
@@ -96,7 +99,7 @@ export async function askRetrieval(opts: RetrievalAskOptions): Promise<AskResult
   const runId = await createRun(ctx, doc);
 
   const context = chunks
-    .map((c, i) => `Excerpt W${i + 1} (pages ${c.pageStart}-${c.pageEnd}, clauses ${c.clauses.join(', ') || '?'}):\n${c.windowText}`)
+    .map((c, i) => `Excerpt W${i + 1} (pages ${c.pageStart}-${c.pageEnd}):\n${pageInput(pages, c.pageStart, c.pageEnd)}`)
     .join('\n\n');
   const plan: TaskPlan = {
     suffix: 'ask',
@@ -113,8 +116,10 @@ export async function askRetrieval(opts: RetrievalAskOptions): Promise<AskResult
     for (const raw of c.items) {
       if (!isValidAskItem(raw)) continue;
       const item = raw as { text: string; page: number; quote: string; clause_no?: string };
-      if (!verifyQuote(item.quote, item.page, pages).ok) continue;
-      citations.push({ text: item.text.trim(), page: item.page, quote: item.quote.trim(), clause_no: item.clause_no ?? '' });
+      const check = verifyQuotedItems('citation', [{ quote: item.quote, page: item.page }], index, { start: 1, end: lastPage });
+      if (check.verified.length === 0) continue;
+      const v = check.verified[0].item;
+      citations.push({ text: item.text.trim(), page: v.page, quote: v.quote, clause_no: v.clause });
     }
   }
   const metrics = await computeMetrics(opts.db, run.tasks);

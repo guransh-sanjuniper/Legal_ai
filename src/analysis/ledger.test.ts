@@ -11,6 +11,7 @@ const entries = [
     detectedClauses: ['1', '2', '3'],
     analysedClauses: ['1', '2'],
     verifiedClauses: ['1'],
+    skippedClauses: ['3'],
     itemsAnalysed: 6,
     itemsVerified: 2,
   },
@@ -31,7 +32,7 @@ const entries = [
 describe('coverage ledger', () => {
   it('counts processed, analysed and verified per chunk and clause', () => {
     const ledger = buildLedger(entries);
-    expect(ledger.chunks[0]).toMatchObject({ detected: 3, analysed: 2, verified: 1, processed: true });
+    expect(ledger.chunks[0]).toMatchObject({ detected: 3, analysed: 2, verified: 1, processed: true, skipped: ['3'] });
     expect(ledger.chunks[1]).toMatchObject({ detected: 2, analysed: 0, verified: 0, processed: false });
     expect(ledger.chunks[0].clauses).toEqual([
       { clause: '1', analysed: true, verified: true },
@@ -48,6 +49,7 @@ describe('coverage ledger', () => {
       clausesDetected: 5,
       clausesAnalysed: 2,
       clausesVerified: 1,
+      clausesSkipped: 1,
       itemsAnalysed: 6,
       itemsVerified: 2,
     });

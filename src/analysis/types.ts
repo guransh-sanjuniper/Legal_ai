@@ -6,18 +6,21 @@ export interface VerifiedItemBase {
 
 export interface VerifiedObligation extends VerifiedItemBase {
   itemId: string;
+  clause: string;
   party: string;
   text: string;
 }
 
 export interface VerifiedDate extends VerifiedItemBase {
   itemId: string;
+  clause: string;
   text: string;
   timing_type: 'fixed' | 'event_relative' | 'none';
 }
 
 export interface VerifiedPayment extends VerifiedItemBase {
   itemId: string;
+  clause: string;
   amount: string;
   payer: string;
   payee: string;
@@ -34,6 +37,7 @@ export interface LawPassageRef {
 
 export interface VerifiedRisk extends VerifiedItemBase {
   itemId: string;
+  clause: string;
   text: string;
   severity: 'high' | 'medium' | 'low';
   lawPassages: LawPassageRef[];
@@ -117,5 +121,10 @@ export interface AnalysisReport {
   ledger: import('./ledger').Ledger;
   metrics: AnalysisMetrics;
   drops: DropRecord[];
+  amounts: {
+    code: import('./amounts').ExtractedAmount[];
+    uncaptured: import('./amounts').ExtractedAmount[];
+  };
+  resolution: { pageCorrected: number; dropped: number; skippedClauses: number };
   notices: string[];
 }

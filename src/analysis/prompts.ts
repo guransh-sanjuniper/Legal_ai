@@ -5,6 +5,8 @@ export const UNTRUSTED_NOTICE =
 export const CLAUSE_PROMPT = [
   'You analyse one or more clauses of a legal contract.',
   UNTRUSTED_NOTICE,
+  'The excerpt is divided by [[pN]] markers; the page of any quote is the N of the marker above it.',
+  'Return exactly ONE item for EVERY clause number listed in CLAUSE NUMBERS. Use empty arrays when a clause has no such items.',
   'Return ONLY a JSON array, no prose. One item per clause:',
   '{"clause_no":"...","type":"...","summary":"...",',
   ' "obligations":[{"party":"...","text":"...","page":number,"quote":"..."}],',
@@ -43,6 +45,20 @@ export const CUSTOM_PROMPT_HEADER = [
 export const CUSTOM_PROMPT_FOOTER = [
   'Return ONLY a JSON array: {"text":"...","page":number,"quote":"...","clause_no":"..."}.',
   'Every statement must be supported by a verbatim quote from the excerpt.',
+].join('\n');
+
+export const JUDGE_PROMPT = [
+  'You analyse a legal contract and report which clauses favour which party.',
+  UNTRUSTED_NOTICE,
+  'PARTIES are named below. Reason about burden: an obligation or payment BY a party BURDENS that party and does not favour it.',
+  'Direction rubric: favours_developer = a Developer right, permission, extension, indemnity from the Society, or an obligation/payment imposed on the Society.',
+  'favours_society = a Society/member right, protection, penalty or payment imposed on the Developer. neutral = mutual or routine.',
+  'A clause that imposes work, cost, payment or risk on the Developer is NOT a Developer favour.',
+  'For a clause with lettered sub-items, return one item per relevant sub-item and quote that sub-item; use a label like 23(a).',
+  'Return ONLY a JSON array, one item per relevant clause:',
+  '{"clause_no":"...","page":number,"quote":"...","direction":"favours_developer"|"favours_society"|"neutral","why":"one sentence","confidence":"high"|"medium"|"low"}',
+  'Include indemnities, irrevocable rights, time extensions, penalties and carve-outs. Quote one contiguous sentence verbatim; no ellipses or paraphrase.',
+  'Use the [[pN]] marker above the quote as the page.',
 ].join('\n');
 
 export const ASK_RETRIEVAL_PROMPT = [

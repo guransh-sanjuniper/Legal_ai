@@ -1,14 +1,12 @@
+import type { AnchorIndex } from './anchors';
+import { resolveQuote } from './anchors';
+
 export interface QuoteLike {
   quote?: unknown;
   page?: unknown;
 }
 
-export type DropReason =
-  | 'missing_quote'
-  | 'quote_too_short'
-  | 'bad_page'
-  | 'quote_not_found'
-  | 'invalid_shape';
+export type DropReason = 'missing_quote' | 'quote_too_short' | 'not_found' | 'invalid_shape';
 
 export interface Drop {
   kind: string;
@@ -17,8 +15,9 @@ export interface Drop {
   quote: string;
 }
 
-export interface Verified<T extends QuoteLike> {
-  item: T & { page: number; quote: string; verified: true };
+export interface Located<T extends QuoteLike> {
+  item: T & { page: number; quote: string; verified: true; clause: string };
+  corrected: boolean;
 }
 
 const MIN_QUOTE_CHARS = 8;
@@ -36,63 +35,39 @@ export function normalizeQuote(s: string): string {
     .toLowerCase();
 }
 
-export function pageTextKey(page: number): string {
-  return `p${page}`;
-}
-
-// Checks that a quote exists, after whitespace normalisation, on the cited stored page.
-export function verifyQuote(
-  quote: string,
-  page: number,
-  pages: Map<number, string>,
-): { ok: boolean; reason?: DropReason } {
-  const q = normalizeQuote(quote);
-  if (q.length === 0) return { ok: false, reason: 'missing_quote' };
-  if (q.length < MIN_QUOTE_CHARS) return { ok: false, reason: 'quote_too_short' };
-  const text = pages.get(page);
-  if (text === undefined) return { ok: false, reason: 'bad_page' };
-  if (!normalizeQuote(text).includes(q)) return { ok: false, reason: 'quote_not_found' };
-  return { ok: true };
-}
-
-// Verifies every quoted item of one clause. Verified items are returned; the rest are
-// dropped and counted with a reason.
+// Locates every quoted item: cited page, then the chunk range, then the whole document.
+// Page and clause come from where the quote was found; only unseen quotes are dropped.
 export function verifyQuotedItems<T extends QuoteLike>(
   kind: string,
   items: T[] | undefined,
-  pages: Map<number, string>,
-): { verified: Verified<T>[]; drops: Drop[] } {
-  const verified: Verified<T>[] = [];
+  index: AnchorIndex,
+  range: { start: number; end: number },
+): { verified: Located<T>[]; drops: Drop[]; corrected: number } {
+  const verified: Located<T>[] = [];
   const drops: Drop[] = [];
-  for (const item of items ?? []) {
-    const quote = typeof item.quote === 'string' ? item.quote : '';
-    const page = typeof item.page === 'number' && Number.isFinite(item.page) ? item.page : null;
-    const quoteText = quote.trim();
-    if (page === null) {
-      drops.push({ kind, reason: 'bad_page', page: null, quote: quoteText });
-      continue;
-    }
-    const result = verifyQuote(quote, page, pages);
-    if (!result.ok) {
-      drops.push({ kind, reason: result.reason!, page, quote: quoteText });
-      continue;
-    }
-    verified.push({ item: { ...item, page, quote: quoteText, verified: true } });
-  }
-  return { verified, drops };
-}
+  let corrected = 0;
 
-export function quotedItemsOf(clause: {
-  obligations?: unknown;
-  dates?: unknown;
-  payments?: unknown;
-  risks?: unknown;
-}): { kind: string; items: QuoteLike[] }[] {
-  const pick = (v: unknown): QuoteLike[] => (Array.isArray(v) ? (v as QuoteLike[]) : []);
-  return [
-    { kind: 'obligation', items: pick(clause.obligations) },
-    { kind: 'date', items: pick(clause.dates) },
-    { kind: 'payment', items: pick(clause.payments) },
-    { kind: 'risk', items: pick(clause.risks) },
-  ];
+  for (const item of items ?? []) {
+    const quote = typeof item.quote === 'string' ? item.quote.trim() : '';
+    const page = typeof item.page === 'number' && Number.isFinite(item.page) ? item.page : null;
+    if (!quote) {
+      drops.push({ kind, reason: 'missing_quote', page, quote: '' });
+      continue;
+    }
+    if (normalizeQuote(quote).length < MIN_QUOTE_CHARS) {
+      drops.push({ kind, reason: 'quote_too_short', page, quote });
+      continue;
+    }
+    const found = resolveQuote(index, quote, page, range);
+    if (!found) {
+      drops.push({ kind, reason: 'not_found', page, quote });
+      continue;
+    }
+    if (found.corrected) corrected++;
+    verified.push({
+      corrected: found.corrected,
+      item: { ...item, page: found.page, quote, verified: true, clause: found.clause },
+    });
+  }
+  return { verified, drops, corrected };
 }
