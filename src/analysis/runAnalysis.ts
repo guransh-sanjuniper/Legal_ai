@@ -57,6 +57,7 @@ export interface AnalysisOptions {
   docSearch: (query: string, k: number) => Promise<SearchHitLite[]>;
   onProgress?: (msg: string) => void;
   onLog?: (msg: string) => void;
+  maxFailureRate?: number;
 }
 
 export function isValidClauseItem(x: unknown): boolean {
@@ -178,6 +179,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     reasoning: opts.reasoning ?? null,
     timeoutMs: ANALYSIS_TIMEOUT_MS,
     onLog: log,
+    maxFailureRate: opts.maxFailureRate,
   };
 
   const runId = await createRun(ctx, doc);
@@ -207,6 +209,15 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     }
   };
   collect(first.collected, 'a');
+
+  if (first.aborted) {
+    const counts = new Map<string, number>();
+    for (const t of first.tasks) {
+      if (t.status === 'failed') counts.set(t.failureCode ?? 'unknown', (counts.get(t.failureCode ?? 'unknown') ?? 0) + 1);
+    }
+    const summary = [...counts.entries()].map(([code, n]) => `${code}×${n}`).join(', ');
+    throw new Error(`failure_rate_exceeded: ${first.failed} of ${first.tasks.length} first-pass tasks failed${summary ? ` (${summary})` : ''}`);
+  }
 
   // 2. Clauses with no entry are retried once with a smaller, clause-only input.
   const missingByChunk = new Map<number, string[]>();
@@ -252,7 +263,12 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     if (chunk.manifest.some((c) => !received.has(topClause(c)))) stillMissing.add(chunk.index);
   }
   const clauseTasks = [...first.tasks, ...retryTasks].filter((t) => /:(?:a|r)\d+(?:\/|$)/.test(t.id));
-  const failedClauseTasks = clauseTasks.filter((t) => t.status === 'failed');
+  const seenFailedTasks = new Set<string>();
+  const failedClauseTasks = clauseTasks.filter((t) => {
+    if (t.status !== 'failed' || seenFailedTasks.has(t.id)) return false;
+    seenFailedTasks.add(t.id);
+    return true;
+  });
   const partialNow = failedClauseTasks.length > 0 || stillMissing.size > 0;
 
   // 3. Verification (code) + law lookup for risks. Page and clause come from the resolver.

@@ -210,6 +210,7 @@ export function AnalysisPage() {
         db,
         supabase: sb,
         accessToken: session.access_token,
+        refreshAccessToken: freshToken,
         userId: session.user.id,
         functionsUrl: `${SUPABASE_URL}/functions/v1`,
         anonKey: ANON_KEY,

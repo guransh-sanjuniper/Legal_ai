@@ -38,6 +38,8 @@ export interface ExecuteContext {
   reasoning?: { effort: 'minimal' | 'low' | 'medium' | 'high' } | null;
   timeoutMs: number;
   onLog?: (line: string) => void;
+  // Abort scheduling when the failed share of completed tasks passes this value.
+  maxFailureRate?: number;
 }
 
 export interface TaskPlan {
@@ -54,6 +56,7 @@ export interface ExecuteResult {
   collected: { taskId: string; items: unknown[] }[];
   tasks: Task[];
   failed: number;
+  aborted: boolean;
 }
 
 export async function createRun(ctx: ExecuteContext, doc: DocumentRecord): Promise<string> {
@@ -140,6 +143,9 @@ export async function executeTasks(
   };
 
   const gate = createBackoffGate();
+  let processed = 0;
+  let failedSoFar = 0;
+  let aborted = false;
   for (let round = 0; round < 60; round++) {
     const all = await ctx.db.getAllFromIndex('tasks', 'byRun', runId);
     const active = all.filter((t) => ACTIVE_STATUSES.includes(t.status));
@@ -148,22 +154,32 @@ export async function executeTasks(
     const queue = active.map((t) => t.id);
     const worker = async () => {
       for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+        if (aborted) break;
         const fresh = await ctx.db.get('tasks', id);
         if (!fresh || !ACTIVE_STATUSES.includes(fresh.status)) continue;
         await gate.wait(fresh.nextAt);
         const outcome = await runTask(ctx.db, fresh, cfg);
+        processed++;
+        if (outcome === 'failed') failedSoFar++;
+        if (ctx.maxFailureRate !== undefined && processed >= 10 && failedSoFar / processed > ctx.maxFailureRate) {
+          aborted = true;
+          ctx.onLog?.(
+            `abort: ${failedSoFar} failed of ${processed} completed tasks (${((failedSoFar / processed) * 100).toFixed(0)}% > ${(ctx.maxFailureRate * 100).toFixed(0)}%)`,
+          );
+        }
         const after = await ctx.db.get('tasks', id);
         if (after && ACTIVE_STATUSES.includes(after.status) && RATE_LIMIT_CODES(after.failureCode)) {
           gate.hold(cfg.backoffMs(after.attemptNo));
         }
-        ctx.onLog?.(`${fresh.id.slice(-14)}: ${outcome}`);
+        ctx.onLog?.(`${fresh.id.slice(-14)}: ${outcome}${after?.failureCode ? `:${after.failureCode}` : ''}`);
       }
     };
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    if (aborted) break;
   }
 
   const tasks = await ctx.db.getAllFromIndex('tasks', 'byRun', runId);
-  return { runId, collected, tasks, failed: tasks.filter((t) => t.status === 'failed').length };
+  return { runId, collected, tasks, failed: tasks.filter((t) => t.status === 'failed').length, aborted };
 }
 
 function percentile(values: number[], p: number): number {
