@@ -40,6 +40,8 @@ export interface ExecuteContext {
   onLog?: (line: string) => void;
   // Abort scheduling when the failed share of completed tasks passes this value.
   maxFailureRate?: number;
+  // Reduce worker concurrency after repeated http_429 responses.
+  autoReduceConcurrency?: boolean;
 }
 
 export interface TaskPlan {
@@ -48,6 +50,7 @@ export interface TaskPlan {
   prompt: string;
   input: string;
   maxTokens: number;
+  delayMs?: number;
   validate: (item: unknown) => boolean;
 }
 
@@ -57,6 +60,9 @@ export interface ExecuteResult {
   tasks: Task[];
   failed: number;
   aborted: boolean;
+  rateLimitEvents: number;
+  rateLimitWaitMs: number;
+  concurrency: number;
 }
 
 export async function createRun(ctx: ExecuteContext, doc: DocumentRecord): Promise<string> {
@@ -127,7 +133,8 @@ export async function executeTasks(
       },
       now,
     );
-    await ctx.db.put('tasks', task);
+    if (plan.delayMs && plan.delayMs > 0) await ctx.db.put('tasks', { ...task, nextAt: now + plan.delayMs });
+    else await ctx.db.put('tasks', task);
   }
 
   const originalSave = cfg.saveResult;
@@ -146,6 +153,10 @@ export async function executeTasks(
   let processed = 0;
   let failedSoFar = 0;
   let aborted = false;
+  let rateLimitEvents = 0;
+  let rateLimitWaitMs = 0;
+  let concurrency = CONCURRENCY;
+  let consecutive429 = 0;
   for (let round = 0; round < 60; round++) {
     const all = await ctx.db.getAllFromIndex('tasks', 'byRun', runId);
     const active = all.filter((t) => ACTIVE_STATUSES.includes(t.status));
@@ -168,18 +179,42 @@ export async function executeTasks(
           );
         }
         const after = await ctx.db.get('tasks', id);
+        if (after?.failureCode === 'http_429') {
+          rateLimitEvents++;
+          const wait = cfg.backoffMs(after.attemptNo);
+          rateLimitWaitMs += wait;
+          if (ctx.autoReduceConcurrency) {
+            consecutive429++;
+            if (consecutive429 >= 3 && concurrency > 1) {
+              concurrency--;
+              consecutive429 = 0;
+              ctx.onLog?.(`concurrency reduced to ${concurrency} after repeated http_429`);
+            }
+          }
+        } else if (outcome === 'done') {
+          consecutive429 = 0;
+        }
         if (after && ACTIVE_STATUSES.includes(after.status) && RATE_LIMIT_CODES(after.failureCode)) {
           gate.hold(cfg.backoffMs(after.attemptNo));
         }
         ctx.onLog?.(`${fresh.id.slice(-14)}: ${outcome}${after?.failureCode ? `:${after.failureCode}` : ''}`);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
     if (aborted) break;
   }
 
   const tasks = await ctx.db.getAllFromIndex('tasks', 'byRun', runId);
-  return { runId, collected, tasks, failed: tasks.filter((t) => t.status === 'failed').length, aborted };
+  return {
+    runId,
+    collected,
+    tasks,
+    failed: tasks.filter((t) => t.status === 'failed').length,
+    aborted,
+    rateLimitEvents,
+    rateLimitWaitMs,
+    concurrency,
+  };
 }
 
 function percentile(values: number[], p: number): number {

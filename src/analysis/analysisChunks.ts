@@ -34,16 +34,21 @@ export function buildAnalysisChunks(
   });
   return result.chunks.map((c) => {
     const units = buildUnits([{ pageNo: c.pageStart, text: c.text }], { strict });
-    const manifest = [...new Set(units.map((u) => u.clauseNo).filter((x): x is string => x !== null))];
+    // In structure-free mode the model's clause numbers are not a manifest. Keep it empty so
+    // coverage and retries are measured by chunks and pages instead.
+    const manifest =
+      result.mode === 'structure-free'
+        ? []
+        : [...new Set(units.map((u) => u.clauseNo).filter((x): x is string => x !== null))];
     return {
       index: c.index,
       text: c.text,
       pageMarkedText: c.pageMarkedText,
       pageStart: c.pageStart,
       pageEnd: c.pageEnd,
-      clauseFrom: c.clauseFrom,
-      clauseTo: c.clauseTo,
-      clauses: c.clauses,
+      clauseFrom: result.mode === 'structure-free' ? null : c.clauseFrom,
+      clauseTo: result.mode === 'structure-free' ? null : c.clauseTo,
+      clauses: result.mode === 'structure-free' ? [] : c.clauses,
       manifest,
       mode: result.mode,
       modeReason: result.modeReason,

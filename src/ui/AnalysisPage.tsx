@@ -370,6 +370,7 @@ export function AnalysisPage() {
       ? scoreFavours(judgement.rows.concat(judgement.others), golden.expected, judgement.parties)
       : null;
   const paymentRows = report ? report.clauses.flatMap((c) => c.payments.map((p) => ({ ...p, clause: c.clauseNo }))) : [];
+  const structureFree = report?.chunking?.mode === 'structure-free';
 
   return (
     <div style={{ padding: 16, fontFamily: 'sans-serif', maxWidth: 1240 }}>
@@ -402,7 +403,12 @@ export function AnalysisPage() {
           <div><b>{ledgerSummary(report.ledger)}</b></div>
           {report.partial && (
             <div style={{ color: '#a60', fontWeight: 'bold' }}>
-              PARTIAL — {report.coverage ? `${report.coverage.notAnalysed} of ${report.coverage.totalClauses} clauses not analysed` : 'some clauses not analysed'}
+              PARTIAL —{' '}
+              {structureFree && report.coverage
+                ? `${report.coverage.analysedChunks} of ${report.coverage.totalChunks} chunks analysed; pages covered ${report.coverage.pagesCovered} of ${report.coverage.totalPages}`
+                : report.coverage
+                  ? `${report.coverage.notAnalysed} of ${report.coverage.totalClauses} clauses not analysed`
+                  : 'some units not analysed'}
               {report.unreliable ? ' · UNRELIABLE (more than 10% of clause units failed)' : ''}
             </div>
           )}
@@ -411,6 +417,12 @@ export function AnalysisPage() {
               analysis chunks: {report.chunking.chunkCount} · mode {report.chunking.mode}
               {report.chunking.modeReason ? ` (${report.chunking.modeReason})` : ''} · longest {report.chunking.longestChunkTokens} tokens ·
               section breaks {report.chunking.sectionBreaks} · long clauses {report.chunking.longClauses}
+            </div>
+          )}
+          {report.dedupe && (
+            <div style={{ fontSize: 12, color: '#555' }}>
+              dedupe: {report.dedupe.itemsBefore} verified items → {report.dedupe.itemsAfter} ({report.dedupe.removed} removed);
+              clauses {report.dedupe.clausesBefore} → {report.dedupe.clausesAfter}
             </div>
           )}
           <div style={{ fontSize: 12, color: '#555' }}>
@@ -434,6 +446,8 @@ export function AnalysisPage() {
               <tr><td>retried</td><td>{report.metrics.retried}</td><td>split</td><td>{report.metrics.split}</td></tr>
               <tr><td>failed</td><td>{report.metrics.failed}</td><td>empty_output</td><td>{report.metrics.emptyOutput}</td></tr>
               <tr><td>tasks</td><td>{report.metrics.doneTasks}/{report.metrics.totalTasks} done</td><td>next budget</td><td>{report.metrics.recommendedMaxTokens ?? '-'}</td></tr>
+              <tr><td>429 events</td><td>{report.metrics.rateLimitEvents ?? 0}</td><td>429 wait</td><td>{Math.round((report.metrics.rateLimitWaitMs ?? 0) / 1000)} s</td></tr>
+              <tr><td>final concurrency</td><td>{report.metrics.concurrency ?? '-'}</td><td></td><td></td></tr>
             </tbody>
           </table>
 
@@ -452,15 +466,35 @@ export function AnalysisPage() {
             </>
           )}
 
-          <h4>Coverage ledger</h4>
+          <h4>{structureFree ? 'Chunk coverage' : 'Coverage ledger'}</h4>
+          {structureFree && report.coverage && (
+            <div style={{ fontSize: 12, color: '#555' }}>
+              {report.coverage.analysedChunks} of {report.coverage.totalChunks} chunks analysed · pages covered{' '}
+              {report.coverage.pagesCovered} of {report.coverage.totalPages}
+              {report.coverage.failedChunks && report.coverage.failedChunks.length > 0 && (
+                <div>
+                  failed chunks:{' '}
+                  {report.coverage.failedChunks
+                    .map((f) => `chunk ${f.chunkIndex} pages ${f.pages[0]}-${f.pages[1]} (${f.failureCode ?? 'unknown'})`)
+                    .join('; ')}
+                </div>
+              )}
+            </div>
+          )}
           <table border={1} cellPadding={3}>
-            <thead><tr><th>chunk</th><th>pages</th><th>processed</th><th>detected</th><th>analysed</th><th>verified</th><th>skipped</th><th>items</th></tr></thead>
+            <thead>
+              <tr>
+                <th>chunk</th><th>pages</th><th>processed</th>
+                {!structureFree && <><th>detected</th><th>analysed</th><th>verified</th><th>skipped</th></>}
+                <th>items</th>
+              </tr>
+            </thead>
             <tbody>
               {report.ledger.chunks.map((c) => (
                 <tr key={c.chunkId}>
                   <td>{c.index}</td><td>{c.pages[0]}-{c.pages[1]}</td><td>{c.processed ? 'yes' : 'no'}</td>
-                  <td>{c.detected}</td><td>{c.analysed}</td><td>{c.verified}</td>
-                  <td>{(c.skipped ?? []).join(', ')}</td><td>{c.itemsVerified}/{c.itemsAnalysed}</td>
+                  {!structureFree && <><td>{c.detected}</td><td>{c.analysed}</td><td>{c.verified}</td><td>{(c.skipped ?? []).join(', ')}</td></>}
+                  <td>{c.itemsVerified}/{c.itemsAnalysed}</td>
                 </tr>
               ))}
             </tbody>
@@ -468,10 +502,19 @@ export function AnalysisPage() {
 
           <h4>Payment dates (verified) — {paymentRows.length}</h4>
           <table border={1} cellPadding={3}>
-            <thead><tr><th>clause</th><th>amount</th><th>payer → payee</th><th>due / date text</th><th>page</th></tr></thead>
+            <thead>
+              <tr>
+                {!structureFree && <th>clause</th>}
+                <th>amount</th><th>payer → payee</th><th>due / date text</th><th>page</th><th>quote</th>
+              </tr>
+            </thead>
             <tbody>
               {paymentRows.map((p) => (
-                <tr key={p.itemId}><td>{p.clause}</td><td>{p.amount}</td><td>{p.payer} → {p.payee}</td><td>{p.due}</td><td>{p.page}</td></tr>
+                <tr key={p.itemId}>
+                  {!structureFree && <td>{p.clause}</td>}
+                  <td>{p.amount}</td><td>{p.payer} → {p.payee}</td><td>{p.due}</td><td>{p.page}</td>
+                  <td style={{ maxWidth: 420 }}>{p.quote}</td>
+                </tr>
               ))}
             </tbody>
           </table>
@@ -479,10 +522,12 @@ export function AnalysisPage() {
           <h4>Code-extracted amounts (unclassified) — {(report.amounts?.code ?? []).length}</h4>
           <div style={{ fontSize: 12, color: '#666' }}>Found by code; not model payments. Shown separately and never merged into the verified payments.</div>
           <table border={1} cellPadding={3} style={{ marginTop: 6 }}>
-            <thead><tr><th>clause</th><th>kind</th><th>text</th><th>page</th></tr></thead>
+            <thead>
+              <tr>{!structureFree && <th>clause</th>}<th>kind</th><th>text</th><th>page</th></tr>
+            </thead>
             <tbody>
               {(report.amounts?.code ?? []).slice(0, 60).map((a, i) => (
-                <tr key={i}><td>{a.clause}</td><td>{a.kind}</td><td>{a.text}</td><td>{a.page}</td></tr>
+                <tr key={i}>{!structureFree && <td>{a.clause}</td>}<td>{a.kind}</td><td>{a.text}</td><td>{a.page}</td></tr>
               ))}
             </tbody>
           </table>
@@ -491,13 +536,19 @@ export function AnalysisPage() {
             {(report.amounts?.uncaptured ?? []).map((a) => `${a.clause}:${a.text}`).join(' · ') || '(none)'}
           </div>
 
-          <h4>Clauses ({report.clauses.length})</h4>
+          <h4>{structureFree ? 'Verified clause entries' : 'Clauses'} ({report.clauses.length})</h4>
           <table border={1} cellPadding={3}>
-            <thead><tr><th>clause</th><th>type</th><th>summary</th><th>oblig.</th><th>dates</th><th>payments</th><th>risks</th><th>verified items</th></tr></thead>
+            <thead>
+              <tr>
+                {!structureFree && <th>clause</th>}
+                <th>pages</th><th>type</th><th>summary</th><th>oblig.</th><th>dates</th><th>payments</th><th>risks</th><th>verified items</th>
+              </tr>
+            </thead>
             <tbody>
               {report.clauses.map((c) => (
                 <tr key={c.itemId}>
-                  <td>{c.clauseNo}</td><td>{c.type}</td><td style={{ maxWidth: 420 }}>{c.summary}</td>
+                  {!structureFree && <td>{c.clauseNo}</td>}
+                  <td>{c.pageStart}-{c.pageEnd}</td><td>{c.type}</td><td style={{ maxWidth: 420 }}>{c.summary}</td>
                   <td>{c.obligations.length}</td><td>{c.dates.length}</td><td>{c.payments.length}</td><td>{c.risks.length}</td><td>{c.verifiedItems}</td>
                 </tr>
               ))}
@@ -519,7 +570,23 @@ export function AnalysisPage() {
       )}
 
       <h4>Failed tasks (last run)</h4>
-      {report?.failedClauses && report.failedClauses.length > 0 && (
+      {structureFree && report?.coverage?.failedChunks && report.coverage.failedChunks.length > 0 && (
+        <>
+          <h4>Failed chunks ({report.coverage.failedChunks.length})</h4>
+          <table border={1} cellPadding={3}>
+            <thead><tr><th>chunk</th><th>pages</th><th>failure</th><th>message</th></tr></thead>
+            <tbody>
+              {report.coverage.failedChunks.map((f) => (
+                <tr key={f.chunkIndex}>
+                  <td>{f.chunkIndex}</td><td>{f.pages[0]}-{f.pages[1]}</td><td>{f.failureCode ?? ''}</td>
+                  <td style={{ maxWidth: 620, fontSize: 11 }}>{f.message ?? ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {!structureFree && report?.failedClauses && report.failedClauses.length > 0 && (
         <>
           <h4>Failed clauses ({report.failedClauses.length})</h4>
           <table border={1} cellPadding={3}>

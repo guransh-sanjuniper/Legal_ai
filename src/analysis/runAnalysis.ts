@@ -8,10 +8,12 @@ import { verifyQuotedItems } from './verify';
 import { extractAmounts, uncapturedAmounts } from './amounts';
 import { groupForRollup, keepCitedSentences, overviewTargetSentenceCount } from './rollup';
 import { buildLedger, type LedgerChunkInput } from './ledger';
+import { dedupeVerifiedClauses } from './dedupe';
 import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
 import { CLAUSE_PROMPT, SECTION_PROMPT, OVERVIEW_PROMPT, checklistFor } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type TaskPlan } from './execute';
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS } from './config';
+import type { Task } from '../tasks/types';
 import type {
   AnalysisReport,
   CrossClauseResult,
@@ -58,6 +60,7 @@ export interface AnalysisOptions {
   onProgress?: (msg: string) => void;
   onLog?: (msg: string) => void;
   maxFailureRate?: number;
+  autoReduceConcurrency?: boolean;
 }
 
 export function isValidClauseItem(x: unknown): boolean {
@@ -180,6 +183,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     timeoutMs: ANALYSIS_TIMEOUT_MS,
     onLog: log,
     maxFailureRate: opts.maxFailureRate,
+    autoReduceConcurrency: opts.autoReduceConcurrency ?? true,
   };
 
   const runId = await createRun(ctx, doc);
@@ -195,6 +199,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   }));
   progress(`analysing ${plans.length} chunks`);
   const first = await executeTasks(ctx, runId, doc, plans);
+  let rateLimitEvents = first.rateLimitEvents;
+  let rateLimitWaitMs = first.rateLimitWaitMs;
 
   const rawByChunk = new Map<number, unknown[]>();
   const collect = (collected: { taskId: string; items: unknown[] }[], prefix: string) => {
@@ -248,8 +254,44 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     }
     progress(`retrying ${retryPlans.length} chunks with skipped clauses`);
     const retry = await executeTasks(ctx, runId, doc, retryPlans);
+    rateLimitEvents += retry.rateLimitEvents;
+    rateLimitWaitMs += retry.rateLimitWaitMs;
     retryTasks = retry.tasks;
     collect(retry.collected, 'r');
+  }
+
+  // 2b. Retry failed clause chunks once more after the pass, with a backoff delay.
+  const doneIndexes = new Set<number>();
+  const failedIndexes = new Set<number>();
+  for (const t of [...first.tasks, ...retryTasks]) {
+    const suffix = t.id.slice(t.id.lastIndexOf(':') + 1).split('/')[0];
+    const m = /^[ar](\d+)$/.exec(suffix);
+    if (!m) continue;
+    const indexNo = Number(m[1]);
+    if (t.status === 'done') doneIndexes.add(indexNo);
+    else if (t.status === 'failed') failedIndexes.add(indexNo);
+  }
+  for (const i of doneIndexes) failedIndexes.delete(i);
+  let secondRetryTasks: typeof first.tasks = [];
+  if (failedIndexes.size > 0) {
+    const retryPlans: TaskPlan[] = [...failedIndexes].map((indexNo) => {
+      const chunk = chunks.find((c) => c.index === indexNo)!;
+      return {
+        suffix: `x${indexNo}`,
+        promptVersion: 'clause-analysis-v2',
+        prompt: clausePrompt,
+        input: clauseInput(chunk, pages, defsContext, chunk.manifest),
+        maxTokens: budget,
+        delayMs: 5000,
+        validate: isValidClauseItem,
+      };
+    });
+    progress(`retrying ${retryPlans.length} failed chunks with backoff`);
+    const retry = await executeTasks(ctx, runId, doc, retryPlans);
+    rateLimitEvents += retry.rateLimitEvents;
+    rateLimitWaitMs += retry.rateLimitWaitMs;
+    secondRetryTasks = retry.tasks;
+    collect(retry.collected, 'x');
   }
 
   // Clauses still not received after the focused retry are skipped, not silently treated as empty.
@@ -262,7 +304,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     );
     if (chunk.manifest.some((c) => !received.has(topClause(c)))) stillMissing.add(chunk.index);
   }
-  const clauseTasks = [...first.tasks, ...retryTasks].filter((t) => /:(?:a|r)\d+(?:\/|$)/.test(t.id));
+  const clauseTasks = [...first.tasks, ...retryTasks, ...secondRetryTasks].filter((t) => /:(?:a|r|x)\d+(?:\/|$)/.test(t.id));
   const seenFailedTasks = new Set<string>();
   const failedClauseTasks = clauseTasks.filter((t) => {
     if (t.status !== 'failed' || seenFailedTasks.has(t.id)) return false;
@@ -273,7 +315,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
 
   // 3. Verification (code) + law lookup for risks. Page and clause come from the resolver.
   const lawCache = new Map<string, LawPassageRef[]>();
-  const verifiedClauses: VerifiedClause[] = [];
+  let verifiedClauses: VerifiedClause[] = [];
   const drops: DropRecord[] = [];
   let lawCalls = 0;
   let pageCorrected = 0;
@@ -389,7 +431,14 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       });
     }
   }
-  progress(`verified ${verifiedClauses.length} clauses, dropped ${drops.length} unverified items, corrected ${pageCorrected} pages`);
+  const analysisMode = chunks[0]?.mode ?? 'structure';
+  const deduped = dedupeVerifiedClauses(verifiedClauses, { dropEmpty: analysisMode === 'structure-free' });
+  verifiedClauses = deduped.clauses;
+  const dedupeStats = deduped.stats;
+  progress(
+    `verified ${verifiedClauses.length} clauses, dropped ${drops.length} unverified items, corrected ${pageCorrected} pages, ` +
+      `deduped ${dedupeStats.removed} repeated items`,
+  );
 
   // 4. Roll-up as dependent tasks.
   const rollupItems = verifiedClauses.map((c) => ({
@@ -414,17 +463,54 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   }));
 
   const sections: SectionSummary[] = groups.map((group, i) => ({ section: i + 1, itemIds: group.map((g) => g.id), sentences: [], dropped: 0 }));
-  if (sectionPlans.length > 0) {
-    progress(`summarising ${sectionPlans.length} sections`);
-    const sectionRun = await executeTasks(ctx, runId, doc, sectionPlans);
-    for (const c of sectionRun.collected) {
+  const applySectionCollected = (collected: { taskId: string; items: unknown[] }[]) => {
+    for (const c of collected) {
       const suffix = c.taskId.slice(c.taskId.lastIndexOf(':') + 1).split('/')[0];
-      const idx = Number(suffix.replace(/^s/, ''));
+      const m = /^s(\d+)/.exec(suffix);
+      const idx = m ? Number(m[1]) : NaN;
       if (!Number.isFinite(idx) || !sections[idx]) continue;
       const valid = new Set(sections[idx].itemIds);
       const kept = keepCitedSentences(c.items as never[], valid);
       sections[idx].sentences.push(...kept.kept);
       sections[idx].dropped += kept.dropped;
+    }
+  };
+  if (sectionPlans.length > 0) {
+    progress(`summarising ${sectionPlans.length} sections`);
+    const sectionRun = await executeTasks(ctx, runId, doc, sectionPlans);
+    rateLimitEvents += sectionRun.rateLimitEvents;
+    rateLimitWaitMs += sectionRun.rateLimitWaitMs;
+    applySectionCollected(sectionRun.collected);
+
+    // A section summary that hit the output limit is split into two smaller groups, not failed.
+    const failedSections = sectionRun.tasks.filter((t) => t.status === 'failed' && t.failureCode === 'length');
+    if (failedSections.length > 0) {
+      const retryPlans: TaskPlan[] = [];
+      for (const task of failedSections) {
+        const suffix = task.id.slice(task.id.lastIndexOf(':') + 1).split('/')[0];
+        const m = /^s(\d+)/.exec(suffix);
+        const idx = m ? Number(m[1]) : NaN;
+        const group = Number.isFinite(idx) ? groups[idx] : undefined;
+        if (!group || group.length < 2) continue;
+        const mid = Math.ceil(group.length / 2);
+        [group.slice(0, mid), group.slice(mid)].forEach((half, h) => {
+          retryPlans.push({
+            suffix: `s${idx}y${h}`,
+            promptVersion: 'section-summary-v1',
+            prompt: SECTION_PROMPT,
+            input: `${defsContext}\n\nItems:\n${JSON.stringify(half)}`,
+            maxTokens: Math.max(600, Math.min(1200, half.length * 30)),
+            validate: (x) => typeof x === 'object' && x !== null && typeof (x as { text?: unknown }).text === 'string',
+          });
+        });
+      }
+      if (retryPlans.length > 0) {
+        progress(`splitting ${failedSections.length} over-length section summaries`);
+        const retryRun = await executeTasks(ctx, runId, doc, retryPlans);
+        rateLimitEvents += retryRun.rateLimitEvents;
+        rateLimitWaitMs += retryRun.rateLimitWaitMs;
+        applySectionCollected(retryRun.collected);
+      }
     }
   }
 
@@ -444,6 +530,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       validate: (x) => typeof x === 'object' && x !== null,
     };
     const ovRun = await executeTasks(ctx, runId, doc, [overviewPlan]);
+    rateLimitEvents += ovRun.rateLimitEvents;
+    rateLimitWaitMs += ovRun.rateLimitWaitMs;
     const valid = new Set(sectionSentences.map((s) => s.id));
     for (const s of sectionSentences) for (const cite of s.cites) valid.add(cite);
     for (const c of ovRun.collected) overview.push(...keepCitedSentences(c.items as never[], valid).kept);
@@ -545,11 +633,45 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   );
 
   const metrics = await computeMetrics(db, await db.getAllFromIndex('tasks', 'byRun', runId));
+  metrics.rateLimitEvents = rateLimitEvents;
+  metrics.rateLimitWaitMs = rateLimitWaitMs;
+  metrics.concurrency = first.concurrency;
 
   const totalClauses = ledger.totals.clausesDetected;
   const analysedClauses = ledger.totals.clausesAnalysed;
   const notAnalysed = Math.max(0, totalClauses - analysedClauses);
-  const partial = partialNow || notAnalysed > 0;
+
+  const doneChunks = new Set<number>();
+  const failedChunkMap = new Map<number, Task>();
+  for (const t of clauseTasks) {
+    const suffix = t.id.slice(t.id.lastIndexOf(':') + 1).split('/')[0];
+    const indexNo = Number(suffix.slice(1));
+    if (!Number.isFinite(indexNo)) continue;
+    if (t.status === 'done') doneChunks.add(indexNo);
+    if (t.status === 'failed') {
+      const prev = failedChunkMap.get(indexNo);
+      if (!prev || t.attemptNo >= prev.attemptNo) failedChunkMap.set(indexNo, t);
+    }
+  }
+  for (const i of doneChunks) failedChunkMap.delete(i);
+  const totalChunks = chunks.length;
+  const analysedChunks = doneChunks.size;
+  const totalPages = pages.size;
+  const coveredPages = new Set<number>();
+  for (const c of chunks) {
+    if (!doneChunks.has(c.index)) continue;
+    for (let p = c.pageStart; p <= c.pageEnd; p++) coveredPages.add(p);
+  }
+  const failedChunks = [...failedChunkMap.entries()].map(([chunkIndex, t]) => {
+    const chunk = chunks.find((c) => c.index === chunkIndex);
+    return {
+      chunkIndex,
+      pages: [chunk?.pageStart ?? 0, chunk?.pageEnd ?? 0] as [number, number],
+      failureCode: t.failureCode,
+      message: t.failureMessage,
+    };
+  });
+  const partial = partialNow || (analysisMode === 'structure-free' ? failedChunks.length > 0 : notAnalysed > 0);
   const unreliable = clauseTasks.length > 0 && failedClauseTasks.length / clauseTasks.length > 0.1;
   const failedClauses = failedClauseTasks.map((t) => {
     const suffix = t.id.slice(t.id.lastIndexOf(':') + 1).split('/')[0];
@@ -564,7 +686,16 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     };
   });
   if (partial) {
-    overview = [...overview, { text: `${notAnalysed} of ${totalClauses} clauses not analysed.`, cites: [] }];
+    overview = [
+      ...overview,
+      {
+        text:
+          analysisMode === 'structure-free'
+            ? `${analysedChunks} of ${totalChunks} chunks analysed; pages covered ${coveredPages.size} of ${totalPages}.`
+            : `${notAnalysed} of ${totalClauses} clauses not analysed.`,
+        cites: [],
+      },
+    ];
   }
   const chunking = {
     mode: chunks[0]?.mode ?? 'structure',
@@ -601,13 +732,30 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       'AI-assisted, requires lawyer review.',
       'Law passages are PLACEHOLDER test data; every law-based risk is applicability unverified.',
       'Only quotes verified against the stored page text are shown.',
-      ...(partial ? [`Report is partial: ${notAnalysed} of ${totalClauses} clauses were not analysed.`] : []),
+      ...(partial
+        ? [
+            analysisMode === 'structure-free'
+              ? `Report is partial: ${analysedChunks} of ${totalChunks} chunks analysed; pages covered ${coveredPages.size} of ${totalPages}.`
+              : `Report is partial: ${notAnalysed} of ${totalClauses} clauses were not analysed.`,
+          ]
+        : []),
       ...(unreliable ? ['Unreliable: more than 10% of clause units failed.'] : []),
     ],
     partial,
     unreliable,
     failedClauses,
-    coverage: { totalClauses, analysedClauses, notAnalysed },
+    coverage: {
+      mode: analysisMode,
+      totalClauses,
+      analysedClauses,
+      notAnalysed,
+      totalChunks,
+      analysedChunks,
+      totalPages,
+      pagesCovered: coveredPages.size,
+      failedChunks,
+    },
+    dedupe: dedupeStats,
     chunking,
   };
 

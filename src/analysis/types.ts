@@ -112,6 +112,9 @@ export interface AnalysisMetrics {
   doneTasks: number;
   p95CompletionTokens: number;
   recommendedMaxTokens: number | null;
+  rateLimitEvents?: number;
+  rateLimitWaitMs?: number;
+  concurrency?: number;
 }
 
 export interface AnalysisReport {
@@ -150,7 +153,29 @@ export interface AnalysisReport {
     failureCode: string | null;
     message: string | null;
   }[];
-  coverage?: { totalClauses: number; analysedClauses: number; notAnalysed: number };
+  coverage?: {
+    mode?: 'structure' | 'structure-free';
+    totalClauses?: number;
+    analysedClauses?: number;
+    notAnalysed?: number;
+    totalChunks?: number;
+    analysedChunks?: number;
+    totalPages?: number;
+    pagesCovered?: number;
+    failedChunks?: {
+      chunkIndex: number;
+      pages: [number, number];
+      failureCode: string | null;
+      message: string | null;
+    }[];
+  };
+  dedupe?: {
+    itemsBefore: number;
+    itemsAfter: number;
+    removed: number;
+    clausesBefore: number;
+    clausesAfter: number;
+  };
   chunking?: {
     mode: 'structure' | 'structure-free';
     modeReason: string;
