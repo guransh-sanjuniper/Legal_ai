@@ -12,9 +12,9 @@ const TEST_EMAIL = import.meta.env.VITE_TEST_EMAIL as string | undefined;
 const TEST_PASSWORD = import.meta.env.VITE_TEST_PASSWORD as string | undefined;
 
 const SAMPLE = [
-  '1. Possession. The Developer shall hand over possession of Unit 12 on or before 31 March 2027.',
+  '1. Possession. The Supplier shall hand over the goods on or before 31 March 2027.',
   '2. Price. The total consideration is Rs. 1,25,00,000 payable in instalments as per Schedule B.',
-  '3. Penalty. If the Developer delays possession beyond 6 months, it shall pay interest at 2% per month.',
+  '3. Penalty. If the Supplier delays delivery beyond 6 months, it shall pay interest at 2% per month.',
 ].join('\n');
 
 const sb = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });

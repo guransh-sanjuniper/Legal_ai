@@ -27,7 +27,8 @@ describe('page correction and clause resolution', () => {
 
   it('falls back to the whole document when outside the chunk range', () => {
     const r = resolveQuote(index, 'pay maintenance every month', 3, { start: 3, end: 3 });
-    expect(r).toMatchObject({ page: 5, clause: '2', corrected: true });
+    // Page 5 has no new clause boundary, so the sentence continues the previous sub-item paragraph.
+    expect(r).toMatchObject({ page: 5, clause: '2(a)', corrected: true });
   });
 
   it('returns null when the quote is nowhere', () => {

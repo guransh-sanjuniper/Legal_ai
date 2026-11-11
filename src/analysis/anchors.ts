@@ -15,9 +15,30 @@ export interface AnchorIndex {
   byPage: Map<number, AnchorSegment[]>;
 }
 
-const SUB_PAREN = /^\s*\(([a-zA-Z]{1,4}|\d{1,3})\)\s+\S/;
-const SUB_LETTER = /^\s*([a-z])\)\s+\S/;
+// Real PDFs sometimes run the text straight after the bracket ("hh)The ..."), so the space is optional.
+const SUB_ITEM = /^\s*\(?([a-zA-Z]{1,4}|\d{1,3})\)\s*\S/;
 const RECITAL = /^\s*([A-Z])\.\s+\S/;
+
+// Sequence value of a sub-item label. Single letters are a=1..z=26; a repeated multi-letter label
+// (aa, bb, ... hh) continues that run after z. Other multi-letter labels use bijective base 26.
+export function subItemOrdinal(label: string): number | null {
+  const l = label.trim().toLowerCase();
+  if (!l) return null;
+  if (/^\d+$/.test(l)) return Number(l);
+  for (const ch of l) if (ch < 'a' || ch > 'z') return null;
+  if (l.length === 1) return l.charCodeAt(0) - 96;
+  if (/^(.)\1$/.test(l)) return 26 + (l.charCodeAt(0) - 96);
+  let n = 0;
+  for (const ch of l) n = n * 26 + (ch.charCodeAt(0) - 96);
+  return n;
+}
+
+// A label continues the run when it is the first label or the next value after the previous one.
+export function continuesSubSequence(last: number | null, label: string): boolean {
+  const ord = subItemOrdinal(label);
+  if (ord === null) return false;
+  return ord === 1 || (last !== null && ord === last + 1);
+}
 
 interface FlatLine {
   page: number;
@@ -25,7 +46,7 @@ interface FlatLine {
 }
 
 // Anchors come from the same table-aware unit detection used for chunking, so table rows
-// never become clause labels. Sub-items inside a unit get a composed label such as 23(a).
+// never become clause labels. Sub-items inside a unit get a composed label, such as parent plus (a).
 export function buildAnchorIndex(pages: Map<number, string>): AnchorIndex {
   const pageNos = [...pages.keys()].sort((a, b) => a - b);
   const flat: FlatLine[] = [];
@@ -45,10 +66,13 @@ export function buildAnchorIndex(pages: Map<number, string>): AnchorIndex {
   // A unit with no clause number of its own (a lettered or table unit) belongs to the clause before it,
   // so its sub-items keep that clause as their prefix. A section heading ends the clause.
   let currentTop: string | null = null;
+  // Sequence value of the last accepted sub-item, per clause. Reset when the clause changes.
+  let lastSub: number | null = null;
   for (const unit of units) {
     const lines = unit.text.split('\n');
     if (unit.startKind === 'section') currentTop = null;
-    const top = unit.clauseNo ?? currentTop;
+    const top: string | null = unit.clauseNo ?? currentTop;
+    if (top !== currentTop) lastSub = null;
     if (unit.startKind === 'clause' && unit.clauseNo !== null) currentTop = unit.clauseNo;
     let label = top ?? (unit.startKind === 'lettered' ? unit.heading?.slice(0, 12) ?? 'preamble' : 'preamble');
     let page = flat[pointer]?.page ?? pageNos[0];
@@ -72,8 +96,10 @@ export function buildAnchorIndex(pages: Map<number, string>): AnchorIndex {
         page = flatLine.page;
       }
       if (top !== null) {
-        const sub = SUB_PAREN.exec(line) ?? SUB_LETTER.exec(line);
-        const nextLabel = sub ? `${top}(${sub[1].toLowerCase()})` : top;
+        const sub = SUB_ITEM.exec(line);
+        const accepted = sub ? continuesSubSequence(lastSub, sub[1]) : false;
+        if (sub && accepted) lastSub = subItemOrdinal(sub[1]);
+        const nextLabel = sub && accepted ? `${top}(${sub[1].toLowerCase()})` : label;
         if (nextLabel !== label) {
           flush();
           label = nextLabel;

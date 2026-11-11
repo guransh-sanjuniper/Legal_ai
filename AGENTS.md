@@ -37,7 +37,7 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - A task in `received` with a saved raw response is parsed and saved again with no new AI call.
 - Supabase `runs.status` is authoritative. If Supabase is unreachable, the runner pauses, not fails.
 - One runner per document, enforced by `navigator.locks` (`doc:<docHash>`, `ifAvailable`).
-- Concurrency 2.
+- Concurrency is `VITE_CONCURRENCY` (default 3) inside `executeTasks`, with one claim per task per round and one shared backoff gate so concurrent workers pause together after `http_429` / network / `http_5xx`.
 - Show "AI-assisted, requires lawyer review" on all outputs (later prompts).
 
 ## Pages (dev)
@@ -49,10 +49,15 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - Chunking: top-level clauses must continue the numeric sequence (`N)` primarily, `N.` legacy). `(a)`, `(i)`, `a)`, `(N)` stay inside the clause. Lettered recitals continue A..Z with one restart allowed. Table rows are never boundaries (Sr./no. headers, numbered name/amount rows, bare `N text`).
 - `checkChunks` (shown as the "Chunk check" panel) reports page gaps/overlaps, above-max chunks, bad starts, missing/repeated clauses and size-only clause splits.
 - Golden test: `tests/golden/hiramoti.test.ts` reads `HIRAMOTI_PDF` (or a known local path) and skips if the PDF is absent.
+- Golden scoring: every `tests/golden/<docname>.json` is read by the analysis page in the `{expected:[{clause, token, kind}]}` format (`kind` is `payment` or `favour`). A file with `"holdout": true` is excluded from the tuning report. A bare clause matches its sub-items; a sub-item expectation needs the same sub-item.
 - Embeddings: `Xenova/multilingual-e5-small` q8, version `...@q8-v1`, `passage:` for chunks, `query:` for questions, windows ≤400 tokens pointing at a parent chunk. Vectors store model + modelVersion + prepFingerprint; a mismatch re-embeds.
 - Definitions use a non-reasoning model: set `VITE_SEARCH_MODEL` (e.g. `openai/gpt-4o-mini`). Reasoning models can spend the whole output budget on reasoning and return no JSON; that now fails as `empty_output` instead of splitting.
 - Analysis runs on separate small chunks (~700 target / 1200 max tokens) with `[[pN]]` page markers. Quotes are located on the cited page, then the chunk range, then the whole document; page/clause are taken from where they are found, and page corrections are counted.
-- Clauses with no model entry are listed as skipped and retried once with a clause-only input. Judgement (whole-document Ask) uses the same resolver and one focused retry for chunks with no finding; obvious Developer burdens labelled as Developer favours are reclassified as neutral.
+- Clauses with no model entry are listed as skipped and retried once with a clause-only input. Judgement (whole-document Ask) uses the same resolver and one focused retry for chunks with no finding.
+- Judgement directions are `favours_a` / `favours_b` / `neutral`, where A and B are the two agreement parties in definitions-sheet order. Party names come from the sheet, never from fixed text. Any clause with lettered or roman sub-items is packed into small sub-item groups and checked on its own. A burden on a party is never reported as a benefit to that party; obvious cases are reclassified as neutral.
+- Document type: one classification call stores `agreement` / `lease` / `deed` / `notice` / `other` on the document (`docType`). It only chooses an extra prompt checklist; unknown or `other` uses the general checklist.
+- Chunker numbering: `N.`, `N.N`, `N.N.N`, `N)`, `(N)`, `Clause N`, `Section N`, `Article IV` and `ARTICLE N: TITLE` are detected by the sequence rule (the next number continues the previous). `(N)` and `Section N` also appear as lists, so in a document that uses dotted or paren clauses they must continue a run of the same style. Table rows and numbered lists inside a clause are never boundaries.
+- Anchors: sub-item labels follow their own sequence (a..z, then aa, bb, ...), and a unit with no clause number of its own keeps the preceding clause as its prefix.
 - Analysis uses `VITE_ANALYSIS_MODEL` (fallback `VITE_SEARCH_MODEL`, then `VITE_MODEL`), reasoning minimal. Prices per 1M tokens: `VITE_PRICE_INPUT_PER_M` / `VITE_PRICE_OUTPUT_PER_M`. Budget starts at 2600 and is replaced by ~1.5× the measured p95 completion tokens after a run.
 - Every quoted item is verified against the cited stored page (whitespace/quote/dash/hyphen normalised). Unverified items are dropped and counted, never shown. Roll-up sentences must cite a valid item ID or they are dropped.
 - The report is saved to `reports` (Supabase) and `analysis_reports` (IndexedDB); with local state cleared, the page restores it from Supabase.

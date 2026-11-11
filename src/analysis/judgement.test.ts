@@ -133,7 +133,7 @@ describe('sub-item groups (synthetic text)', () => {
 describe('sub-items after a unit without a clause number', () => {
   it('keeps the enclosing clause as the prefix of the sub-item', () => {
     const pages = new Map<number, string>([
-      [1, '5) Payments\nbody text here.\nB. A lettered heading line.\n(b) sub item after the heading.\n6) Next\nbody'],
+      [1, '5) Payments\nbody text here.\nB. A lettered heading line.\n(a) first sub item after the heading.\n(b) sub item after that.\n6) Next\nbody'],
     ]);
     const labels = buildAnchorIndex(pages).segments.map((s) => s.clause);
     expect(labels).toContain('5(b)');

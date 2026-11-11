@@ -295,7 +295,7 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
     ranges.set(`j${chunk.index}`, { start: chunk.pageStart, end: chunk.pageEnd });
     plans.push({
       suffix: `j${chunk.index}`,
-      promptVersion: 'judgement-v2',
+      promptVersion: 'judgement-v3',
       prompt,
       input: `QUESTION: ${opts.question}\n\n${pageInput(pages, chunk.pageStart, chunk.pageEnd)}`,
       maxTokens: opts.maxTokens ?? 1600,
@@ -306,7 +306,7 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
     ranges.set(g.suffix, { start: g.pageStart, end: g.pageEnd });
     plans.push({
       suffix: g.suffix,
-      promptVersion: 'judgement-sub-v1',
+      promptVersion: 'judgement-sub-v2',
       prompt,
       input: `QUESTION: ${opts.question}\nThe excerpt is one group of sub-items of clause ${g.clause}. Judge each sub-item on its own.\n\n${g.text}`,
       maxTokens: 1000,
@@ -373,7 +373,7 @@ export async function runJudgement(opts: JudgementOptions): Promise<JudgementRes
     ranges.set(suffix, { start: chunk.pageStart, end: chunk.pageEnd });
     retryPlans.push({
       suffix,
-      promptVersion: 'judgement-v2',
+      promptVersion: 'judgement-v3',
       prompt,
       input: `QUESTION: ${opts.question}\nFocus on these clauses: ${missing.join(', ')}\n\n${text || pageInput(pages, chunk.pageStart, chunk.pageEnd)}`,
       maxTokens: 1400,

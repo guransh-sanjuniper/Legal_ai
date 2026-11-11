@@ -26,13 +26,27 @@ export const DEFINITIONS_PROMPT = [
   'Return an empty array if the excerpt has no parties, definitions or dates.',
 ].join('\n');
 
-const DEFINITION_CUE =
-  /(shall mean|means|hereinafter|referred to as|definitions?|party|parties|society|developer|purchaser|allottee|lessor|licensor|LLP|private limited)/i;
+// Role-neutral cues only: a clause that defines terms or introduces the parties, whatever the parties
+// are called. "between ... and ..." catches an opening party recital with no definition wording.
+const DEFINITION_CUES: RegExp[] = [
+  /\bshall\s+mean\b/i,
+  /\bmeans\b/i,
+  /\bhereinafter\b/i,
+  /\breferred\s+to\s+as\b/i,
+  /\bdesignated\s+as\b/i,
+  /\bdefinitions?\b/i,
+  /\bpart(?:y|ies)\b/i,
+  /\bbetween\s+[^.]{0,160}\band\b/i,
+];
+
+export function hasDefinitionCue(text: string): boolean {
+  return DEFINITION_CUES.some((re) => re.test(text));
+}
 
 export function selectDefinitionChunks(chunks: ChunkRecord[], max = 8): ChunkRecord[] {
   return [...chunks]
     .sort((a, b) => a.index - b.index)
-    .filter((c) => DEFINITION_CUE.test(c.text))
+    .filter((c) => hasDefinitionCue(c.text))
     .slice(0, max);
 }
 

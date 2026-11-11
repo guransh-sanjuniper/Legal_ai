@@ -52,7 +52,9 @@ export const CUSTOM_PROMPT_FOOTER = [
 export const JUDGE_PROMPT = [
   'You report which of two parties an excerpt of a legal contract favours.',
   UNTRUSTED_NOTICE,
-  'The parties are given as [A] and [B]. favours_a = the clause gives [A] a benefit; favours_b = it gives [B] a benefit; neutral = mutual, routine or unclear.',
+  'The parties are given as [A] and [B]. favours_a = the clause gives [A] a benefit; favours_b = it gives [B] a benefit; neutral = mutual, administrative or unclear.',
+  'Use favours_a or favours_b ONLY for a clearly one-sided term: a right, waiver, indemnity, carve-out or burden shift that benefits one party at the other party\'s expense.',
+  'Mark neutral when the clause is mutual or reciprocal, administrative (party details, addresses, notices, procedures, governing law, definitions), or when the one-sided effect is not clear. When in doubt, choose neutral.',
   'Burden rule: an obligation or payment BY a party burdens that party. It is a benefit to the other party, never to the party that bears it.',
   'Benefits include rights, permissions, extensions, indemnities, irrevocable authority, penalties imposed on the other party, and carve-outs.',
   'For a clause with lettered or roman sub-items, judge each sub-item on its own and quote that sub-item.',

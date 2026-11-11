@@ -19,7 +19,7 @@ BT
 14 TL
 60 760 Td
 (1. Definitions) Tj T*
-(1.1 Developer means Sunrise Realty Pvt Ltd.) Tj T*
+(1.1 Developer means Example Realty Pvt Ltd.) Tj T*
 (1.2 Purchaser means the person named in Schedule A.) Tj T*
 ET
 endstream
@@ -157,14 +157,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
 endobj
 23 0 obj
-<< /Length 181 >>
+<< /Length 183 >>
 stream
 BT
 /F1 11 Tf
 14 TL
 60 760 Td
 (Schedule A Purchaser Details) Tj T*
-(Name: Asha Kulkarni. Unit 12, Building B.) Tj T*
+(Name: Test Person One. Unit 12, Building B.) Tj T*
 (Schedule B Payment Plan) Tj T*
 (Instalments as agreed.) Tj T*
 ET
@@ -199,5 +199,5 @@ xref
 trailer
 << /Size 24 /Root 1 0 R >>
 startxref
-3859
+3861
 %%EOF

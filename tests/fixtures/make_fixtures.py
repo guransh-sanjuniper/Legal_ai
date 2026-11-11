@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 FIXTURE_PAGES = {
-    1: ["1. Definitions", "1.1 Developer means Sunrise Realty Pvt Ltd.", "1.2 Purchaser means the person named in Schedule A."],
+    1: ["1. Definitions", "1.1 Developer means Example Realty Pvt Ltd.", "1.2 Purchaser means the person named in Schedule A."],
     2: ["2. Possession", "2.1 The Developer shall hand over possession on or before 31 March 2027.", "(a) subject to force majeure;", "(b) subject to payment of all dues."],
     3: ["3. Price", "3.1 The total consideration is Rs. 1,25,00,000 payable as per Schedule B.", "3.1.1 First instalment on booking."],
     4: ["4. Penalty", "4.1 Delay beyond six months attracts interest at 2 percent per month.", "(i) interest shall be paid monthly."],
@@ -19,7 +19,7 @@ FIXTURE_PAGES = {
     7: ["7. Termination", "7.1 Either party may terminate on 60 days notice.", "7.2 Refund shall be made within 90 days of termination."],
     8: ["8. Dispute Resolution", "8.1 Disputes shall be referred to the Real Estate Regulatory Authority.", "8.2 Governing law is the law of Maharashtra."],
     9: ["9. Notices", "9.1 Notices shall be in writing and sent to the registered address.", "9.2 Email notices are valid when acknowledged."],
-    10: ["Schedule A Purchaser Details", "Name: Asha Kulkarni. Unit 12, Building B.", "Schedule B Payment Plan", "Instalments as agreed."],
+    10: ["Schedule A Purchaser Details", "Name: Test Person One. Unit 12, Building B.", "Schedule B Payment Plan", "Instalments as agreed."],
 }
 
 
