@@ -16,6 +16,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `runner/` IndexedDB layer, `runTask`, worker, client (plain TS, no UI imports)
 - `tasks/` task types, fingerprint, parse, split, validation
 - `retrieval/` embeddings in a worker (transformers.js), Unicode tokenizer + MiniSearch keyword index, RRF hybrid search, law stand-in, definitions sheet
+- `quality/` pure scorers over saved runs, golden thresholds, repeat-run comparison, regression config and score history (no UI imports)
 - `ui/` React pages only
 
 ## Tables
@@ -45,11 +46,15 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - `/?page=ingest` the ingestion page (upload PDF, OCR language, Start/resume, Recheck, review, chunks)
 - `/?page=search` embedding progress, hybrid document search, law stand-in search, definitions sheet
 - `/?page=analysis` clause analysis, verification, roll-up, cross-clause pass, ledger, metrics, Ask (retrieval / whole-document), custom prompt, restore, forced-failure and fallback checks
+- `/?page=quality` quality suite: per-document scores, thresholds, hold-outs, misses/drops, repeat-run comparison, regression set and stored score changes
 - Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing.
 - Chunking: top-level clauses must continue the numeric sequence (`N)` primarily, `N.` legacy). `(a)`, `(i)`, `a)`, `(N)` stay inside the clause. Lettered recitals continue A..Z with one restart allowed. Table rows are never boundaries (Sr./no. headers, numbered name/amount rows, bare `N text`).
 - `checkChunks` (shown as the "Chunk check" panel) reports page gaps/overlaps, above-max chunks, bad starts, missing/repeated clauses and size-only clause splits.
 - Golden test: `tests/golden/hiramoti.test.ts` reads `HIRAMOTI_PDF` (or a known local path) and skips if the PDF is absent.
-- Golden scoring: every `tests/golden/<docname>.json` is read by the analysis page in the `{expected:[{clause, token, kind}]}` format (`kind` is `payment` or `favour`). A file with `"holdout": true` is excluded from the tuning report. A bare clause matches its sub-items; a sub-item expectation needs the same sub-item.
+- Golden scoring: every `tests/golden/<doc>.json` is read by the quality page in the `{doc, holdout, note, expected:[{clause, token, kind, contains?, reason?}], removed:[...]}` format. `kind` is `payment`, `date`, `obligation`, `favour` or `risk`. A file with `"holdout": true` is scored but excluded from the tuning aggregate. A bare clause matches its sub-items; a sub-item expectation needs the same sub-item.
+- Quality scorer: pure functions in `src/quality/` read saved `analysis_reports` and stored pages, never call a model, and report recall (model and model+code for payments), precision on listed items, quote validity against the cited page, false "missing" claims, ledger-versus-task counts and overview figure fidelity. Favour recall uses the judgement snapshot attached to a saved report. Scores are kept in localStorage and compared with the previous stored run.
+- Repeat-run comparison runs the analysis twice on one document and reports matching verified items plus items seen in only one run.
+- The planted-fact tool (`scripts/plant_facts.py`) writes a synthetic text PDF and a matching golden file; `tests/golden/planted.test.ts` checks the facts are on the recorded pages and scores it without a model call.
 - Embeddings: `Xenova/multilingual-e5-small` q8, version `...@q8-v1`, `passage:` for chunks, `query:` for questions, windows ≤400 tokens pointing at a parent chunk. Vectors store model + modelVersion + prepFingerprint; a mismatch re-embeds.
 - Definitions use a non-reasoning model: set `VITE_SEARCH_MODEL` (e.g. `openai/gpt-4o-mini`). Reasoning models can spend the whole output budget on reasoning and return no JSON; that now fails as `empty_output` instead of splitting.
 - Analysis runs on separate small chunks (~700 target / 1200 max tokens) with `[[pN]]` page markers. Quotes are located on the cited page, then the chunk range, then the whole document; page/clause are taken from where they are found, and page corrections are counted.
@@ -67,4 +72,5 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - `npm run dev` the SPA
 - `npm test` unit tests (runTask with fake-indexeddb, chunker, page quality, OCR output check)
 - `python3 tests/fixtures/make_fixtures.py` regenerates test PDFs (scanned30.pdf is gitignored)
+- `python3 scripts/plant_facts.py --out tests/fixtures/planted.pdf --golden tests/golden/planted.json` regenerates the planted-fact PDF and golden file (synthetic text only; add `--seed`, `--pages`, `--facts`)
 - `npx supabase start`, then `npx supabase functions serve ai-proxy --env-file supabase/functions/.env`

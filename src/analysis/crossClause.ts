@@ -102,7 +102,7 @@ export function findContradictions(clauses: {
   return findings;
 }
 
-const EXPECTED_TOPICS: { label: string; pattern: RegExp }[] = [
+export const EXPECTED_TOPICS: { label: string; pattern: RegExp }[] = [
   { label: 'possession', pattern: /possession|hand ?over|handover/i },
   { label: 'payment schedule', pattern: /payment|instal?ment|consideration/i },
   { label: 'termination', pattern: /terminat|cancel|rescind/i },

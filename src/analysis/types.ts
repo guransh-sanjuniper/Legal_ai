@@ -85,6 +85,19 @@ export interface CrossClauseResult {
   payments: { payer: string; payee: string; count: number; amounts: string[]; numericTotal: number | null }[];
 }
 
+// A saved judgement is attached to the local report record so the quality suite can re-score
+// favour recall without making another model call. It is optional: older reports do not have it.
+export interface JudgementSnapshot {
+  parties: { a: string | null; b: string | null };
+  rows: {
+    clause: string;
+    page: number;
+    quote: string;
+    direction: 'favours_a' | 'favours_b' | 'neutral';
+    why: string;
+  }[];
+}
+
 export interface AnalysisMetrics {
   calls: number;
   promptTokens: number;
@@ -127,4 +140,5 @@ export interface AnalysisReport {
   };
   resolution: { pageCorrected: number; dropped: number; skippedClauses: number };
   notices: string[];
+  judgement?: JudgementSnapshot;
 }

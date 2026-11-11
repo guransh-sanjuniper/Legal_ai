@@ -4,6 +4,7 @@ import { TestPage } from './ui/TestPage';
 import { IngestPage } from './ui/IngestPage';
 import { SearchPage } from './ui/SearchPage';
 import { AnalysisPage } from './ui/AnalysisPage';
+import { QualityPage } from './ui/QualityPage';
 
 const page = new URLSearchParams(window.location.search).get('page');
 
@@ -15,6 +16,8 @@ createRoot(document.getElementById('root')!).render(
       <SearchPage />
     ) : page === 'analysis' ? (
       <AnalysisPage />
+    ) : page === 'quality' ? (
+      <QualityPage />
     ) : (
       <TestPage />
     )}

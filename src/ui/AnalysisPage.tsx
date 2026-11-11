@@ -12,7 +12,7 @@ import { runFallbackCheck, runForcedFailure, type FallbackCheckResult } from '..
 import { ANALYSIS_MODEL, FALLBACK_MODEL } from '../analysis/config';
 import type { AnalysisReport } from '../analysis/types';
 import { ledgerSummary } from '../analysis/ledger';
-import { scorePayments, scoreFavours, isTuningGolden, type GoldenFile } from '../analysis/goldenScore';
+import { scorePayments, scoreFavours, isTuningGolden, goldenDocName, type GoldenFile } from '../analysis/goldenScore';
 
 // Every tests/golden/*.json is a scoring file. Holdout files are never shown in the tuning report.
 const GOLDEN_FILES = import.meta.glob('../../tests/golden/*.json', { eager: true, import: 'default' }) as Record<
@@ -221,6 +221,28 @@ export function AnalysisPage() {
         });
         setJudgement(j);
         setAsk(null);
+        // Attach the judgement to the saved report so the quality suite can re-score favour
+        // recall from stored runs without another model call.
+        if (report) {
+          const stored = await db.get('analysis_reports', report.runId);
+          if (stored) {
+            const merged: AnalysisReport = {
+              ...(stored.report as AnalysisReport),
+              judgement: {
+                parties: j.parties,
+                rows: [...j.rows, ...j.others].map((r) => ({
+                  clause: r.clause,
+                  page: r.page,
+                  quote: r.quote,
+                  direction: r.direction,
+                  why: r.why,
+                })),
+              },
+            };
+            await db.put('analysis_reports', { ...stored, report: merged });
+            setReport(merged);
+          }
+        }
         addLog(`judgement: ${j.summary}`);
       }
     } catch (e) {
@@ -289,7 +311,7 @@ export function AnalysisPage() {
     }
   }
 
-  const golden = report ? TUNING_GOLDENS.find((g) => g.document === report.docName) ?? null : null;
+  const golden = report ? TUNING_GOLDENS.find((g) => goldenDocName(g) === report.docName) ?? null : null;
   const paymentScore = report && golden ? scorePayments(report, golden.expected) : null;
   const allFavours = judgement
     ? [...judgement.rows, ...judgement.others].filter((r) => r.direction !== 'neutral')

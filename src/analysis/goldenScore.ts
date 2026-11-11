@@ -2,25 +2,36 @@ import type { AnalysisReport } from './types';
 import type { ExtractedAmount } from './amounts';
 import { canonicalClause, type JudgementRow, type Parties } from './judgement';
 
-// tests/golden/<docname>.json. "kind" is "payment" or "favour". For a payment, "token" must appear
-// in the payment's amount, quote, due text or clause summary. For a favour, "token" must appear
-// in the name of the party the row favours.
+// tests/golden/<doc>.json. "kind" selects the part of the saved run an expectation is checked
+// against. A payment token must appear in the payment's amount, quote, due text or the clause
+// summary. A date, obligation or risk token must appear in that item's text/quote. For a favour,
+// the token must appear in the name of the party the judgement row favours.
+export type GoldenKind = 'payment' | 'date' | 'obligation' | 'favour' | 'risk';
+
 export interface GoldenExpectation {
   clause: string;
   token: string;
-  kind: 'payment' | 'favour';
-  // Optional: the verified quote must contain this text, which narrows an expectation to one part
-  // of a mixed clause.
+  kind: GoldenKind;
+  // Optional: the verified quote (or item text) must contain this text, which narrows an
+  // expectation to one part of a mixed clause.
   contains?: string;
   // Why an expectation was narrowed or removed. Documentation only; ignored by scoring.
   reason?: string;
 }
 
 export interface GoldenFile {
+  // "doc" is the current spelling; "document" is read for older files.
+  doc?: string;
   document?: string;
   holdout?: boolean;
+  note?: string;
+  pages?: number;
+  // Expectations that were deliberately removed from the list. Documentation only.
+  removed?: GoldenExpectation[];
   expected: GoldenExpectation[];
 }
+
+export const goldenDocName = (file: GoldenFile): string | null => file.doc ?? file.document ?? null;
 
 // Holdout files are kept out of the tuning report so they are not tuned against.
 export function isTuningGolden(file: GoldenFile): boolean {

@@ -1,0 +1,82 @@
+{
+  "doc": "planted.pdf",
+  "holdout": false,
+  "note": "Synthetic planted-fact document. Facts were inserted at random numbered clauses; the decoy was not planted and the insurance clause is deliberately absent.",
+  "pages": 12,
+  "expected": [
+    {
+      "clause": "21",
+      "token": "85,000",
+      "kind": "payment",
+      "reason": "Planted contradiction: compensation amount A."
+    },
+    {
+      "clause": "10",
+      "token": "7,50,000",
+      "kind": "payment",
+      "reason": "Planted contradiction: the same compensation has a different amount."
+    },
+    {
+      "clause": "26",
+      "token": "15 June 2028",
+      "kind": "date",
+      "reason": "Planted fixed date."
+    },
+    {
+      "clause": "4",
+      "token": "keep the accounts audited annually",
+      "kind": "obligation",
+      "reason": "Planted obligation."
+    },
+    {
+      "clause": "5",
+      "token": "2,40,000",
+      "kind": "risk",
+      "reason": "Planted penalty (risk)."
+    },
+    {
+      "clause": "27",
+      "token": "15 June 2028",
+      "kind": "date",
+      "reason": "Planted payment date."
+    },
+    {
+      "clause": "18",
+      "token": "7,50,000",
+      "kind": "payment",
+      "reason": "Planted payment."
+    },
+    {
+      "clause": "33",
+      "token": "15 June 2028",
+      "kind": "date",
+      "reason": "Planted payment date."
+    },
+    {
+      "clause": "12",
+      "token": "85,000",
+      "kind": "payment",
+      "reason": "Planted payment."
+    },
+    {
+      "clause": "19",
+      "token": "30 September 2030",
+      "kind": "date",
+      "reason": "Planted payment date."
+    },
+    {
+      "clause": "4",
+      "token": "9,99,999",
+      "kind": "payment",
+      "reason": "DECOY: not planted. The scorer must report this expectation as missed."
+    }
+  ],
+  "removed": [
+    {
+      "clause": "none",
+      "token": "insurance",
+      "kind": "obligation",
+      "reason": "Standard insurance clause deliberately omitted from the synthetic document."
+    }
+  ]
+}
