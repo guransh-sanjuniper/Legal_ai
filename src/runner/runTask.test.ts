@@ -88,6 +88,19 @@ describe('runTask', () => {
     expect(saved[0].failure_code).toBe('input_too_large');
   });
 
+  it('requeues a 429 without counting an attempt or saving a failure row', async () => {
+    const saved: ResultRow[] = [];
+    const t = await newTask(db);
+    const out = await runTask(db, t, cfgWith([async () => { throw new CallError('http_429', 'rate limited', 12_000); }], saved));
+    const after = (await db.get('tasks', t.id))!;
+    expect(out).toBe('rate_limited');
+    expect(after.status).toBe('queued');
+    expect(after.attemptNo).toBe(0);
+    expect(after.attemptId).toBeNull();
+    expect(after.nextAt).toBeGreaterThan(Date.now());
+    expect(saved).toHaveLength(0);
+  });
+
   it('stores the provider message with the failed task and result row', async () => {
     const saved: ResultRow[] = [];
     const t = await newTask(db);

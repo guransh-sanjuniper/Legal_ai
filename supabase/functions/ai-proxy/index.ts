@@ -3,8 +3,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 const UPSTREAM = 'https://openrouter.ai/api/v1/chat/completions';
 const UPSTREAM_TIMEOUT_MS = 100_000;
 
-const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return json(405, { code: 'method_not_allowed' });
@@ -17,14 +17,23 @@ Deno.serve(async (req) => {
   const { data: userData, error: userErr } = await admin.auth.getUser(token);
   if (userErr || !userData.user) return json(401, { code: 'auth_required' });
 
-  const limit = Number(Deno.env.get('RATE_LIMIT_PER_MIN') ?? '30');
+  const configured = Number(Deno.env.get('RATE_LIMIT_PER_MIN') ?? '40');
+  const limit = Number.isInteger(configured) && configured > 0 ? configured : 40;
   const windowStart = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
-  const { data: count, error: rlErr } = await admin.rpc('increment_rate_limit', {
+  const retryAfter = Math.max(1, 60 - (Math.floor(Date.now() / 1000) % 60));
+  const { data: admitted, error: rlErr } = await admin.rpc('admit_rate_limit', {
     p_user: userData.user.id,
     p_window: windowStart,
+    p_limit: limit,
   });
   if (rlErr) return json(500, { code: 'internal' });
-  if ((count as number) > limit) return json(429, { code: 'http_429' });
+  if (admitted === null || admitted === undefined) {
+    return json(
+      429,
+      { code: 'http_429', message: 'per-user rate limit', retry_after: retryAfter, limit, used: limit },
+      { 'Retry-After': String(retryAfter), 'X-RateLimit-Limit': String(limit), 'X-RateLimit-Remaining': '0' },
+    );
+  }
 
   let body: { model?: unknown; messages?: unknown; max_tokens?: unknown; reasoning?: unknown };
   try {
@@ -72,7 +81,13 @@ Deno.serve(async (req) => {
     } catch {
       // Keep the raw body when it is not JSON.
     }
-    return json(upstream.status, { code: `http_${upstream.status}`, message: message || null });
+    const upstreamRetry = upstream.headers.get('retry-after');
+    const retrySeconds = upstreamRetry && /^\d+$/.test(upstreamRetry) ? Number(upstreamRetry) : 60;
+    return json(
+      upstream.status,
+      { code: `http_${upstream.status}`, message: message || null, retry_after: retrySeconds },
+      { 'Retry-After': String(retrySeconds) },
+    );
   }
 
   // Normalised NDJSON: {t:"d",c} deltas, then one {t:"end",...} with provider, finish_reason, usage.

@@ -1,9 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { HarnessDBHandle, DocumentRecord } from '../runner/db';
+import { rawKey } from '../runner/db';
 import { makeTask } from '../tasks/make';
+import { parseItems } from '../tasks/parse';
 import { runTask } from '../runner/runTask';
 import { makeCallModel } from '../runner/callModel';
-import { ACTIVE_STATUSES, type ResultRow, type RunConfig, type Task } from '../tasks/types';
+import { ACTIVE_STATUSES, type CallRequest, type CallResult, type ResultRow, type RunConfig, type Task } from '../tasks/types';
 import { estimateCost, BUDGET_FACTOR, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS, CONCURRENCY } from './config';
 import type { AnalysisMetrics } from './types';
 
@@ -42,6 +44,10 @@ export interface ExecuteContext {
   maxFailureRate?: number;
   // Reduce worker concurrency after repeated http_429 responses.
   autoReduceConcurrency?: boolean;
+  // Stop the pass and pause the run after this many consecutive 429 responses.
+  maxConsecutive429?: number;
+  // Test hook: replace the proxy call without changing the runner.
+  callModel?: (req: CallRequest) => Promise<CallResult>;
 }
 
 export interface TaskPlan {
@@ -63,6 +69,8 @@ export interface ExecuteResult {
   rateLimitEvents: number;
   rateLimitWaitMs: number;
   concurrency: number;
+  pausedReason: 'rate_limited' | null;
+  pausedRetryAfterMs: number;
 }
 
 export async function createRun(ctx: ExecuteContext, doc: DocumentRecord): Promise<string> {
@@ -80,12 +88,14 @@ export async function createRun(ctx: ExecuteContext, doc: DocumentRecord): Promi
 
 export function makeRunConfig(ctx: ExecuteContext): RunConfig {
   return {
-    callModel: makeCallModel({
-      functionsUrl: ctx.functionsUrl,
-      anonKey: ctx.anonKey,
-      accessToken: ctx.accessToken,
-      refreshToken: ctx.refreshAccessToken,
-    }),
+    callModel:
+      ctx.callModel ??
+      makeCallModel({
+        functionsUrl: ctx.functionsUrl,
+        anonKey: ctx.anonKey,
+        accessToken: ctx.accessToken,
+        refreshToken: ctx.refreshAccessToken,
+      }),
     saveResult: async (row: ResultRow) => {
       const { error } = await ctx.supabase.rpc('save_task_result', { p_row: row });
       if (error) throw error;
@@ -118,9 +128,22 @@ export async function executeTasks(
   const now = Date.now();
   for (const plan of plans) {
     bySuffix.set(plan.suffix, plan);
+    const id = `${runId}:${plan.suffix}`;
+    const existing = await ctx.db.get('tasks', id);
+    if (existing) {
+      // Resume: finished work is reused, paused/queued work is left for the runner below.
+      if (existing.status === 'done' && existing.attemptId) {
+        const raw = await ctx.db.get('raw_responses', rawKey(id, existing.attemptId));
+        if (raw) {
+          const parsed = parseItems(raw.text, plan.validate);
+          if ('items' in parsed && parsed.items.length) collected.push({ taskId: id, items: parsed.items });
+        }
+      }
+      continue;
+    }
     const task = await makeTask(
       {
-        id: `${runId}:${plan.suffix}`,
+        id,
         runId,
         parentId: null,
         depth: 0,
@@ -156,7 +179,10 @@ export async function executeTasks(
   let rateLimitEvents = 0;
   let rateLimitWaitMs = 0;
   let concurrency = CONCURRENCY;
-  let consecutive429 = 0;
+  let recent429: number[] = [];
+  let pausedReason: 'rate_limited' | null = null;
+  let pausedRetryAfterMs = 0;
+  const maxConsecutive429 = ctx.maxConsecutive429 ?? 10;
   for (let round = 0; round < 60; round++) {
     const all = await ctx.db.getAllFromIndex('tasks', 'byRun', runId);
     const active = all.filter((t) => ACTIVE_STATUSES.includes(t.status));
@@ -170,7 +196,7 @@ export async function executeTasks(
         if (!fresh || !ACTIVE_STATUSES.includes(fresh.status)) continue;
         await gate.wait(fresh.nextAt);
         const outcome = await runTask(ctx.db, fresh, cfg);
-        processed++;
+        if (outcome !== 'rate_limited') processed++;
         if (outcome === 'failed') failedSoFar++;
         if (ctx.maxFailureRate !== undefined && processed >= 10 && failedSoFar / processed > ctx.maxFailureRate) {
           aborted = true;
@@ -181,21 +207,24 @@ export async function executeTasks(
         const after = await ctx.db.get('tasks', id);
         if (after?.failureCode === 'http_429') {
           rateLimitEvents++;
-          const wait = cfg.backoffMs(after.attemptNo);
+          const nowMs = Date.now();
+          const wait = Math.max(1000, (after.nextAt ?? nowMs) - nowMs);
           rateLimitWaitMs += wait;
-          if (ctx.autoReduceConcurrency) {
-            consecutive429++;
-            if (consecutive429 >= 3 && concurrency > 1) {
-              concurrency--;
-              consecutive429 = 0;
-              ctx.onLog?.(`concurrency reduced to ${concurrency} after repeated http_429`);
-            }
+          recent429.push(nowMs);
+          recent429 = recent429.filter((t) => nowMs - t <= 60_000);
+          if (ctx.autoReduceConcurrency && recent429.length % 3 === 0 && concurrency > 1) {
+            concurrency--;
+            ctx.onLog?.(`concurrency reduced to ${concurrency} after repeated http_429`);
           }
-        } else if (outcome === 'done') {
-          consecutive429 = 0;
-        }
-        if (after && ACTIVE_STATUSES.includes(after.status) && RATE_LIMIT_CODES(after.failureCode)) {
-          gate.hold(cfg.backoffMs(after.attemptNo));
+          if (recent429.length >= maxConsecutive429) {
+            pausedReason = 'rate_limited';
+            pausedRetryAfterMs = wait;
+            aborted = true;
+            ctx.onLog?.(
+              `paused: rate limited after ${recent429.length} 429s in 60s (retry in ${Math.ceil(wait / 1000)}s)`,
+            );
+          }
+          gate.hold(wait);
         }
         ctx.onLog?.(`${fresh.id.slice(-14)}: ${outcome}${after?.failureCode ? `:${after.failureCode}` : ''}`);
       }
@@ -214,6 +243,8 @@ export async function executeTasks(
     rateLimitEvents,
     rateLimitWaitMs,
     concurrency,
+    pausedReason,
+    pausedRetryAfterMs,
   };
 }
 

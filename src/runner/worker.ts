@@ -116,6 +116,11 @@ async function drive(msg: StartMessage) {
       await sleep(UNREACHABLE_PAUSE_MS);
       continue;
     }
+    if (status === 'paused') {
+      // Keep queued/retry tasks intact so a resume can continue the same run.
+      post({ type: 'paused', reason: 'rate_limited' });
+      return;
+    }
     if (status !== 'running') {
       const tasks = await db.getAllFromIndex('tasks', 'byRun', msg.runId);
       for (const t of tasks) {

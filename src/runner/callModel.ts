@@ -1,5 +1,15 @@
 import { CallError, type CallRequest, type CallResult } from '../tasks/types';
 
+// Retry-After may be seconds ("60") or an HTTP date.
+export function parseRetryAfter(value: string | null, now = Date.now()): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const at = Date.parse(value);
+  if (Number.isFinite(at)) return Math.max(0, at - now);
+  return null;
+}
+
 interface StreamEnd {
   provider?: string | null;
   finish_reason?: string | null;
@@ -67,8 +77,13 @@ export function makeCallModel(opts: {
         throw new CallError(timedOut ? 'timeout' : 'network');
       }
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string };
-        throw new CallError(body.code ?? `http_${res.status}`, body.message);
+        const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string; retry_after?: number };
+        const headerMs = parseRetryAfter(res.headers.get('retry-after'));
+        const bodyMs =
+          typeof body.retry_after === 'number' && Number.isFinite(body.retry_after)
+            ? Math.round(body.retry_after * 1000)
+            : null;
+        throw new CallError(body.code ?? `http_${res.status}`, body.message, headerMs ?? bodyMs ?? undefined);
       }
       return await readStream(res, () => timedOut, started);
     } finally {

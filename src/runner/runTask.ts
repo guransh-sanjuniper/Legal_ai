@@ -77,6 +77,24 @@ async function attempt(db: HarnessDBHandle, task: Task, cfg: RunConfig): Promise
   } catch (e) {
     const code = e instanceof CallError ? e.code : 'network';
     const message = e instanceof CallError ? e.message : String(e);
+    if (code === 'http_429') {
+      // A rate limit is not an attempt. Keep the original attempt number, requeue with the
+      // Retry-After delay, and never write a failed result row.
+      const delay = Math.max(1000, e instanceof CallError && e.retryAfterMs ? e.retryAfterMs : cfg.backoffMs(task.attemptNo));
+      const now = cfg.now();
+      await db.put('tasks', {
+        ...task,
+        status: 'queued',
+        attemptNo: task.attemptNo,
+        attemptId: null,
+        model: null,
+        nextAt: now + delay,
+        failureCode: 'http_429',
+        failureMessage: message,
+        updatedAt: now,
+      });
+      return 'rate_limited';
+    }
     return fail(db, requesting, code, cfg, cfg.now() - started, message);
   }
 

@@ -4,7 +4,7 @@ import { openHarnessDb, type HarnessDBHandle, type AnalysisReportRecord, type Do
 import type { Task } from '../tasks/types';
 import { RetrievalClient, type SearchResult } from '../retrieval/client';
 import { getDefinitions } from '../retrieval/definitions';
-import { runAnalysis, restoreReportFromSupabase } from '../analysis/runAnalysis';
+import { runAnalysis, restoreReportFromSupabase, RateLimitedPause } from '../analysis/runAnalysis';
 import { retryFailedClauseTasks, type RetryOutcome } from '../analysis/retryFailed';
 import { runJudgement, looksLikeBurdenOn, partiesOf, type JudgementResult } from '../analysis/judgement';
 import { classifyDocument } from '../analysis/docType';
@@ -50,6 +50,7 @@ export function AnalysisPage() {
   const [fb, setFb] = useState<FallbackCheckResult | null>(null);
   const [forced, setForced] = useState<{ pass: boolean; detail: string } | null>(null);
   const [retryResult, setRetryResult] = useState<RetryOutcome | null>(null);
+  const [pausedRun, setPausedRun] = useState<{ runId: string; retryAfterMs: number } | null>(null);
   const clientRef = useRef<RetrievalClient | null>(null);
 
   const addLog = (line: string) => setLog((l) => [...l.slice(-300), `${new Date().toLocaleTimeString()} ${line}`]);
@@ -113,6 +114,32 @@ export function AnalysisPage() {
     setFailedTasks((await db.getAllFromIndex('tasks', 'byRun', runId)).filter((t) => t.status === 'failed'));
   }
 
+  // Find a paused run for the selected document so Resume survives a reload.
+  useEffect(() => {
+    if (!db || !docId) {
+      setPausedRun(null);
+      return;
+    }
+    const doc = docs.find((d) => d.id === docId);
+    if (!doc) return;
+    let cancelled = false;
+    sb.from('runs')
+      .select('id,retry_after')
+      .eq('doc_hash', doc.hash)
+      .eq('status', 'paused')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled || !data?.id) return;
+        const retryAfterMs = data.retry_after ? Math.max(0, new Date(data.retry_after).getTime() - Date.now()) : 0;
+        setPausedRun({ runId: data.id, retryAfterMs });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [db, docId, docs]);
+
   function searchAdapter(): ((q: string, k: number) => Promise<RetrievedChunk[]>) | null {
     if (!clientRef.current || !docId) return null;
     return async (q, k) => {
@@ -131,10 +158,10 @@ export function AnalysisPage() {
     };
   }
 
-  async function analyse() {
+  async function runAnalysisNow(resumeRunId?: string) {
     if (!db || !docId || !session || !clientRef.current) return;
     setBusy(true);
-    setProgress('starting');
+    setProgress(resumeRunId ? 'resuming paused run' : 'starting');
     try {
       const r = await runAnalysis({
         db,
@@ -148,6 +175,7 @@ export function AnalysisPage() {
         model: ANALYSIS_MODEL,
         fallbackModel: FALLBACK_MODEL,
         reasoning: { effort: 'minimal' },
+        resumeRunId,
         lawSearch: async (text, k) => clientRef.current!.lawSearch(text, k).then((x) => x.results),
         docSearch: async (q, k) => {
           const r = await clientRef.current!.search(docId, q, k);
@@ -159,14 +187,30 @@ export function AnalysisPage() {
       });
       setReport(r);
       setSource('local');
+      setPausedRun(null);
       setProgress('done');
       await loadFailed(r.runId);
     } catch (e) {
-      addLog(`analysis failed: ${String(e)}`);
-      setProgress(`error: ${String(e)}`);
+      if (e instanceof RateLimitedPause) {
+        setPausedRun({ runId: e.runId, retryAfterMs: e.retryAfterMs });
+        setProgress(`paused: rate limited (retry after ${Math.ceil(e.retryAfterMs / 1000)}s)`);
+        addLog(`paused: rate limited; run ${e.runId.slice(0, 8)} can be resumed`);
+      } else {
+        addLog(`analysis failed: ${String(e)}`);
+        setProgress(`error: ${String(e)}`);
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  async function analyse() {
+    await runAnalysisNow();
+  }
+
+  async function resumePaused() {
+    if (!pausedRun) return;
+    await runAnalysisNow(pausedRun.runId);
   }
 
   async function retryFailed() {
@@ -386,6 +430,11 @@ export function AnalysisPage() {
           ))}
         </select>{' '}
         <button disabled={busy || !docId || !session} onClick={analyse}>Run analysis</button>{' '}
+        {pausedRun && (
+          <button disabled={busy || !session} onClick={resumePaused}>
+            Resume paused run {pausedRun.retryAfterMs > 0 ? `(retry after ${Math.ceil(pausedRun.retryAfterMs / 1000)}s)` : ''}
+          </button>
+        )}{' '}
         <button disabled={busy || !docId || !session || !report} onClick={retryFailed} title="Retries up to 5 failed clause units; oversized inputs are split first">
           Retry failed only
         </button>{' '}

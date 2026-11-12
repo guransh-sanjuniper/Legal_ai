@@ -12,7 +12,11 @@ export type TaskStatus =
 export const ACTIVE_STATUSES: TaskStatus[] = ['queued', 'requesting', 'received', 'retry_wait', 'uncertain'];
 
 export class CallError extends Error {
-  constructor(public code: string, message?: string) {
+  constructor(
+    public code: string,
+    message?: string,
+    public retryAfterMs?: number,
+  ) {
     super(message ?? code);
   }
 }
@@ -100,7 +104,7 @@ export interface ResultRow {
   payload: unknown | null;
 }
 
-export type StepOutcome = 'done' | 'split' | 'retry_wait' | 'failed' | 'stale' | 'save_pending';
+export type StepOutcome = 'done' | 'split' | 'retry_wait' | 'rate_limited' | 'failed' | 'stale' | 'save_pending';
 
 export interface RunConfig {
   callModel: (req: CallRequest) => Promise<CallResult>;

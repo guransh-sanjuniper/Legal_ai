@@ -11,7 +11,7 @@ import { buildLedger, type LedgerChunkInput } from './ledger';
 import { dedupeVerifiedClauses } from './dedupe';
 import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
 import { CLAUSE_PROMPT, SECTION_PROMPT, OVERVIEW_PROMPT, checklistFor } from './prompts';
-import { computeMetrics, createRun, executeTasks, type ExecuteContext, type TaskPlan } from './execute';
+import { computeMetrics, createRun, executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS } from './config';
 import type { Task } from '../tasks/types';
 import type {
@@ -61,6 +61,18 @@ export interface AnalysisOptions {
   onLog?: (msg: string) => void;
   maxFailureRate?: number;
   autoReduceConcurrency?: boolean;
+  maxConsecutive429?: number;
+  resumeRunId?: string;
+  callModel?: (req: import('../tasks/types').CallRequest) => Promise<import('../tasks/types').CallResult>;
+}
+
+export class RateLimitedPause extends Error {
+  constructor(
+    public runId: string,
+    public retryAfterMs: number,
+  ) {
+    super('paused: rate limited');
+  }
 }
 
 export function isValidClauseItem(x: unknown): boolean {
@@ -184,9 +196,30 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     onLog: log,
     maxFailureRate: opts.maxFailureRate,
     autoReduceConcurrency: opts.autoReduceConcurrency ?? true,
+    maxConsecutive429: opts.maxConsecutive429 ?? 10,
+    callModel: opts.callModel,
   };
 
-  const runId = await createRun(ctx, doc);
+  let runId: string;
+  let priorEvents = 0;
+  let priorWaitMs = 0;
+  if (opts.resumeRunId) {
+    runId = opts.resumeRunId;
+    const { data } = await supabase
+      .from('runs')
+      .select('rate_limit_events,rate_limit_wait_ms')
+      .eq('id', runId)
+      .maybeSingle();
+    priorEvents = Number(data?.rate_limit_events ?? 0);
+    priorWaitMs = Number(data?.rate_limit_wait_ms ?? 0);
+    await supabase
+      .from('runs')
+      .update({ status: 'running', paused_reason: null, retry_after: null, updated_at: new Date().toISOString() })
+      .eq('id', runId);
+    progress(`resuming run ${runId.slice(0, 8)}`);
+  } else {
+    runId = await createRun(ctx, doc);
+  }
 
   // 1. Clause analysis, one task per analysis chunk, every clause number requested.
   const plans: TaskPlan[] = chunks.map((chunk) => ({
@@ -199,8 +232,29 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   }));
   progress(`analysing ${plans.length} chunks`);
   const first = await executeTasks(ctx, runId, doc, plans);
-  let rateLimitEvents = first.rateLimitEvents;
-  let rateLimitWaitMs = first.rateLimitWaitMs;
+  let rateLimitEvents = priorEvents;
+  let rateLimitWaitMs = priorWaitMs;
+  const addLimits = (r: ExecuteResult) => {
+    rateLimitEvents += r.rateLimitEvents;
+    rateLimitWaitMs += r.rateLimitWaitMs;
+  };
+  const pauseIfNeeded = async (r: ExecuteResult) => {
+    if (!r.pausedReason) return;
+    await supabase
+      .from('runs')
+      .update({
+        status: 'paused',
+        paused_reason: r.pausedReason,
+        retry_after: new Date(Date.now() + r.pausedRetryAfterMs).toISOString(),
+        rate_limit_events: rateLimitEvents,
+        rate_limit_wait_ms: rateLimitWaitMs,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', runId);
+    throw new RateLimitedPause(runId, r.pausedRetryAfterMs);
+  };
+  addLimits(first);
+  await pauseIfNeeded(first);
 
   const rawByChunk = new Map<number, unknown[]>();
   const collect = (collected: { taskId: string; items: unknown[] }[], prefix: string) => {
@@ -254,8 +308,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     }
     progress(`retrying ${retryPlans.length} chunks with skipped clauses`);
     const retry = await executeTasks(ctx, runId, doc, retryPlans);
-    rateLimitEvents += retry.rateLimitEvents;
-    rateLimitWaitMs += retry.rateLimitWaitMs;
+    addLimits(retry);
+    await pauseIfNeeded(retry);
     retryTasks = retry.tasks;
     collect(retry.collected, 'r');
   }
@@ -288,8 +342,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     });
     progress(`retrying ${retryPlans.length} failed chunks with backoff`);
     const retry = await executeTasks(ctx, runId, doc, retryPlans);
-    rateLimitEvents += retry.rateLimitEvents;
-    rateLimitWaitMs += retry.rateLimitWaitMs;
+    addLimits(retry);
+    await pauseIfNeeded(retry);
     secondRetryTasks = retry.tasks;
     collect(retry.collected, 'x');
   }
@@ -478,8 +532,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   if (sectionPlans.length > 0) {
     progress(`summarising ${sectionPlans.length} sections`);
     const sectionRun = await executeTasks(ctx, runId, doc, sectionPlans);
-    rateLimitEvents += sectionRun.rateLimitEvents;
-    rateLimitWaitMs += sectionRun.rateLimitWaitMs;
+    addLimits(sectionRun);
+    await pauseIfNeeded(sectionRun);
     applySectionCollected(sectionRun.collected);
 
     // A section summary that hit the output limit is split into two smaller groups, not failed.
@@ -507,8 +561,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       if (retryPlans.length > 0) {
         progress(`splitting ${failedSections.length} over-length section summaries`);
         const retryRun = await executeTasks(ctx, runId, doc, retryPlans);
-        rateLimitEvents += retryRun.rateLimitEvents;
-        rateLimitWaitMs += retryRun.rateLimitWaitMs;
+        addLimits(retryRun);
+        await pauseIfNeeded(retryRun);
         applySectionCollected(retryRun.collected);
       }
     }
@@ -530,8 +584,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       validate: (x) => typeof x === 'object' && x !== null,
     };
     const ovRun = await executeTasks(ctx, runId, doc, [overviewPlan]);
-    rateLimitEvents += ovRun.rateLimitEvents;
-    rateLimitWaitMs += ovRun.rateLimitWaitMs;
+    addLimits(ovRun);
+    await pauseIfNeeded(ovRun);
     const valid = new Set(sectionSentences.map((s) => s.id));
     for (const s of sectionSentences) for (const cite of s.cites) valid.add(cite);
     for (const c of ovRun.collected) overview.push(...keepCitedSentences(c.items as never[], valid).kept);
@@ -769,7 +823,17 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   });
   const { error: saveErr } = await supabase.from('reports').insert({ run_id: runId, body: report, coverage: ledger });
   if (saveErr) log(`report save to Supabase failed: ${saveErr.message}`);
-  await supabase.from('runs').update({ status: 'complete', updated_at: new Date().toISOString() }).eq('id', runId);
+  await supabase
+    .from('runs')
+    .update({
+      status: 'complete',
+      paused_reason: null,
+      retry_after: null,
+      rate_limit_events: rateLimitEvents,
+      rate_limit_wait_ms: rateLimitWaitMs,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', runId);
   progress(`report saved (${metrics.calls} calls, ${metrics.completionTokens} completion tokens)`);
   return report;
 }

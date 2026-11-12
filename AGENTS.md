@@ -49,6 +49,9 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - `/?page=analysis` clause analysis, verification, roll-up, cross-clause pass, ledger, metrics, Ask (retrieval / whole-document), custom prompt, restore, forced-failure and fallback checks
 - `/?page=quality` quality suite: per-document scores, thresholds, hold-outs, misses/drops, repeat-run comparison, regression set and stored score changes
 - Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing.
+- pdf.js assets: `scripts/copy-pdfjs-assets.mjs` copies `wasm/`, `cmaps/` and `standard_fonts/` from `node_modules/pdfjs-dist` into `public/` on predev/prebuild/pretest. `openPdf` passes `/wasm/`, `/cmaps/` and `/standard_fonts/`; without them CCITT/JBIG2 masks decode to an almost blank page.
+- If a rendered page has more than one image object but under 1% ink, the page is marked `render_decode_failed` instead of being OCR'd as a blank page. The review panel and log show a wasm-asset hint.
+- Regression tests: `tests/pdfjs-assets.test.ts` checks the wasm/cmap/font routes (wasm as `application/wasm`); `tests/golden/arihant.test.ts` renders a CCITT-mask page and checks real ink (conditional on the attached PDF).
 - Chunking: top-level clauses must continue the numeric sequence (`N)` primarily, `N.` legacy). `(a)`, `(i)`, `a)`, `(N)` stay inside the clause. Lettered recitals continue A..Z with one restart allowed. Table rows are never boundaries (Sr./no. headers, numbered name/amount rows, bare `N text`).
 - Chunking restarts: a low top-level number after a real run, or a `Schedule`/`Annexure`/`Part`/`Article`/`Chapter` heading or a page-title block, starts a new numbering run and records a section break. A table row never restarts numbering.
 - Hard clause limits: `maxClausePages` (15) and `maxClauseTokens` (6000). An over-limit clause is force-closed at the next heading-like line and marked `unusuallyLong`.
@@ -81,7 +84,8 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - `VITE_FALLBACK_MODEL` is used by the fallback check (three forced transient failures, then the fallback on attempt 4).
 
 ## Commands
-- `npm run dev` the SPA
+- `npm run dev` the SPA (runs `scripts/copy-pdfjs-assets.mjs` first)
+- `node scripts/copy-pdfjs-assets.mjs` copies pdf.js wasm/cmaps/standard fonts into `public/`
 - `npm test` unit tests (runTask with fake-indexeddb, chunker, page quality, OCR output check)
 - `python3 tests/fixtures/make_fixtures.py` regenerates test PDFs (scanned30.pdf is gitignored)
 - `python3 scripts/plant_facts.py --out tests/fixtures/planted.pdf --golden tests/golden/planted.json` regenerates the planted-fact PDF and golden file (synthetic text only; add `--seed`, `--pages`, `--facts`)
