@@ -3,15 +3,15 @@ import { FINAL_PAGE_STATUSES, deleteEmbeddingsForDoc } from '../runner/db';
 import { sha256Hex } from '../tasks/fingerprint';
 import { openPdf, closePdf, extractNativePage, renderPageInto, type PdfDoc } from './pdfPages';
 import { assessNativeText, renderProblem } from './quality';
-import { checkOcrOutput, type OcrCheck, type OcrLang } from './ocrCheck';
+import { checkOcrOutput, type OcrLang } from './ocrCheck';
+import { OCR_PLAN, chooseBestAttempt, shouldStop, type OcrAttempt } from './ocrPlan';
+import { preprocessCanvas } from './ocrPreprocess';
 import { OcrEngine } from './ocr';
 import { DEFAULT_CHUNK_CONFIG } from './chunk';
 import { chunkDocumentWithConfidence } from './chunkQuality';
 
 export const EXTRACTOR_VERSION = 'pdfjs-v1+tesseract-v1';
 const BATCH_PAGES = 5;
-const FIRST_DPI = 200;
-const RETRY_DPI = 300;
 
 export type IngestEvent =
   | { type: 'progress'; done: number; total: number; skipped: number; stage: string }
@@ -45,6 +45,9 @@ interface OcrOutcome {
   source: PageRecord['source'];
   reason: string | null;
   dpi: number | null;
+  confidence?: number | null;
+  words?: number | null;
+  psm?: string | null;
 }
 
 async function ocrPage(
@@ -53,27 +56,54 @@ async function ocrPage(
   ocr: OcrEngine,
   langs: OcrLang[],
   canvas: OffscreenCanvas,
-  dpis: number[],
   imageCount: number,
 ): Promise<OcrOutcome> {
-  let best: { text: string; check: OcrCheck; dpi: number } | null = null;
-  for (const dpi of dpis) {
-    const rendered = await renderPageInto(pdf, pageNo, dpi, canvas);
-    const problem = renderProblem(rendered.inkRatio, imageCount);
-    if (problem) {
-      return { text: '', status: 'review', source: null, reason: problem, dpi };
+  const attempts: OcrAttempt[] = [];
+  let renderedDpi = 0;
+  let renderedInk = 0;
+  for (const step of OCR_PLAN) {
+    if (step.dpi !== renderedDpi) {
+      const rendered = await renderPageInto(pdf, pageNo, step.dpi, canvas);
+      renderedDpi = step.dpi;
+      renderedInk = rendered.inkRatio;
     }
-    const out = await ocr.recognize(canvas);
-    const check = checkOcrOutput(out.text, langs);
-    if (check.ok) return { text: out.text, status: 'ocr', source: 'ocr', reason: null, dpi };
-    if (!best || check.letters > best.check.letters) best = { text: out.text, check, dpi };
+    const problem = renderProblem(renderedInk, imageCount);
+    if (problem) {
+      return { text: '', status: 'review', source: null, reason: problem, dpi: step.dpi };
+    }
+    try {
+      const input = preprocessCanvas(canvas, step.mode);
+      const out = await ocr.recognize(input, { psm: step.psm, dpi: step.dpi });
+      const check = checkOcrOutput(out.text, langs);
+      attempts.push({
+        text: out.text,
+        confidence: out.confidence,
+        dpi: step.dpi,
+        psm: step.psm,
+        mode: step.mode,
+        check,
+      });
+      if (shouldStop(attempts)) break;
+    } catch {
+      // One segmentation/preprocessing attempt failing must not fail the page.
+      continue;
+    }
   }
+
+  const best = chooseBestAttempt(attempts);
+  if (!best) {
+    return { text: '', status: 'review', source: 'ocr', reason: 'no_text', dpi: null };
+  }
+  const ok = best.check.ok;
   return {
-    text: best?.text ?? '',
-    status: 'review',
+    text: best.text,
+    status: ok ? 'ocr' : 'review',
     source: 'ocr',
-    reason: best?.check.reason ?? 'no_text',
-    dpi: best?.dpi ?? null,
+    reason: ok ? null : best.check.reason,
+    dpi: best.dpi,
+    confidence: best.confidence,
+    words: best.check.words,
+    psm: best.psm,
   };
 }
 
@@ -117,7 +147,7 @@ async function processPage(
   if (quality.verdict === 'blank_candidate') {
     return { ...base, text: '', status: 'review', source: null, reason: 'blank_candidate', dpi: null };
   }
-  const outcome = await ocrPage(pdf, pageNo, ocr, langs, canvas, [FIRST_DPI, RETRY_DPI], native.imageCount);
+  const outcome = await ocrPage(pdf, pageNo, ocr, langs, canvas, native.imageCount);
   return { ...base, ...outcome };
 }
 
@@ -227,7 +257,7 @@ export async function reocrPage(deps: PipelineDeps, docId: string, pageNo: numbe
   const canvas = new OffscreenCanvas(1, 1);
   try {
     const native = await extractNativePage(pdf, pageNo);
-    const outcome = await ocrPage(pdf, pageNo, ocr, langs, canvas, [RETRY_DPI], native.imageCount);
+    const outcome = await ocrPage(pdf, pageNo, ocr, langs, canvas, native.imageCount);
     await writePages(db, [
       {
         docId,

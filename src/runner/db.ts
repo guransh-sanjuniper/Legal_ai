@@ -34,6 +34,9 @@ export interface PageRecord {
   source: 'native' | 'ocr' | 'manual' | null;
   reason: string | null;
   dpi: number | null;
+  ocrConfidence?: number | null;
+  ocrWords?: number | null;
+  ocrPsm?: string | null;
   nativeChars: number;
   imageCount: number;
   updatedAt: number;

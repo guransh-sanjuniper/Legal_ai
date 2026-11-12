@@ -272,7 +272,7 @@ export function IngestPage() {
           <h3>Pages</h3>
           <table border={1} cellPadding={3}>
             <thead>
-              <tr><th>page</th><th>status</th><th>source</th><th>reason</th><th>dpi</th><th>native chars</th><th>images</th><th>review</th></tr>
+              <tr><th>page</th><th>status</th><th>source</th><th>reason</th><th>ocr</th><th>native chars</th><th>images</th><th>review</th></tr>
             </thead>
             <tbody>
               {pages.map((p) => (
@@ -281,7 +281,12 @@ export function IngestPage() {
                   <td>{p.status}</td>
                   <td>{p.source ?? ''}</td>
                   <td>{reasonLabel(p.reason) ?? ''}</td>
-                  <td>{p.dpi ?? ''}</td>
+                  <td style={{ fontSize: 11 }}>
+                    {p.dpi ? `${p.dpi}dpi` : ''}
+                    {p.ocrPsm ? ` · PSM ${p.ocrPsm}` : ''}
+                    {p.ocrConfidence != null ? ` · ${Math.round(p.ocrConfidence)}%` : ''}
+                    {p.ocrWords != null ? ` · ${p.ocrWords}w` : ''}
+                  </td>
                   <td>{p.nativeChars}</td>
                   <td>{p.imageCount}</td>
                   <td>
@@ -299,6 +304,14 @@ export function IngestPage() {
       {reviewPage && (
         <div style={{ marginTop: 12, border: '1px solid #999', padding: 8 }}>
           <h3>Review page {reviewPage.pageNo} ({reasonLabel(reviewPage.reason) ?? reviewPage.status})</h3>
+          {(reviewPage.dpi || reviewPage.ocrWords != null) && (
+            <div style={{ fontSize: 12, color: '#555', marginBottom: 6 }}>
+              OCR: {reviewPage.dpi ?? '-'} DPI
+              {reviewPage.ocrPsm ? ` · PSM ${reviewPage.ocrPsm}` : ''}
+              {reviewPage.ocrConfidence != null ? ` · ${Math.round(reviewPage.ocrConfidence)}% confidence` : ''}
+              {reviewPage.ocrWords != null ? ` · ${reviewPage.ocrWords} words` : ''}
+            </div>
+          )}
           {reviewPage.reason === 'render_decode_failed' && (
             <div style={{ color: '#a00', marginBottom: 6 }}>
               The PDF page has images but the rendered canvas is almost blank. This usually means a pdf.js image
@@ -316,9 +329,9 @@ export function IngestPage() {
                 <button onClick={() => decide(reviewPage, 'unresolved')}>Leave unresolved</button>
                 <button
                   disabled={busy}
-                  onClick={() => { post({ type: 'ocr', docId: reviewPage.docId, pageNo: reviewPage.pageNo }); addLog(`page ${reviewPage.pageNo}: OCR retry at 300 DPI`); }}
+                  onClick={() => { post({ type: 'ocr', docId: reviewPage.docId, pageNo: reviewPage.pageNo }); addLog(`page ${reviewPage.pageNo}: OCR retry (200–400 DPI, PSM 3/4/6, gray/binary)`); }}
                 >
-                  Retry OCR at 300 DPI
+                  Retry OCR (best of 200–400 DPI)
                 </button>
                 <button onClick={() => setReviewPageNo(null)}>Close</button>
               </div>

@@ -49,6 +49,7 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - `/?page=analysis` clause analysis, verification, roll-up, cross-clause pass, ledger, metrics, Ask (retrieval / whole-document), custom prompt, restore, forced-failure and fallback checks
 - `/?page=quality` quality suite: per-document scores, thresholds, hold-outs, misses/drops, repeat-run comparison, regression set and stored score changes
 - Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing.
+- OCR is multi-pass and document-neutral: 200/300/400 DPI, PSM 3/4/6, and grayscale/Otsu preprocessing; the best attempt is chosen by `checkOcrOutput`, confidence and word count. Page records store confidence, words and PSM for review.
 - pdf.js assets: `scripts/copy-pdfjs-assets.mjs` copies `wasm/`, `cmaps/` and `standard_fonts/` from `node_modules/pdfjs-dist` into `public/` on predev/prebuild/pretest. `openPdf` passes `/wasm/`, `/cmaps/` and `/standard_fonts/`; without them CCITT/JBIG2 masks decode to an almost blank page.
 - If a rendered page has more than one image object but under 1% ink, the page is marked `render_decode_failed` instead of being OCR'd as a blank page. The review panel and log show a wasm-asset hint.
 - Regression tests: `tests/pdfjs-assets.test.ts` checks the wasm/cmap/font routes (wasm as `application/wasm`); `tests/golden/arihant.test.ts` renders a CCITT-mask page and checks real ink (conditional on the attached PDF).
