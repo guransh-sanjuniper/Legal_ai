@@ -19,15 +19,18 @@ const IMAGE_OPS = new Set<number>([
 ]);
 
 export function openPdf(bytes: ArrayBuffer): Promise<PdfDoc> {
+  // The ingestion pipeline calls this inside a Web Worker. pdf.js's main build uses
+  // document.baseURI when cMapUrl/standardFontDataUrl are set, so those two options are only
+  // passed on the main thread (review canvas). wasmUrl is worker-safe and is what CCITT/JBIG2
+  // masks need.
+  const hasDom = typeof document !== 'undefined';
   return pdfjs.getDocument({
     data: new Uint8Array(bytes),
     useSystemFonts: false,
-    // These are copied from pdfjs-dist into public/ by scripts/copy-pdfjs-assets.mjs.
-    // Without wasmUrl, CCITT/JBIG2 masks fail to decode and scanned pages render almost blank.
     wasmUrl: '/wasm/',
-    cMapUrl: '/cmaps/',
-    cMapPacked: true,
-    standardFontDataUrl: '/standard_fonts/',
+    ...(hasDom
+      ? { cMapUrl: '/cmaps/', cMapPacked: true, standardFontDataUrl: '/standard_fonts/' }
+      : {}),
   }).promise;
 }
 
