@@ -47,6 +47,9 @@ export function PageNav({ current }: { current: StepId }) {
           Back to ingest →
         </a>
       )}
+      <a href="/" style={{ color: '#666', marginLeft: next ? 12 : 0 }}>
+        App
+      </a>
     </div>
   );
 }

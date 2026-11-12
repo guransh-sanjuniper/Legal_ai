@@ -2,6 +2,8 @@ node_modules
 dist
 .env
 .env.local
+.env.hosted
+.env.*.local
 supabase/.temp
 supabase/functions/.env
 tests/fixtures/scanned30.pdf

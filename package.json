@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:hosted": "node scripts/copy-pdfjs-assets.mjs && vite --mode hosted",
     "build": "tsc --noEmit && vite build",
+    "build:hosted": "node scripts/copy-pdfjs-assets.mjs && tsc --noEmit && vite build --mode hosted",
     "test": "vitest run",
     "predev": "node scripts/copy-pdfjs-assets.mjs",
     "prebuild": "node scripts/copy-pdfjs-assets.mjs",
@@ -19,6 +21,7 @@
     "pdfjs-dist": "^6.5.438",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {

@@ -6,7 +6,26 @@ const UPSTREAM_TIMEOUT_MS = 100_000;
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 
-Deno.serve(async (req) => {
+// Transport only: the hosted gateway does not add CORS headers to browser preflights.
+// Set ALLOWED_ORIGIN to a comma-separated list to lock the app down; unset means any origin.
+const corsHeaders = (req: Request): Record<string, string> => {
+  const origin = req.headers.get('origin');
+  const configured = (Deno.env.get('ALLOWED_ORIGIN') ?? '').trim();
+  const allowed = configured
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const base = {
+    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-allow-headers': 'authorization, content-type, apikey, x-client-info',
+    'access-control-max-age': '86400',
+  };
+  if (!configured) return { ...base, 'access-control-allow-origin': '*' };
+  if (origin && allowed.includes(origin)) return { ...base, 'access-control-allow-origin': origin, vary: 'Origin' };
+  return {};
+};
+
+async function handle(req: Request): Promise<Response> {
   if (req.method !== 'POST') return json(405, { code: 'method_not_allowed' });
 
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {
@@ -154,4 +173,15 @@ Deno.serve(async (req) => {
   });
 
   return new Response(stream, { headers: { 'content-type': 'application/x-ndjson' } });
+}
+
+Deno.serve(async (req) => {
+  const cors = corsHeaders(req);
+  if (req.method === 'OPTIONS') {
+    if (Object.keys(cors).length === 0) return new Response(null, { status: 403 });
+    return new Response(null, { status: 204, headers: cors });
+  }
+  const res = await handle(req);
+  for (const [key, value] of Object.entries(cors)) res.headers.set(key, value);
+  return res;
 });

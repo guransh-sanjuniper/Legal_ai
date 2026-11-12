@@ -8,7 +8,8 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - React + Vite SPA (`src/`), TypeScript
 - Browser IndexedDB via `idb` (documents with PDF Blob, pages, chunks, embeddings, tasks, raw_responses, ocr_decisions, run_state)
 - Supabase (local CLI + Docker): Postgres, Auth, Edge Functions. RLS off (throwaway).
-- OpenRouter via the `ai-proxy` Edge Function. The key lives in `supabase/functions/.env`, never in the browser.
+- Hosted Supabase for the app shell: `npm run dev:hosted` reads `.env.hosted`; local `npm run dev` reads `.env.local`. The `ai-proxy` proxy is the same function in both. See `docs/hosted-supabase.md`.
+- OpenRouter via the `ai-proxy` Edge Function. The key lives in `supabase/functions/.env`, never in the browser. The function sends CORS headers for hosted browser preflights; `ALLOWED_ORIGIN` (optional, comma-separated) locks the allowed origin.
 - Default model: `deepseek/deepseek-v4.1-flash`.
 
 ## Folders (under `src/`)
@@ -18,10 +19,23 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `retrieval/` embeddings in a worker (transformers.js), Unicode tokenizer + MiniSearch keyword index, RRF hybrid search, law stand-in, definitions sheet
 - `quality/` pure scorers over saved runs, golden thresholds, repeat-run comparison, regression config and score history (no UI imports)
 - `ui/` React pages only
+- `ui/app/` the app shell: router, sidebar, login gate, theme, placeholders (UI only)
+- `ui/library/` document library page, status derivation, ingest-worker wrapper, local removal
+- `lib/` shared Supabase client for the app shell (one persisted session per project)
+
+## App shell (routes)
+- `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
+- `/chat`, `/draft`, `/compare` are placeholders.
+- `/documents` lists IndexedDB documents, imports a PDF, starts the existing ingestion worker, removes a document from this device.
+- `/analysis` lists ready documents; `/analysis/:docId` is a placeholder and shows the document's name, pages and status.
+- Status: `ready` → Ready; `review` → Needs review (N pages); `new`/`processing` → Preparing. The document-level `status` is authoritative; the review count is only the label.
+- Login: Supabase Auth email+password. The app shell and the harness pages share one persisted session (same project URL, same localStorage key).
+- "Remove from this device" deletes the document, pages, chunks, OCR decisions, embeddings, definitions, analysis reports/state, tasks and run state for that document. It refuses while a preparation or analysis lock is held. Supabase reports are kept.
+- Theme: light/dark, scoped to the app shell; the harness pages keep their look.
 
 ## Tables
 Supabase: `runs`, `task_results`, `reports`, `rate_limits`. RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.
-IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `tasks`, `raw_responses`, `ocr_decisions`, `run_state`.
+IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `embedding_windows`, `embedding_state`, `definitions`, `analysis_reports`, `analysis_state`, `tasks`, `raw_responses`, `ocr_decisions`, `run_state`.
 
 ## Key rules
 - `runTask` is plain TypeScript. No DOM, no Edge APIs.
@@ -43,8 +57,10 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - Show "AI-assisted, requires lawyer review" on all outputs (later prompts).
 
 ## Pages (dev)
-- `/` the Prompt 1 task test page
-- `/?page=ingest` the ingestion page (upload PDF, OCR language, Start/resume, Recheck, review, chunks)
+- `/` the app shell (sign-in, Documents, Chat, Deep Analysis, Drafter, Comparator)
+- `/chat`, `/documents`, `/analysis`, `/analysis/:docId`, `/draft`, `/compare` the app routes
+- `/?page=test` the Prompt 1 task test page
+- `/?page=ingest` the ingestion page (upload PDF, OCR language, Start/resume, Recheck, review, chunks). `&doc=<id>` opens a document directly.
 - `/?page=search` embedding progress, hybrid document search, law stand-in search, definitions sheet
 - `/?page=analysis` clause analysis, verification, roll-up, cross-clause pass, ledger, metrics, Ask (retrieval / whole-document), custom prompt, restore, forced-failure and fallback checks
 - `/?page=quality` quality suite: per-document scores, thresholds, hold-outs, misses/drops, repeat-run comparison, regression set and stored score changes
@@ -85,9 +101,13 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `t
 - `VITE_FALLBACK_MODEL` is used by the fallback check (three forced transient failures, then the fallback on attempt 4).
 
 ## Commands
-- `npm run dev` the SPA (runs `scripts/copy-pdfjs-assets.mjs` first)
+- `npm run dev` the SPA (local `.env.local`; runs `scripts/copy-pdfjs-assets.mjs` first)
+- `npm run dev:hosted` the SPA against the hosted project (`.env.hosted`; runs the asset copy first)
+- `npm run build` type-check + local build (asset copy first)
+- `npm run build:hosted` type-check + hosted build (`--mode hosted`; asset copy first)
 - `node scripts/copy-pdfjs-assets.mjs` copies pdf.js wasm/cmaps/standard fonts into `public/`
-- `npm test` unit tests (runTask with fake-indexeddb, chunker, page quality, OCR output check)
+- `npm test` unit tests (runTask with fake-indexeddb, chunker, page quality, OCR output check, library status)
 - `python3 tests/fixtures/make_fixtures.py` regenerates test PDFs (scanned30.pdf is gitignored)
 - `python3 scripts/plant_facts.py --out tests/fixtures/planted.pdf --golden tests/golden/planted.json` regenerates the planted-fact PDF and golden file (synthetic text only; add `--seed`, `--pages`, `--facts`)
 - `npx supabase start`, then `npx supabase functions serve ai-proxy --env-file supabase/functions/.env`
+- Hosted setup: `npx supabase link --project-ref <ref>`, `npx supabase db push`, `npx supabase secrets set --env-file supabase/functions/.env`, `npx supabase functions deploy ai-proxy`. See `docs/hosted-supabase.md`.

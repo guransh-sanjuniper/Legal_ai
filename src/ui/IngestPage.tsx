@@ -37,12 +37,23 @@ export function IngestPage() {
   const workerRef = useRef<Worker | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pdfRef = useRef<{ docId: string; pdf: PdfDoc } | null>(null);
+  // The app shell opens a document by id: /?page=ingest&doc=<id>. Read once, then clear.
+  const initialDocRef = useRef<string | null>(new URLSearchParams(window.location.search).get('doc'));
 
   const addLog = (line: string) => setLog((l) => [...l.slice(-60), `${new Date().toLocaleTimeString()} ${line}`]);
 
   useEffect(() => {
     openHarnessDb().then(setDb);
   }, []);
+
+  useEffect(() => {
+    const docId = initialDocRef.current;
+    if (!db || !docId) return;
+    initialDocRef.current = null;
+    void db.get('documents', docId).then((doc) => {
+      if (doc) setSelectedId(docId);
+    });
+  }, [db]);
 
   useEffect(() => {
     if (!db) return;
