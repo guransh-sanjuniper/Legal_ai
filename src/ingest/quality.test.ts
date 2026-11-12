@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assessNativeText } from './quality';
+import { assessNativeText, renderProblem } from './quality';
 import { checkOcrOutput } from './ocrCheck';
 
 const PROSE =
@@ -87,5 +87,22 @@ describe('OCR output check', () => {
   it('rejects output with too few real words', () => {
     expect(checkOcrOutput('Hi there', ['eng']).reason).toBe('too_few_words');
     expect(checkOcrOutput('1 2 3 4', ['eng']).reason).toBe('no_text');
+  });
+});
+
+
+describe('render problem classification', () => {
+  it('flags image masks that rendered almost blank', () => {
+    expect(renderProblem(0.0044, 37)).toBe('render_decode_failed');
+    expect(renderProblem(0.0005, 37)).toBe('render_decode_failed');
+  });
+
+  it('keeps a genuinely blank page as blank_candidate', () => {
+    expect(renderProblem(0.0002, 1)).toBe('blank_candidate');
+    expect(renderProblem(0, 0)).toBe('blank_candidate');
+  });
+
+  it('accepts a page with real ink', () => {
+    expect(renderProblem(0.053, 37)).toBeNull();
   });
 });

@@ -19,7 +19,16 @@ const IMAGE_OPS = new Set<number>([
 ]);
 
 export function openPdf(bytes: ArrayBuffer): Promise<PdfDoc> {
-  return pdfjs.getDocument({ data: new Uint8Array(bytes), useSystemFonts: false }).promise;
+  return pdfjs.getDocument({
+    data: new Uint8Array(bytes),
+    useSystemFonts: false,
+    // These are copied from pdfjs-dist into public/ by scripts/copy-pdfjs-assets.mjs.
+    // Without wasmUrl, CCITT/JBIG2 masks fail to decode and scanned pages render almost blank.
+    wasmUrl: '/wasm/',
+    cMapUrl: '/cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: '/standard_fonts/',
+  }).promise;
 }
 
 export function closePdf(doc: PdfDoc): Promise<void> {

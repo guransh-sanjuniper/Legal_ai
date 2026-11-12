@@ -8,3 +8,6 @@ tests/fixtures/scanned30.pdf
 __pycache__/
 scratch/
 tests/fixtures/mixed_big.pdf
+public/wasm/
+public/cmaps/
+public/standard_fonts/

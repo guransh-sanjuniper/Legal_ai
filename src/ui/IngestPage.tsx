@@ -12,6 +12,10 @@ import type { ChunkCheck } from '../ingest/checkChunks';
 import { PageNav } from './PageNav';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
+const reasonLabel = (reason: string | null) =>
+  reason === 'render_decode_failed'
+    ? 'images present but render is blank — check pdf.js wasm assets'
+    : reason;
 const MB = (n: number) => (n / 1048576).toFixed(1) + ' MB';
 
 export function IngestPage() {
@@ -127,7 +131,7 @@ export function IngestPage() {
       if (ev.type === 'progress') {
         setProgress({ done: ev.done, total: ev.total, skipped: ev.skipped });
       } else if (ev.type === 'page') {
-        addLog(`page ${ev.pageNo}: ${ev.status}${ev.reason ? ` (${ev.reason})` : ''}`);
+        addLog(`page ${ev.pageNo}: ${ev.status}${ev.reason ? ` (${reasonLabel(ev.reason)})` : ''}`);
       } else if (ev.type === 'finished') {
         addLog(`finished: ${ev.status}, review pages ${ev.review}, chunks ${ev.chunks}`);
         setProgress(null);
@@ -276,7 +280,7 @@ export function IngestPage() {
                   <td>{p.pageNo}</td>
                   <td>{p.status}</td>
                   <td>{p.source ?? ''}</td>
-                  <td>{p.reason ?? ''}</td>
+                  <td>{reasonLabel(p.reason) ?? ''}</td>
                   <td>{p.dpi ?? ''}</td>
                   <td>{p.nativeChars}</td>
                   <td>{p.imageCount}</td>
@@ -294,7 +298,13 @@ export function IngestPage() {
 
       {reviewPage && (
         <div style={{ marginTop: 12, border: '1px solid #999', padding: 8 }}>
-          <h3>Review page {reviewPage.pageNo} ({reviewPage.reason ?? reviewPage.status})</h3>
+          <h3>Review page {reviewPage.pageNo} ({reasonLabel(reviewPage.reason) ?? reviewPage.status})</h3>
+          {reviewPage.reason === 'render_decode_failed' && (
+            <div style={{ color: '#a00', marginBottom: 6 }}>
+              The PDF page has images but the rendered canvas is almost blank. This usually means a pdf.js image
+              decoder asset is missing. Check that <code>/wasm/</code> is served with the pdf.js wasm files.
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 12 }}>
             <canvas ref={canvasRef} style={{ width: 420, border: '1px solid #ccc' }} />
             <div style={{ flex: 1 }}>
