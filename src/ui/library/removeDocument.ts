@@ -17,6 +17,21 @@ export async function documentLock(doc: DocumentRecord): Promise<'preparation' |
   }
 }
 
+// Removal holds the same document lock that preparation and analysis take, so a run cannot start
+// between the check and the delete. Returns false when the lock is already held by a run.
+export async function removeDocumentWhenIdle(db: HarnessDBHandle, doc: DocumentRecord): Promise<boolean> {
+  if (!navigator.locks?.request) {
+    await removeDocumentFromDevice(db, doc);
+    return true;
+  }
+  const granted = await navigator.locks.request(`doc:${doc.hash}`, { ifAvailable: true }, async (lock) => {
+    if (!lock) return false;
+    await removeDocumentFromDevice(db, doc);
+    return true;
+  });
+  return granted === true;
+}
+
 // Local-only removal. Reports and results already saved to Supabase are kept.
 export async function removeDocumentFromDevice(db: HarnessDBHandle, doc: DocumentRecord): Promise<void> {
   await deleteEmbeddingsForDoc(db, doc.id);

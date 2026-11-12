@@ -10,9 +10,9 @@ import { groupForRollup, keepCitedSentences } from './rollup';
 import { buildLedger, type LedgerChunkInput } from './ledger';
 import { dedupeVerifiedClauses } from './dedupe';
 import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
-import { buildClausePrompt, buildMissingPrompt, buildOverviewPrompt, SECTION_PROMPT } from './prompts';
+import { buildClausePrompt, buildOverviewPrompt, OVERVIEW_POINTS, SECTION_PROMPT } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
-import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS } from './config';
+import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
 import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
 import { NO_SUGGESTION, guardPriority, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf } from './rubric';
 import { isValidMissingItem, keepMissingClaims, missingPlans, type MissingInputClause } from './missingProtections';
@@ -70,6 +70,9 @@ export interface AnalysisOptions {
   // Law search is no longer called from the risk path (no law text is loaded). Kept for the dev tools.
   lawSearch: (text: string, k: number) => Promise<LawHitLite[]>;
   request?: AnalysisRequestInput;
+  // With resumeRunId: re-run failed tasks of this run, then rebuild the report from stored results.
+  retryFailed?: boolean;
+  onRunCreated?: (runId: string) => void;
   docSearch: (query: string, k: number) => Promise<SearchHitLite[]>;
   onProgress?: (msg: string) => void;
   onLog?: (msg: string) => void;
@@ -101,6 +104,13 @@ export function isValidClauseItem(x: unknown): boolean {
 
 const arrOf = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+// Chunk index from a task id such as "<run>:a3" or "<run>:r3/retry0" (-1 when not a chunk task).
+export function taskChunkIndex(taskId: string): number {
+  const suffix = taskId.slice(taskId.lastIndexOf(':') + 1).split('/')[0];
+  const m = /^[a-z]+(\d+)$/.exec(suffix);
+  return m ? Number(m[1]) : -1;
+}
 
 interface RawObligation {
   party?: unknown;
@@ -217,6 +227,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     autoReduceConcurrency: opts.autoReduceConcurrency ?? true,
     maxConsecutive429: opts.maxConsecutive429 ?? 10,
     callModel: opts.callModel,
+    rerunFailed: opts.retryFailed ?? false,
   };
 
   let runId: string;
@@ -239,6 +250,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   } else {
     runId = await createRun(ctx, doc);
   }
+  // Lets the caller remember the run before it finishes, so a reload can resume it.
+  opts.onRunCreated?.(runId);
 
   // 1. Clause analysis, one task per analysis chunk, every clause number requested.
   const plans: TaskPlan[] = chunks.map((chunk) => ({
@@ -378,9 +391,11 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     if (chunk.manifest.some((c) => !received.has(topClause(c)))) stillMissing.add(chunk.index);
   }
   const clauseTasks = [...first.tasks, ...retryTasks, ...secondRetryTasks].filter((t) => /:(?:a|r|x)\d+(?:\/|$)/.test(t.id));
+  // A chunk that finished on any pass is not failed, even if an earlier pass for it failed (retry-failed case).
+  const finishedChunks = new Set(clauseTasks.filter((t) => t.status === 'done').map((t) => taskChunkIndex(t.id)));
   const seenFailedTasks = new Set<string>();
   const failedClauseTasks = clauseTasks.filter((t) => {
-    if (t.status !== 'failed' || seenFailedTasks.has(t.id)) return false;
+    if (t.status !== 'failed' || seenFailedTasks.has(t.id) || finishedChunks.has(taskChunkIndex(t.id))) return false;
     seenFailedTasks.add(t.id);
     return true;
   });
@@ -690,7 +705,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       promptVersion: 'overview-points-v1',
       prompt: buildOverviewPrompt(request.detailLevel),
       input: `${defsContext}\n\nItems:\n${JSON.stringify({ sections: sectionSentences, findings: findingItems, missing: missingItems })}`,
-      maxTokens: Math.max(800, Math.min(3000, 13 * OVERVIEW_SENTENCES_PER_POINT[request.detailLevel] * 90)),
+      maxTokens: Math.max(800, Math.min(3000, (OVERVIEW_POINTS.length - 1) * OVERVIEW_SENTENCES_PER_POINT[request.detailLevel] * OVERVIEW_TOKENS_PER_SENTENCE)),
       validate: (x) => typeof x === 'object' && x !== null,
     };
     const ovRun = await executeTasks(ctx, runId, doc, [overviewPlan]);
@@ -879,6 +894,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     dedupe: dedupeStats,
     chunking,
     request,
+    chunkClauses: chunks.map((c) => ({ chunkIndex: c.index, clauses: [...new Set(c.clauses)] })),
     overviewPoints,
     missingProtections,
     ...(promptResult ? { promptResult } : {}),

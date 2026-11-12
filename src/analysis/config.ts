@@ -20,6 +20,8 @@ export const INITIAL_MAX_TOKENS = 2600;
 export const BUDGET_FACTOR = 1.5;
 export const MIN_BUDGET_TOKENS = 600;
 export const MAX_BUDGET_TOKENS = 6000;
+// Output budget per model-written overview point (sentences x this), used for the overview call and the estimate.
+export const OVERVIEW_TOKENS_PER_SENTENCE = 90;
 
 // Cost of a set of calls, from the price config.
 export function estimateCost(promptTokens: number, completionTokens: number): number {

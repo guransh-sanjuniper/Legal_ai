@@ -10,7 +10,7 @@ import { requestPersistence, storageReport, type StorageReport } from '../../ing
 import { libraryStatusFrom, stageLabel, statusLabel, statusTone } from './docStatus';
 import { countReviewPages, isPrepared, readPreparationState, type PreparationState } from './preparationState';
 import { getActiveDocId, runPreparation, subscribePreparation } from './prepare';
-import { documentLock, removeDocumentFromDevice } from './removeDocument';
+import { documentLock, removeDocumentWhenIdle } from './removeDocument';
 import { PageHeader } from '../app/pages/Placeholder';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
@@ -261,7 +261,11 @@ export function DocumentsPage() {
     setRemovingId(doc.id);
     setError(null);
     try {
-      await removeDocumentFromDevice(db, doc);
+      const removed = await removeDocumentWhenIdle(db, doc);
+      if (!removed) {
+        setError('This document is being prepared or analysed. Wait for it to finish before removing it.');
+        return;
+      }
       reviewCacheRef.current.delete(doc.id);
       reviewSigRef.current.delete(doc.id);
       preparedCacheRef.current.delete(doc.id);

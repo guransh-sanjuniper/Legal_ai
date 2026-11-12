@@ -27,7 +27,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
 - `/chat`, `/draft`, `/compare` are placeholders.
 - `/documents` lists IndexedDB documents, imports a PDF and runs the whole preparation (ingestion, embeddings, index, definitions), removes a document from this device.
-- `/analysis` lists ready documents; `/analysis/:docId` is a placeholder and shows the document's name, pages and status.
+- `/analysis` lists ready documents; `/analysis/:docId` is the Deep Analysis page (Ready documents only, see "Deep Analysis page").
 - Status: `ready` → Ready; `review` → Needs review (N pages); `new`/`processing` → Preparing. The library's Ready is the durable preparation result (see Document preparation); the document-level `status` stays the ingestion status.
 - Login: Supabase Auth email+password. The app shell and the harness pages share one persisted session (same project URL, same localStorage key).
 - "Remove from this device" deletes the document, pages, chunks, OCR decisions, embeddings, definitions, analysis reports/state, tasks and run state for that document. It refuses while a preparation or analysis lock is held. Supabase reports are kept.
@@ -108,6 +108,18 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Every quoted item is verified against the cited stored page (whitespace/quote/dash/hyphen normalised). Unverified items are dropped and counted, never shown. Roll-up sentences must cite a valid item ID or they are dropped.
 - The report is saved to `reports` (Supabase) and `analysis_reports` (IndexedDB); with local state cleared, the page restores it from Supabase.
 - `VITE_FALLBACK_MODEL` is used by the fallback check (three forced transient failures, then the fallback on attempt 4).
+
+## Deep Analysis page (`/analysis/:docId`)
+- Start screen: Matter, Detail level (brief/standard/detailed: clause summary length and overview sentences), Focus (steers the risk checks only), Custom prompt (optional). The pre-run estimate is an upper bound (`costEstimate.ts`) and includes the custom pass when the prompt is filled.
+- Start, Resume (interrupted run) and "Retry failed only". The page keeps a per-document run record in localStorage (`legal-app.analysis.<docId>`) until a run finishes with no failed tasks.
+- Retry: `runAnalysis({ resumeRunId, retryFailed: true })` resets failed tasks of the planned passes to `queued` and re-runs them with their original input. Finished results are reused and never called again. The report is then rebuilt from stored results. A failed chunk that finished on a later pass is no longer counted as failed.
+- A run and removal both hold `doc:<hash>`; removing a document is refused while a run or preparation holds it.
+- Clause call (`clause-analysis-v3`) returns risk priority/basis/suggestion/laws, `missing` and `prose`. Risk priority is High only for void/unenforceable, illegal, statutory-violation or major-financial bases (`rubric.ts`). Law references are names only, labelled "model knowledge, applicability unverified".
+- Custom prompt pass (`promptPass.ts`) runs per analysis chunk; answers are verified against the cited page; duplicates merged.
+- Report model (`reportModel.ts`, pure, shared with the exports): sections numbered in code (Prompt Result only when used); Defined Terms absent. Unnumbered entries are placed by their verified quotes, then by their chunk's clause list (`chunkClauses`), else kept as separate rows and counted. Numbered entries with the same clause number merge: longest non-empty text per field, unioned lists, deduplicated items. Merge stats appear in the Clause Breakdown.
+- Prose fields (summary, conditions, rights, etc.) are model-written and cited to clause/page. Quoted text is always verified text. Dates, Amounts and Location mismatch rows appear only when present.
+- Citation click opens the stored PDF page in a right-hand panel; the quote is highlighted by `citationLocate.ts` when it can be found on the page.
+- Tests use the hosted Supabase project (`testSupport.ts` helpers); `runAnalysis.retry.test.ts` covers retry.
 
 ## Commands
 - `npm run dev` the SPA (local `.env.local`; runs `scripts/copy-pdfjs-assets.mjs` first)

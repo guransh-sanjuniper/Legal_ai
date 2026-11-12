@@ -215,6 +215,8 @@ export interface AnalysisReport {
   resolution: { pageCorrected: number; dropped: number; skippedClauses: number };
   notices: string[];
   request?: AnalysisRequest;
+  // Clause numbers that each analysis chunk contains. Used to place unnumbered entries.
+  chunkClauses?: { chunkIndex: number; clauses: string[] }[];
   overviewPoints?: OverviewPoint[];
   missingProtections?: MissingProtection[];
   promptResult?: PromptResult;

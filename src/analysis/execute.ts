@@ -48,6 +48,9 @@ export interface ExecuteContext {
   maxConsecutive429?: number;
   // Test hook: replace the proxy call without changing the runner.
   callModel?: (req: CallRequest) => Promise<CallResult>;
+  // Retry failed only: failed tasks of the planned passes go back to queued and re-run with their
+  // original input. Finished results are reused and never called again.
+  rerunFailed?: boolean;
 }
 
 export interface TaskPlan {
@@ -126,6 +129,17 @@ export async function executeTasks(
   const bySuffix = new Map<string, TaskPlan>();
 
   const now = Date.now();
+  if (ctx.rerunFailed) {
+    // Only the passes in this call are reset; a failed task of another pass is left alone.
+    const planned = new Set(plans.map((p) => p.suffix));
+    for (const t of await ctx.db.getAllFromIndex('tasks', 'byRun', runId)) {
+      if (t.status !== 'failed') continue;
+      const suffix = t.id.slice(runId.length + 1).split('/')[0];
+      if (!planned.has(suffix)) continue;
+      await ctx.db.put('tasks', { ...t, status: 'queued', failureCode: null, failureMessage: null, nextAt: now, updatedAt: now });
+      ctx.onLog?.(`retry: ${t.id.slice(-14)} re-queued`);
+    }
+  }
   for (const plan of plans) {
     bySuffix.set(plan.suffix, plan);
     const id = `${runId}:${plan.suffix}`;

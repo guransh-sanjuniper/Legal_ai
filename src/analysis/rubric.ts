@@ -83,9 +83,13 @@ export function normaliseProse(x: unknown): ClauseProse {
 const ORDER: Record<RiskPriority, number> = { high: 0, medium: 1, low: 2 };
 
 // Stable sort: High first, then Medium, then Low. Input order is kept within a priority.
-export function sortByPriority<T extends { severity: RiskPriority }>(items: T[]): T[] {
+export function sortByPriorityOf<T>(items: T[], priorityOf: (item: T) => RiskPriority): T[] {
   return items
     .map((item, i) => ({ item, i }))
-    .sort((a, b) => ORDER[a.item.severity] - ORDER[b.item.severity] || a.i - b.i)
+    .sort((a, b) => ORDER[priorityOf(a.item)] - ORDER[priorityOf(b.item)] || a.i - b.i)
     .map((x) => x.item);
+}
+
+export function sortByPriority<T extends { severity: RiskPriority }>(items: T[]): T[] {
+  return sortByPriorityOf(items, (item) => item.severity);
 }
