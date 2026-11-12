@@ -28,9 +28,12 @@ export function openPdf(bytes: ArrayBuffer): Promise<PdfDoc> {
     data: new Uint8Array(bytes),
     useSystemFonts: false,
     wasmUrl: '/wasm/',
-    ...(hasDom
-      ? { cMapUrl: '/cmaps/', cMapPacked: true, standardFontDataUrl: '/standard_fonts/' }
-      : {}),
+    cMapUrl: '/cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: '/standard_fonts/',
+    // In a worker, make pdf.js fetch these assets itself. Without this, pdf.js evaluates its
+    // default useWorkerFetch expression, which reads document.baseURI and throws.
+    ...(hasDom ? {} : { useWorkerFetch: true }),
   }).promise;
 }
 
