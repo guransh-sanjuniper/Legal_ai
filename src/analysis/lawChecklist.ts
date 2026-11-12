@@ -1,0 +1,53 @@
+// Acts to consider first when checking risks. This is a checklist, not a limit: the model may
+// name any other applicable Indian or Maharashtra law. No law text is loaded; names only.
+export const LAW_CHECKLIST: readonly string[] = [
+  'Code of Civil Procedure 1908',
+  'Limitation Act 1963',
+  'Specific Relief Act 1963',
+  'Bharatiya Sakshya Adhiniyam 2023 (replaces Indian Evidence Act 1872)',
+  'Bharatiya Nyaya Sanhita 2023',
+  'Bharatiya Nagarik Suraksha Sanhita 2023 (BNSS)',
+  'Arbitration and Conciliation Act 1996',
+  'Real Estate (Regulation and Development) Act 2016 (RERA)',
+  'Transfer of Property Act 1882',
+  'Registration Act 1908',
+  'Indian Stamp Act 1899',
+  'Maharashtra Court Fees Act',
+  'Indian Contract Act 1872',
+  'Indian Succession Act 1925',
+  'Hindu Succession Act 1956',
+  'Companies Act 2013',
+  'Insolvency and Bankruptcy Code 2016',
+  'Income-tax Act 1961',
+  'CGST Act 2017 and State GST legislation',
+  'Consumer Protection Act 2019',
+  'Environment (Protection) Act 1986',
+  'Water (Prevention and Control of Pollution) Act 1974',
+  'Air (Prevention and Control of Pollution) Act 1981',
+  'Indian Forest Act 1927',
+  'Maharashtra Private Forest Act 1975',
+  'Forest (Conservation) Act 1980',
+  'Maharashtra Land Revenue Code 1966',
+  'Maharashtra Tenancy and Agricultural Lands Act',
+  'Maharashtra Prevention of Fragmentation and Consolidation of Holdings Act 1947',
+  'Maharashtra Agricultural Lands (Ceiling on Holdings) Act 1961',
+  'Maharashtra Restoration of Lands to Scheduled Tribes Act 1974',
+  'Right to Fair Compensation and Transparency in Land Acquisition, Rehabilitation and Resettlement Act 2013',
+  'Maharashtra Regional and Town Planning Act 1966 (MRTP)',
+  'Development Control and Promotion Regulations (DCPR)',
+  'Maharashtra Ownership Flats Act 1963 (MOFA)',
+  'Maharashtra Co-operative Societies Act 1960',
+  'Maharashtra Fire Prevention and Life Safety Measures Act 2006',
+  'Maharashtra Slum Areas (Improvement, Clearance and Redevelopment) Act 1971',
+  'Maharashtra Housing and Area Development Act 1976',
+  'Labour laws (general)',
+  'Industrial Disputes Act 1947',
+];
+
+export function lawChecklistPrompt(): string {
+  return [
+    'ACTS TO CONSIDER FIRST. This is a checklist, not a limit: you may also name any other applicable Indian or Maharashtra law.',
+    'Name Acts only, never section numbers. Every law you name is model knowledge with unverified applicability.',
+    LAW_CHECKLIST.join('; ') + '.',
+  ].join('\n');
+}

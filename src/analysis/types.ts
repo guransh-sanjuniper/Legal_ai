@@ -35,13 +35,46 @@ export interface LawPassageRef {
   lawVersion: string;
 }
 
+export type DetailLevel = 'brief' | 'standard' | 'detailed';
+
+export type RiskBasis =
+  | 'void_or_unenforceable'
+  | 'illegal'
+  | 'statutory_violation'
+  | 'major_financial_exposure'
+  | 'other';
+
+export interface AnalysisRequest {
+  matter: string;
+  detailLevel: DetailLevel;
+  focus: string;
+  customPrompt: string;
+}
+
+// `severity` holds the priority (high/medium/low). The report shows it as "Priority".
 export interface VerifiedRisk extends VerifiedItemBase {
   itemId: string;
   clause: string;
   text: string;
   severity: 'high' | 'medium' | 'low';
-  lawPassages: LawPassageRef[];
+  basis?: RiskBasis;
+  suggestion?: string;
+  laws?: string[];
+  // Older saved reports used law-library passages. New reports leave this empty.
+  lawPassages?: LawPassageRef[];
   applicability: 'unverified';
+}
+
+// Model-written clause text. Not quote-verified; the clause and page are cited by the parent item.
+export interface ClauseProse {
+  detailed_summary: string;
+  conditions: string;
+  exceptions: string;
+  rights: string;
+  legal_significance: string;
+  ambiguity: string;
+  suggested_action: string;
+  location_mismatch: string;
 }
 
 export interface VerifiedClause {
@@ -58,6 +91,44 @@ export interface VerifiedClause {
   payments: VerifiedPayment[];
   risks: VerifiedRisk[];
   verifiedItems: number;
+  missing?: string[];
+  prose?: ClauseProse;
+}
+
+export interface MissingProtection {
+  itemId: string;
+  topic: string;
+  text: string;
+  severity: 'high' | 'medium' | 'low';
+  basis: RiskBasis;
+  suggestion: string;
+  laws: string[];
+  // Clause item IDs affected by the gap. Empty means the whole document.
+  cites: string[];
+  applicability: 'unverified';
+}
+
+export interface OverviewPoint {
+  point: number;
+  title: string;
+  sentences: RollupSentence[];
+}
+
+export interface PromptAnswer {
+  itemId: string;
+  text: string;
+  clause: string;
+  page: number;
+  quote: string;
+  verified: true;
+}
+
+export interface PromptResult {
+  prompt: string;
+  answers: PromptAnswer[];
+  chunksTotal: number;
+  chunksDone: number;
+  failedChunks: { chunkIndex: number; pages: [number, number]; failureCode: string | null; message: string | null }[];
 }
 
 export interface DropRecord {
@@ -143,6 +214,10 @@ export interface AnalysisReport {
   };
   resolution: { pageCorrected: number; dropped: number; skippedClauses: number };
   notices: string[];
+  request?: AnalysisRequest;
+  overviewPoints?: OverviewPoint[];
+  missingProtections?: MissingProtection[];
+  promptResult?: PromptResult;
   judgement?: JudgementSnapshot;
   partial?: boolean;
   unreliable?: boolean;

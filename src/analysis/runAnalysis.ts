@@ -6,18 +6,31 @@ import { buildAnchorIndex, topClause, type AnchorIndex } from './anchors';
 import { buildAnalysisChunks, type AnalysisChunk } from './analysisChunks';
 import { verifyQuotedItems } from './verify';
 import { extractAmounts, uncapturedAmounts } from './amounts';
-import { groupForRollup, keepCitedSentences, overviewTargetSentenceCount } from './rollup';
+import { groupForRollup, keepCitedSentences } from './rollup';
 import { buildLedger, type LedgerChunkInput } from './ledger';
 import { dedupeVerifiedClauses } from './dedupe';
 import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
-import { CLAUSE_PROMPT, SECTION_PROMPT, OVERVIEW_PROMPT, checklistFor } from './prompts';
+import { buildClausePrompt, buildMissingPrompt, buildOverviewPrompt, SECTION_PROMPT } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS } from './config';
+import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
+import { NO_SUGGESTION, guardPriority, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf } from './rubric';
+import { isValidMissingItem, keepMissingClaims, missingPlans, type MissingInputClause } from './missingProtections';
+import {
+  assembleOverviewPoints,
+  keepPointSentences,
+  lawsEngaged,
+  statutorySentences,
+  type ModelPointSentence,
+} from './overviewPoints';
+import { runPromptPass } from './promptPass';
 import type { Task } from '../tasks/types';
 import type {
   AnalysisReport,
   CrossClauseResult,
   DropRecord,
+  MissingProtection,
+  PromptResult,
   RollupSentence,
   SectionSummary,
   VerifiedClause,
@@ -25,7 +38,6 @@ import type {
   VerifiedObligation,
   VerifiedPayment,
   VerifiedRisk,
-  LawPassageRef,
 } from './types';
 
 export interface LawHitLite {
@@ -55,7 +67,9 @@ export interface AnalysisOptions {
   fallbackModel: string | null;
   reasoning?: { effort: 'minimal' } | null;
   maxTokens?: number | null;
+  // Law search is no longer called from the risk path (no law text is loaded). Kept for the dev tools.
   lawSearch: (text: string, k: number) => Promise<LawHitLite[]>;
+  request?: AnalysisRequestInput;
   docSearch: (query: string, k: number) => Promise<SearchHitLite[]>;
   onProgress?: (msg: string) => void;
   onLog?: (msg: string) => void;
@@ -110,7 +124,11 @@ interface RawPayment {
 }
 interface RawRisk {
   text?: unknown;
+  priority?: unknown;
   severity?: unknown;
+  basis?: unknown;
+  suggestion?: unknown;
+  laws?: unknown;
   page?: unknown;
   quote?: unknown;
 }
@@ -169,7 +187,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
 
   const doc: DocumentRecord | undefined = await db.get('documents', docId);
   if (!doc || doc.status !== 'ready' || !doc.prepFingerprint) throw new Error('document is not ready');
-  const clausePrompt = `${CLAUSE_PROMPT}\n${checklistFor(doc.docType ?? null)}`;
+  const request = normaliseRequest(opts.request);
+  const clausePrompt = buildClausePrompt({ docType: doc.docType ?? null, detail: request.detailLevel, focus: request.focus });
   const pages = await loadPageMap(db, docId);
   const index = buildAnchorIndex(pages);
   const chunks = buildAnalysisChunks(pages);
@@ -224,7 +243,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   // 1. Clause analysis, one task per analysis chunk, every clause number requested.
   const plans: TaskPlan[] = chunks.map((chunk) => ({
     suffix: `a${chunk.index}`,
-    promptVersion: 'clause-analysis-v2',
+    promptVersion: 'clause-analysis-v3',
     prompt: clausePrompt,
     input: clauseInput(chunk, pages, defsContext, chunk.manifest),
     maxTokens: budget,
@@ -299,7 +318,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       const input = subsetInput(chunk, missing, index, defsContext) || clauseInput(chunk, pages, defsContext, missing);
       retryPlans.push({
         suffix: `r${indexNo}`,
-        promptVersion: 'clause-analysis-v2',
+        promptVersion: 'clause-analysis-v3',
         prompt: clausePrompt,
         input,
         maxTokens: Math.min(budget, 1200),
@@ -332,7 +351,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       const chunk = chunks.find((c) => c.index === indexNo)!;
       return {
         suffix: `x${indexNo}`,
-        promptVersion: 'clause-analysis-v2',
+        promptVersion: 'clause-analysis-v3',
         prompt: clausePrompt,
         input: clauseInput(chunk, pages, defsContext, chunk.manifest),
         maxTokens: budget,
@@ -367,11 +386,30 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   });
   const partialNow = failedClauseTasks.length > 0 || stillMissing.size > 0;
 
-  // 3. Verification (code) + law lookup for risks. Page and clause come from the resolver.
-  const lawCache = new Map<string, LawPassageRef[]>();
+  // 2c. Custom prompt: a separate pass over every analysis chunk. It never changes the general analysis.
+  let promptResult: PromptResult | undefined;
+  if (request.customPrompt) {
+    progress(`running custom prompt over ${chunks.length} chunks`);
+    const pr = await runPromptPass({
+      ctx,
+      runId,
+      doc,
+      chunks,
+      index,
+      defsContext,
+      request: request.customPrompt,
+      maxTokens: Math.min(budget, 1200),
+    });
+    for (const r of pr.runs) {
+      addLimits(r);
+      await pauseIfNeeded(r);
+    }
+    promptResult = pr.result;
+  }
+
+  // 3. Verification (code). Page and clause come from the resolver.
   let verifiedClauses: VerifiedClause[] = [];
   const drops: DropRecord[] = [];
-  let lawCalls = 0;
   let pageCorrected = 0;
 
   for (const chunk of chunks) {
@@ -437,33 +475,18 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       const vRisks: VerifiedRisk[] = [];
       for (let i = 0; i < risks.verified.length; i++) {
         const v = risks.verified[i];
-        const riskText = str(v.item.text);
-        let passages: LawPassageRef[] = [];
-        if (lawCalls < 45) {
-          const key = `${codeClause}|${riskText}`;
-          if (lawCache.has(key)) passages = lawCache.get(key)!;
-          else {
-            try {
-              const hits = await opts.lawSearch(`${str(item.summary)} ${riskText}`, 3);
-              passages = hits.map((h) => ({ id: h.id, title: h.title, text: h.text, fused: h.fused, lawVersion: h.lawVersion }));
-            } catch (e) {
-              log(`law search failed for clause ${codeClause}: ${String(e)}`);
-            }
-            lawCalls++;
-            lawCache.set(key, passages);
-          }
-        }
+        const basis = riskBasisOf(v.item.basis);
         vRisks.push({
           itemId: `${base}:r${i}`,
           clause: v.item.clause,
-          text: riskText,
-          severity: ['high', 'medium', 'low'].includes(str(v.item.severity))
-            ? (v.item.severity as VerifiedRisk['severity'])
-            : 'medium',
+          text: str(v.item.text),
+          severity: guardPriority(v.item.priority ?? v.item.severity, basis),
+          basis,
+          suggestion: str(v.item.suggestion).trim() || NO_SUGGESTION,
+          laws: normaliseLaws(v.item.laws),
           page: v.item.page,
           quote: v.item.quote,
           verified: true,
-          lawPassages: passages,
           applicability: 'unverified',
         });
       }
@@ -482,6 +505,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         payments: vPayments,
         risks: vRisks,
         verifiedItems: vObligations.length + vDates.length + vPayments.length + vRisks.length,
+        missing: normaliseMissing(item.missing),
+        prose: normaliseProse(item.prose),
       });
     }
   }
@@ -493,6 +518,32 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     `verified ${verifiedClauses.length} clauses, dropped ${drops.length} unverified items, corrected ${pageCorrected} pages, ` +
       `deduped ${dedupeStats.removed} repeated items`,
   );
+
+  // 3b. Missing protections: model check over clause summaries; each claim needs a whole-document search miss.
+  let missingProtections: MissingProtection[] = [];
+  let missingUnchecked = 0;
+  let missingFailed = 0;
+  if (verifiedClauses.length > 0) {
+    const clauseInputs: MissingInputClause[] = verifiedClauses.map((c) => ({
+      id: c.itemId,
+      clause: c.clauseNo,
+      type: c.type,
+      summary: c.summary,
+    }));
+    progress(`checking missing protections (${clauseInputs.length} clauses)`);
+    const missingRun = await executeTasks(ctx, runId, doc, missingPlans(clauseInputs, defsContext, request.focus));
+    addLimits(missingRun);
+    await pauseIfNeeded(missingRun);
+    missingFailed = missingRun.tasks.filter((t) => t.status === 'failed').length;
+    const validClauseIds = new Set(verifiedClauses.map((c) => c.itemId));
+    const checked = await keepMissingClaims(
+      missingRun.collected.flatMap((c) => c.items.filter(isValidMissingItem)),
+      validClauseIds,
+      opts.docSearch,
+    );
+    missingProtections = checked.kept;
+    missingUnchecked = checked.unchecked;
+  }
 
   // 4. Roll-up as dependent tasks.
   const rollupItems = verifiedClauses.map((c) => ({
@@ -571,26 +622,6 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   const sectionSentences = sections.flatMap((s) =>
     s.sentences.map((sentence, j) => ({ id: `S${s.section}-${j + 1}`, text: sentence.text, cites: sentence.cites })),
   );
-  let overview: RollupSentence[] = [];
-  if (sectionSentences.length > 0) {
-    progress('writing overview');
-    const target = overviewTargetSentenceCount(sectionSentences.length);
-    const overviewPlan: TaskPlan = {
-      suffix: 'ov',
-      promptVersion: 'overview-v1',
-      prompt: OVERVIEW_PROMPT,
-      input: `${defsContext}\n\nWrite about ${target} sentences.\nItems:\n${JSON.stringify(sectionSentences)}`,
-      maxTokens: Math.max(800, Math.min(2000, target * 80)),
-      validate: (x) => typeof x === 'object' && x !== null,
-    };
-    const ovRun = await executeTasks(ctx, runId, doc, [overviewPlan]);
-    addLimits(ovRun);
-    await pauseIfNeeded(ovRun);
-    const valid = new Set(sectionSentences.map((s) => s.id));
-    for (const s of sectionSentences) for (const cite of s.cites) valid.add(cite);
-    for (const c of ovRun.collected) overview.push(...keepCitedSentences(c.items as never[], valid).kept);
-  }
-
   // 5. Cross-clause pass + whole-document search before any "missing" claim.
   const structure = verifiedClauses.map((c) => ({
     clause: c.clauseNo,
@@ -640,6 +671,35 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       ),
     ),
   };
+
+  // 5b. Overview: 14 numbered points. Point 11 is built in code from the laws named; the rest are model-written.
+  const statutory = statutorySentences(lawsEngaged(verifiedClauses, missingProtections));
+  const findingItems = crossClause.findings.map((f, i) => ({ id: `F${i + 1}`, text: f.text, cites: f.itemIds }));
+  const missingItems = missingProtections.map((m) => ({ id: m.itemId, text: `${m.topic}: ${m.text}`, cites: m.cites }));
+  const overviewValid = new Set<string>([
+    ...verifiedClauses.flatMap((c) => [c.itemId, ...c.risks.map((r) => r.itemId)]),
+    ...sectionSentences.flatMap((s) => [s.id, ...s.cites]),
+    ...findingItems.map((f) => f.id),
+    ...missingItems.map((m) => m.id),
+  ]);
+  let modelSentences: ModelPointSentence[] = [];
+  if (sectionSentences.length > 0 || findingItems.length > 0 || missingItems.length > 0) {
+    progress('writing overview');
+    const overviewPlan: TaskPlan = {
+      suffix: 'ov',
+      promptVersion: 'overview-points-v1',
+      prompt: buildOverviewPrompt(request.detailLevel),
+      input: `${defsContext}\n\nItems:\n${JSON.stringify({ sections: sectionSentences, findings: findingItems, missing: missingItems })}`,
+      maxTokens: Math.max(800, Math.min(3000, 13 * OVERVIEW_SENTENCES_PER_POINT[request.detailLevel] * 90)),
+      validate: (x) => typeof x === 'object' && x !== null,
+    };
+    const ovRun = await executeTasks(ctx, runId, doc, [overviewPlan]);
+    addLimits(ovRun);
+    await pauseIfNeeded(ovRun);
+    for (const c of ovRun.collected) modelSentences.push(...keepPointSentences(c.items, overviewValid).kept);
+  }
+  const overviewPoints = assembleOverviewPoints(modelSentences, statutory);
+  let overview: RollupSentence[] = overviewPoints.flatMap((p) => p.sentences).filter((s) => s.cites.length > 0);
 
   // 6. Coverage ledger, including skipped clauses.
   const ledgerInput: LedgerChunkInput[] = chunks.map((chunk) => {
@@ -784,8 +844,15 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     resolution: { pageCorrected, dropped: drops.length, skippedClauses: ledger.totals.clausesSkipped },
     notices: [
       'AI-assisted, requires lawyer review.',
-      'Law passages are PLACEHOLDER test data; every law-based risk is applicability unverified.',
+      'Law references are model knowledge; their applicability is unverified.',
       'Only quotes verified against the stored page text are shown.',
+      ...(missingUnchecked > 0
+        ? [`${missingUnchecked} missing-protection claim(s) could not be checked against the document and were left out.`]
+        : []),
+      ...(missingFailed > 0 ? [`Missing-protections check incomplete: ${missingFailed} group(s) failed.`] : []),
+      ...(promptResult && promptResult.failedChunks.length > 0
+        ? [`Custom prompt incomplete: ${promptResult.failedChunks.length} chunk(s) failed.`]
+        : []),
       ...(partial
         ? [
             analysisMode === 'structure-free'
@@ -811,6 +878,10 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     },
     dedupe: dedupeStats,
     chunking,
+    request,
+    overviewPoints,
+    missingProtections,
+    ...(promptResult ? { promptResult } : {}),
   };
 
   await db.put('analysis_reports', { runId, docId, report, savedAt: Date.now() });
@@ -838,16 +909,15 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   return report;
 }
 
+// Filters on the document inside the saved body, so older reports for other documents cannot push this one out.
 export async function restoreReportFromSupabase(supabase: SupabaseClient, docId: string): Promise<AnalysisReport | null> {
   const { data, error } = await supabase
     .from('reports')
     .select('body,created_at')
+    .eq('body->>docId', docId)
     .order('created_at', { ascending: false })
-    .limit(50);
-  if (error || !data) return null;
-  for (const row of data) {
-    const body = row.body as AnalysisReport | null;
-    if (body && body.docId === docId) return body;
-  }
-  return null;
+    .limit(1);
+  if (error || !data || data.length === 0) return null;
+  const body = data[0].body as AnalysisReport | null;
+  return body && body.docId === docId ? body : null;
 }
