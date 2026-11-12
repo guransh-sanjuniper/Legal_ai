@@ -2,14 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   openHarnessDb,
-  FINAL_PAGE_STATUSES,
   type DocumentRecord,
   type HarnessDBHandle,
 } from '../../runner/db';
 import { sha256Bytes } from '../../ingest/hash';
 import { requestPersistence, storageReport, type StorageReport } from '../../ingest/storage';
-import { libraryStatus, statusLabel, statusTone } from './docStatus';
-import { startIngestWorker, type IngestHandle } from './ingestRunner';
+import { libraryStatusFrom, stageLabel, statusLabel, statusTone } from './docStatus';
+import { countReviewPages, isPrepared, readPreparationState, type PreparationState } from './preparationState';
+import { getActiveDocId, runPreparation, subscribePreparation } from './prepare';
 import { documentLock, removeDocumentFromDevice } from './removeDocument';
 import { PageHeader } from '../app/pages/Placeholder';
 
@@ -26,17 +26,9 @@ function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-// Counts pages that still need a decision. Only used for the "Needs review (N)" label.
-async function countReviewPages(db: HarnessDBHandle, docId: string): Promise<number> {
-  let count = 0;
-  let cursor = await db
-    .transaction('pages')
-    .store.openCursor(IDBKeyRange.bound([docId, 0], [docId, Number.MAX_SAFE_INTEGER]));
-  while (cursor) {
-    if (!FINAL_PAGE_STATUSES.includes(cursor.value.status)) count++;
-    cursor = await cursor.continue();
-  }
-  return count;
+interface PreparedCacheEntry {
+  key: string;
+  prepared: boolean;
 }
 
 export function DocumentsPage() {
@@ -44,7 +36,9 @@ export function DocumentsPage() {
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
   const [reviewCounts, setReviewCounts] = useState<Record<string, number>>({});
-  const [progress, setProgress] = useState<Record<string, { done: number; total: number }>>({});
+  const [prepStates, setPrepStates] = useState<Record<string, PreparationState | null>>({});
+  const [preparedIds, setPreparedIds] = useState<Record<string, boolean>>({});
+  const [activeState, setActiveState] = useState<PreparationState | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -56,9 +50,10 @@ export function DocumentsPage() {
   const [ocrLangs, setOcrLangs] = useState('eng');
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const runnerRef = useRef<IngestHandle | null>(null);
   const reviewCacheRef = useRef(new Map<string, number>());
   const reviewSigRef = useRef(new Map<string, string>());
+  const preparedCacheRef = useRef(new Map<string, PreparedCacheEntry>());
+  const resumeAttemptRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,24 +82,44 @@ export function DocumentsPage() {
       if (!target) return;
       const all = (await target.getAll('documents')).sort((a, b) => b.createdAt - a.createdAt);
       setDocs(all);
+
       const counts: Record<string, number> = {};
+      const states: Record<string, PreparationState | null> = {};
+      const prepared: Record<string, boolean> = {};
+
       for (const doc of all) {
+        states[doc.id] = readPreparationState(doc.id);
+
         if (doc.status !== 'review') {
           counts[doc.id] = 0;
-          continue;
+        } else {
+          const signature = `${doc.status}|${doc.pageCount}|${doc.chunkCount}`;
+          const cached = reviewCacheRef.current.get(doc.id);
+          if (cached !== undefined && reviewSigRef.current.get(doc.id) === signature) {
+            counts[doc.id] = cached;
+          } else {
+            const count = await countReviewPages(target, doc.id);
+            reviewCacheRef.current.set(doc.id, count);
+            reviewSigRef.current.set(doc.id, signature);
+            counts[doc.id] = count;
+          }
         }
-        const signature = `${doc.status}|${doc.pageCount}|${doc.chunkCount}`;
-        const cached = reviewCacheRef.current.get(doc.id);
-        if (cached !== undefined && reviewSigRef.current.get(doc.id) === signature) {
-          counts[doc.id] = cached;
-          continue;
+
+        const key = `${doc.status}|${doc.prepFingerprint}|${doc.chunkCount}`;
+        const cached = preparedCacheRef.current.get(doc.id);
+        if (cached && cached.key === key) {
+          prepared[doc.id] = cached.prepared;
+        } else {
+          const value = await isPrepared(target, doc);
+          preparedCacheRef.current.set(doc.id, { key, prepared: value });
+          prepared[doc.id] = value;
         }
-        const count = await countReviewPages(target, doc.id);
-        reviewCacheRef.current.set(doc.id, count);
-        reviewSigRef.current.set(doc.id, signature);
-        counts[doc.id] = count;
       }
+
       setReviewCounts(counts);
+      setPrepStates(states);
+      setPreparedIds(prepared);
+      setBusyDocId(getActiveDocId());
       setLoading(false);
     },
     [db],
@@ -117,71 +132,64 @@ export function DocumentsPage() {
     return () => clearInterval(timer);
   }, [db, refresh]);
 
+  // The orchestrator runs outside React, so a preparation started on another route
+  // keeps its state and progress. This subscription keeps the table live.
+  useEffect(() => {
+    return subscribePreparation((state) => {
+      setActiveState(state);
+      setBusyDocId(getActiveDocId());
+      preparedCacheRef.current.delete(state.docId);
+      if (state.stage === 'ready' || state.stage === 'failed' || state.stage === 'needs-review') {
+        void refresh();
+      }
+    });
+  }, [refresh]);
+
   // Review counts can change from the harness page in another tab.
   useEffect(() => {
     const onFocus = () => {
       reviewSigRef.current.clear();
+      preparedCacheRef.current.clear();
       void refresh();
     };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [refresh]);
 
-  // The preparation worker is intentionally not terminated on unmount: it lives outside
-  // the page so navigating to another module does not stop an import. Its own Web Lock
-  // still prevents a second worker for the same document.
-
-  function clearProgress(docId: string) {
-    setProgress((current) => {
-      const next = { ...current };
-      delete next[docId];
-      return next;
-    });
-  }
-
-  function startFor(docId: string) {
-    if (runnerRef.current) {
-      setError('Another document is being prepared in this tab. Wait for it to finish first.');
-      return;
-    }
-    setError(null);
-    setNotice(null);
-    setBusyDocId(docId);
-    setProgress((current) => ({ ...current, [docId]: { done: 0, total: 0 } }));
-
-    runnerRef.current = startIngestWorker(docId, (event) => {
-      switch (event.type) {
-        case 'progress':
-          setProgress((current) => ({ ...current, [docId]: { done: event.done, total: event.total } }));
-          break;
-        case 'finished':
-          reviewSigRef.current.delete(docId);
+  const runFor = useCallback(
+    (doc: DocumentRecord, force: { forceIngest?: boolean; forceDefinitions?: boolean } = {}) => {
+      if (!db) return;
+      setError(null);
+      setNotice(null);
+      setBusyDocId(doc.id);
+      void runPreparation(doc.id, { db, ...force })
+        .catch((e) => {
+          setError(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          setBusyDocId(getActiveDocId());
           void refresh();
-          break;
-        case 'locked':
-          setError('This document is already being prepared in another tab.');
-          setBusyDocId(null);
-          clearProgress(docId);
-          runnerRef.current = null;
-          break;
-        case 'error':
-          setError(`Preparation failed: ${event.message}`);
-          setBusyDocId(null);
-          clearProgress(docId);
-          runnerRef.current = null;
-          break;
-        case 'idle':
-          setBusyDocId(null);
-          clearProgress(docId);
-          runnerRef.current = null;
-          reviewSigRef.current.delete(docId);
-          void refresh();
-          break;
-        default:
-          break;
-      }
+        });
+    },
+    [db, refresh],
+  );
+
+  // Auto-resume the first document that stopped mid-preparation. A review or failed
+  // document waits for the user: the review page is a decision, and Retry is explicit.
+  useEffect(() => {
+    if (!db || loading || resumeAttemptRef.current) return;
+    if (getActiveDocId()) return;
+    const first = docs.find((doc) => {
+      if (preparedIds[doc.id]) return false;
+      if (doc.status === 'review') return false;
+      const state = prepStates[doc.id];
+      if (state?.stage === 'failed') return false;
+      return true;
     });
-  }
+    if (!first) return;
+    resumeAttemptRef.current = true;
+    runFor(first);
+  }, [db, loading, docs, preparedIds, prepStates, runFor]);
 
   async function onFile(file: File) {
     if (!db || importing) return;
@@ -209,7 +217,7 @@ export function DocumentsPage() {
         return;
       }
 
-      await db.put('documents', {
+      const doc: DocumentRecord = {
         id: hash,
         name: file.name,
         hash,
@@ -221,9 +229,10 @@ export function DocumentsPage() {
         pageCount: 0,
         prepFingerprint: null,
         chunkCount: 0,
-      });
+      };
+      await db.put('documents', doc);
       await refresh();
-      startFor(hash);
+      runFor(doc);
     } catch (e) {
       setError(`Could not import the PDF: ${String(e)}`);
     } finally {
@@ -233,7 +242,7 @@ export function DocumentsPage() {
   }
 
   function openDoc(doc: DocumentRecord) {
-    if (doc.status === 'ready') navigate(`/analysis/${doc.id}`);
+    if (preparedIds[doc.id]) navigate(`/analysis/${doc.id}`);
     else window.location.assign(`/?page=ingest&doc=${encodeURIComponent(doc.id)}`);
   }
 
@@ -241,9 +250,7 @@ export function DocumentsPage() {
     if (!db) return;
     const lock = await documentLock(doc);
     if (lock) {
-      setError(
-        `This document is being ${lock === 'preparation' ? 'prepared' : 'analysed'}. Wait for it to finish before removing it.`,
-      );
+      setError('This document is being prepared or analysed. Wait for it to finish before removing it.');
       return;
     }
     const confirmed = window.confirm(
@@ -257,6 +264,7 @@ export function DocumentsPage() {
       await removeDocumentFromDevice(db, doc);
       reviewCacheRef.current.delete(doc.id);
       reviewSigRef.current.delete(doc.id);
+      preparedCacheRef.current.delete(doc.id);
       await refresh();
       setNotice(`Removed "${doc.name}" from this device.`);
     } catch (e) {
@@ -368,12 +376,19 @@ export function DocumentsPage() {
             </thead>
             <tbody>
               {docs.map((doc) => {
-                const status = libraryStatus(doc.status);
-                const reviewPages = reviewCounts[doc.id] ?? 0;
-                const label = statusLabel(status, reviewPages);
-                const current = progress[doc.id];
+                const state = activeState?.docId === doc.id ? activeState : prepStates[doc.id] ?? null;
+                const status = libraryStatusFrom({
+                  doc,
+                  prepared: preparedIds[doc.id] ?? false,
+                  state,
+                  reviewPages: reviewCounts[doc.id] ?? 0,
+                });
+                const label = statusLabel(status, reviewCounts[doc.id] ?? 0, state?.stage);
+                const current = state?.progress;
                 const statusText =
                   status === 'preparing' && current && current.total > 0 ? `${label} ${current.done}/${current.total}` : label;
+                const indeterminate = status === 'preparing' && (!current || current.total === 0);
+                const failed = state?.failed;
                 return (
                   <tr key={doc.id}>
                     <td>
@@ -383,7 +398,34 @@ export function DocumentsPage() {
                       <span className="app-doc-meta">
                         Added {formatDate(doc.createdAt)}
                         {doc.chunkCount > 0 ? ` · ${doc.chunkCount} chunks` : ''}
+                        {status === 'ready' && state?.preparedAt ? ` · Prepared ${formatDate(state.preparedAt)}` : ''}
                       </span>
+                      {status === 'preparing' && state?.message && (
+                        <span className="app-stage-label">{state.message}</span>
+                      )}
+                      {status === 'failed' && failed && (
+                        <span className="app-row-error">
+                          {stageLabel(failed.stage)}: {failed.message}
+                        </span>
+                      )}
+                      {status === 'preparing' && (
+                        <div
+                          className={`app-progress${indeterminate ? ' app-progress--indeterminate' : ''}`}
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={current?.total ?? 0}
+                          aria-valuenow={current?.done ?? 0}
+                        >
+                          <div
+                            className={`app-progress-bar${indeterminate ? ' app-progress-bar--indeterminate' : ''}`}
+                            style={
+                              indeterminate
+                                ? undefined
+                                : { width: `${current && current.total > 0 ? Math.round((current.done / current.total) * 100) : 0}%` }
+                            }
+                          />
+                        </div>
+                      )}
                     </td>
                     <td>{doc.pageCount > 0 ? doc.pageCount : '—'}</td>
                     <td>{formatBytes(doc.size)}</td>
@@ -393,16 +435,31 @@ export function DocumentsPage() {
                     <td>
                       <div className="app-row-actions">
                         <button type="button" className="app-link-button" onClick={() => openDoc(doc)}>
-                          {doc.status === 'ready' ? 'Open' : 'Review'}
+                          {status === 'ready' ? 'Open' : status === 'needs_review' ? 'Review' : 'Prepare'}
                         </button>
-                        {doc.status !== 'ready' && (
+                        {status === 'preparing' && (
                           <button
                             type="button"
                             className="app-link-button"
                             disabled={Boolean(busyDocId)}
-                            onClick={() => startFor(doc.id)}
+                            onClick={() => runFor(doc)}
                           >
                             Resume
+                          </button>
+                        )}
+                        {status === 'failed' && (
+                          <button
+                            type="button"
+                            className="app-link-button"
+                            disabled={Boolean(busyDocId)}
+                            onClick={() =>
+                              runFor(doc, {
+                                forceIngest: failed?.stage === 'ingest',
+                                forceDefinitions: failed?.stage === 'definitions',
+                              })
+                            }
+                          >
+                            Retry
                           </button>
                         )}
                         <button

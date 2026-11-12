@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { openHarnessDb, type DocumentRecord } from '../../../runner/db';
-import { libraryStatus, statusLabel, statusTone } from '../../library/docStatus';
+import { libraryStatusFrom, stageLabel, statusLabel, statusTone } from '../../library/docStatus';
+import { isPrepared, readPreparationState, type PreparationState } from '../../library/preparationState';
 import { EmptyCard, PageHeader } from './Placeholder';
 
 export function AnalysisDocPage() {
   const { docId } = useParams<{ docId: string }>();
   const [doc, setDoc] = useState<DocumentRecord | null | undefined>(undefined);
+  const [prepared, setPrepared] = useState(false);
+  const [state, setState] = useState<PreparationState | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -17,7 +20,12 @@ export function AnalysisDocPage() {
     openHarnessDb()
       .then(async (db) => {
         const found = await db.get('documents', docId);
-        if (alive) setDoc(found ?? null);
+        if (!alive) return;
+        setDoc(found ?? null);
+        if (found) {
+          setPrepared(await isPrepared(db, found));
+          setState(readPreparationState(found.id));
+        }
       })
       .catch(() => {
         if (alive) setDoc(null);
@@ -57,16 +65,17 @@ export function AnalysisDocPage() {
     );
   }
 
-  const status = libraryStatus(doc.status);
+  const status = libraryStatusFrom({ doc, prepared, state, reviewPages: 0 });
+  const label = statusLabel(status, state?.review?.pages ?? 0, state?.stage);
   return (
     <>
       <PageHeader
         eyebrow="Module"
         title={doc.name}
         description={`${doc.pageCount} pages · ${doc.chunkCount} chunks · prepared on this device`}
-        actions={<span className={`app-chip app-chip--${statusTone(status)}`}>{statusLabel(status, 0)}</span>}
+        actions={<span className={`app-chip app-chip--${statusTone(status)}`}>{label}</span>}
       />
-      {doc.status === 'ready' ? (
+      {prepared ? (
         <EmptyCard title="Deep Analysis is the next build">
           <p>
             This page will run the existing clause analysis, quote verification, roll-up and coverage ledger for this
@@ -79,7 +88,11 @@ export function AnalysisDocPage() {
         </EmptyCard>
       ) : (
         <EmptyCard title="This document is not ready yet">
-          <p>Finish preparation and page review first. Analysis never runs on pages that are still unresolved.</p>
+          <p>
+            {state?.stage === 'failed'
+              ? `Preparation failed at ${stageLabel(state.failed?.stage ?? null)}: ${state.failed?.message ?? 'unknown error'}`
+              : 'Finish preparation and page review first. Analysis never runs on pages that are still unresolved.'}
+          </p>
           <a className="app-primary-button" href={`/?page=ingest&doc=${encodeURIComponent(doc.id)}`}>
             Open preparation page
           </a>

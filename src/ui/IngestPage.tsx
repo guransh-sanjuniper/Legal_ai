@@ -10,6 +10,7 @@ import { chunkDocumentWithConfidence } from '../ingest/chunkQuality';
 import { DEFAULT_CHUNK_CONFIG } from '../ingest/chunk';
 import type { ChunkCheck } from '../ingest/checkChunks';
 import { PageNav } from './PageNav';
+import { runPreparation } from './library/prepare';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
 const reasonLabel = (reason: string | null) =>
@@ -138,6 +139,7 @@ export function IngestPage() {
     if (workerRef.current) workerRef.current.terminate();
     const worker = new Worker(new URL('../ingest/ingest.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
+    const docId = msg.docId;
     setBusy(true);
     worker.onmessage = (e: MessageEvent<IngestEvent | { type: 'locked' | 'idle'; docId?: string }>) => {
       const ev = e.data;
@@ -148,6 +150,14 @@ export function IngestPage() {
       } else if (ev.type === 'finished') {
         addLog(`finished: ${ev.status}, review pages ${ev.review}, chunks ${ev.chunks}`);
         setProgress(null);
+        // The review page continues the library preparation automatically once every
+        // page is final. Ingestion is not repeated: the library skips the stage.
+        if (ev.status === 'ready') {
+          void runPreparation(docId, {
+            db: db ?? undefined,
+            onEvent: (state) => addLog(`preparation: ${state.stage}${state.message ? ` — ${state.message}` : ''}`),
+          }).catch((err) => addLog(`preparation failed: ${String(err)}`));
+        }
       } else if (ev.type === 'locked') {
         addLog('locked: this document is being processed in another tab');
       } else if (ev.type === 'error') {

@@ -8,6 +8,9 @@ const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.
 
 export const supabaseConfigured = Boolean(url && anonKey);
 export const supabaseUrl = url;
+// The anon key is public by design (it is the same key the browser already uses).
+// The preparation layer needs it to call the proxy through the existing definitions task.
+export const supabaseAnonKey = anonKey;
 
 export const supabaseProjectHost = (() => {
   if (!url) return 'not configured';

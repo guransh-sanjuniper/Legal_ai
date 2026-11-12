@@ -20,18 +20,27 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `quality/` pure scorers over saved runs, golden thresholds, repeat-run comparison, regression config and score history (no UI imports)
 - `ui/` React pages only
 - `ui/app/` the app shell: router, sidebar, login gate, theme, placeholders (UI only)
-- `ui/library/` document library page, status derivation, ingest-worker wrapper, local removal
+- `ui/library/` document library page, preparation orchestrator, status derivation, ingest-worker wrapper, local removal
 - `lib/` shared Supabase client for the app shell (one persisted session per project)
 
 ## App shell (routes)
 - `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
 - `/chat`, `/draft`, `/compare` are placeholders.
-- `/documents` lists IndexedDB documents, imports a PDF, starts the existing ingestion worker, removes a document from this device.
+- `/documents` lists IndexedDB documents, imports a PDF and runs the whole preparation (ingestion, embeddings, index, definitions), removes a document from this device.
 - `/analysis` lists ready documents; `/analysis/:docId` is a placeholder and shows the document's name, pages and status.
-- Status: `ready` → Ready; `review` → Needs review (N pages); `new`/`processing` → Preparing. The document-level `status` is authoritative; the review count is only the label.
+- Status: `ready` → Ready; `review` → Needs review (N pages); `new`/`processing` → Preparing. The library's Ready is the durable preparation result (see Document preparation); the document-level `status` stays the ingestion status.
 - Login: Supabase Auth email+password. The app shell and the harness pages share one persisted session (same project URL, same localStorage key).
 - "Remove from this device" deletes the document, pages, chunks, OCR decisions, embeddings, definitions, analysis reports/state, tasks and run state for that document. It refuses while a preparation or analysis lock is held. Supabase reports are kept.
 - Theme: light/dark, scoped to the app shell; the harness pages keep their look.
+
+## Document preparation (library)
+- "Import PDF" runs the whole preparation in one go: ingestion (extract, OCR, page decisions, chunking), then embeddings, then the keyword-index warm-up, then the definitions sheet. The library is the only orchestrator; the pipeline modules are unchanged.
+- The orchestrator lives in `src/ui/library/prepare.ts` outside React. It survives route changes (one preparation per tab), and the per-document `navigator.locks` lock (`doc:<hash>`) still blocks another tab. Progress is written to `localStorage` (`legal-app.prep.<docId>`) and pushed to the library, so navigating away and back keeps the progress live.
+- Stages are skipped when their durable result exists: chunks on the document, `embedding_state` with `completedAt` and the matching preparation fingerprint and embedding model version, and a `definitions` record with the matching preparation fingerprint. A document already prepared in the harness (no wrapper state) reaches Ready without re-running those stages.
+- The keyword index is derived in the retrieval worker, not persisted. Preparation warms it with a search call; the Search page rebuilds its own index. A document with no definition/party text gets an empty `definitions` record so it can reach Ready.
+- `Ready` is the durable preparation result: `doc.status === 'ready'` plus chunks, embeddings and a matching definitions sheet. The document's `status` stays the ingestion status; a ready document with a missing stage is `Preparing`.
+- Status: Preparing (stage + progress bar) / Needs review (N pages) / Ready / Failed (stage + reason + Retry). A review document pauses and waits for the user; the review page continues the preparation automatically after the last page decision. A failed stage is retried explicitly; partial definitions (some failed tasks) are treated as failed.
+- "Retry" re-runs the failed stage; "Remove" deletes the document and its local state. `preparedAt` and the prepared fingerprint (including the embedding model version) are stored on Ready.
 
 ## Tables
 Supabase: `runs`, `task_results`, `reports`, `rate_limits`. RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.

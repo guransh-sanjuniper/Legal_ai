@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { openHarnessDb, type DocumentRecord } from '../../../runner/db';
+import { isPrepared } from '../../library/preparationState';
 import { PageHeader } from './Placeholder';
 
 export function AnalysisIndexPage() {
@@ -11,8 +12,12 @@ export function AnalysisIndexPage() {
     openHarnessDb()
       .then(async (db) => {
         const all = await db.getAll('documents');
+        const prepared: DocumentRecord[] = [];
+        for (const doc of all) {
+          if (await isPrepared(db, doc)) prepared.push(doc);
+        }
         if (!alive) return;
-        setDocs(all.filter((doc) => doc.status === 'ready').sort((a, b) => b.createdAt - a.createdAt));
+        setDocs(prepared.sort((a, b) => b.createdAt - a.createdAt));
       })
       .catch(() => {
         if (alive) setDocs([]);
