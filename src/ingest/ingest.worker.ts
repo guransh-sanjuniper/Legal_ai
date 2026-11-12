@@ -25,7 +25,8 @@ async function handle(msg: IngestMessage) {
       else await reocrPage(deps, msg.docId, msg.pageNo);
       post({ type: 'idle', docId: msg.docId });
     } catch (err) {
-      post({ type: 'error', message: String(err) });
+      console.error('ingest error', String(err), (err as Error)?.stack);
+      post({ type: 'error', message: String(err), stack: err instanceof Error ? err.stack : undefined });
     }
   });
 }

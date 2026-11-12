@@ -4,6 +4,52 @@ import { itemsToText } from './textItems';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
+
+// pdf.js's main build assumes a DOM for its canvas and SVG filter factories. The ingestion
+// pipeline renders inside a Web Worker, so provide OffscreenCanvas/no-op factories there.
+class OffscreenCanvasFactory {
+  create(width: number, height: number): { canvas: OffscreenCanvas; context: OffscreenCanvasRenderingContext2D } {
+    const canvas = new OffscreenCanvas(Math.max(1, width), Math.max(1, height));
+    const context = canvas.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
+    return { canvas, context };
+  }
+  reset(entry: { canvas: OffscreenCanvas }, width: number, height: number): void {
+    entry.canvas.width = Math.max(1, width);
+    entry.canvas.height = Math.max(1, height);
+  }
+  destroy(entry: { canvas: OffscreenCanvas | null; context: OffscreenCanvasRenderingContext2D | null }): void {
+    if (entry.canvas) {
+      entry.canvas.width = 0;
+      entry.canvas.height = 0;
+    }
+    entry.canvas = null;
+    entry.context = null;
+  }
+  getNoAlphaContext(canvas: OffscreenCanvas): OffscreenCanvasRenderingContext2D | null {
+    return (canvas.getContext('2d', { alpha: false, willReadFrequently: true }) ??
+      canvas.getContext('2d')) as OffscreenCanvasRenderingContext2D | null;
+  }
+}
+
+class NoopFilterFactory {
+  addFilter(): string {
+    return 'none';
+  }
+  addAlphaFilter(): string {
+    return 'none';
+  }
+  addLuminosityFilter(): string {
+    return 'none';
+  }
+  addKnockoutFilter(): string {
+    return 'none';
+  }
+  addHCMFilter(): string {
+    return 'none';
+  }
+  destroy(): void {}
+}
+
 export type PdfDoc = pdfjs.PDFDocumentProxy;
 
 export interface NativePage {
@@ -24,16 +70,25 @@ export function openPdf(bytes: ArrayBuffer): Promise<PdfDoc> {
   // passed on the main thread (review canvas). wasmUrl is worker-safe and is what CCITT/JBIG2
   // masks need.
   const hasDom = typeof document !== 'undefined';
+  const origin = typeof location !== 'undefined' && location.origin ? location.origin : '';
+  const asset = (path: string) => `${origin}${path}`;
   return pdfjs.getDocument({
     data: new Uint8Array(bytes),
     useSystemFonts: false,
-    wasmUrl: '/wasm/',
-    cMapUrl: '/cmaps/',
+    wasmUrl: asset('/wasm/'),
+    cMapUrl: asset('/cmaps/'),
     cMapPacked: true,
-    standardFontDataUrl: '/standard_fonts/',
+    standardFontDataUrl: asset('/standard_fonts/'),
     // In a worker, make pdf.js fetch these assets itself. Without this, pdf.js evaluates its
     // default useWorkerFetch expression, which reads document.baseURI and throws.
-    ...(hasDom ? {} : { useWorkerFetch: true }),
+    ...(hasDom
+      ? {}
+      : {
+          useWorkerFetch: true,
+          disableWorkerRendering: true,
+          CanvasFactory: OffscreenCanvasFactory,
+          FilterFactory: NoopFilterFactory,
+        }),
   }).promise;
 }
 

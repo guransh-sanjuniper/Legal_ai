@@ -17,7 +17,7 @@ export type IngestEvent =
   | { type: 'progress'; done: number; total: number; skipped: number; stage: string }
   | { type: 'page'; pageNo: number; status: PageStatus; reason: string | null }
   | { type: 'finished'; status: DocumentRecord['status']; review: number; chunks: number; prepFingerprint: string | null }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; stack?: string };
 
 export interface PipelineDeps {
   db: HarnessDBHandle;
@@ -45,9 +45,9 @@ interface OcrOutcome {
   source: PageRecord['source'];
   reason: string | null;
   dpi: number | null;
-  confidence?: number | null;
-  words?: number | null;
-  psm?: string | null;
+  ocrConfidence?: number | null;
+  ocrWords?: number | null;
+  ocrPsm?: string | null;
 }
 
 async function ocrPage(
@@ -101,9 +101,9 @@ async function ocrPage(
     source: 'ocr',
     reason: ok ? null : best.check.reason,
     dpi: best.dpi,
-    confidence: best.confidence,
-    words: best.check.words,
-    psm: best.psm,
+    ocrConfidence: best.confidence,
+    ocrWords: best.check.words,
+    ocrPsm: best.psm,
   };
 }
 

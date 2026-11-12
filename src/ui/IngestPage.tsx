@@ -32,6 +32,8 @@ export function IngestPage() {
   const [reviewPageNo, setReviewPageNo] = useState<number | null>(null);
   const [correction, setCorrection] = useState('');
   const [busy, setBusy] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugPageNo, setDebugPageNo] = useState<number | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pdfRef = useRef<{ docId: string; pdf: PdfDoc } | null>(null);
@@ -263,6 +265,15 @@ export function IngestPage() {
           <div>
             Review needed: {review.length} page(s).{' '}
             {selected.status === 'ready' ? <b style={{ color: 'green' }}>READY</b> : <span>Not ready</span>}
+            <button
+              style={{ marginLeft: 12 }}
+              onClick={() => {
+                setDebugOpen((v) => !v);
+                if (debugPageNo === null) setDebugPageNo(pages[0]?.pageNo ?? 1);
+              }}
+            >
+              Debug: extracted text
+            </button>
           </div>
         </div>
       )}
@@ -333,6 +344,7 @@ export function IngestPage() {
                 >
                   Retry OCR (best of 200–400 DPI)
                 </button>
+                <button onClick={() => { setDebugPageNo(reviewPage.pageNo); setDebugOpen(true); }}>Show extracted text</button>
                 <button onClick={() => setReviewPageNo(null)}>Close</button>
               </div>
             </div>
@@ -444,6 +456,74 @@ export function IngestPage() {
             </>
           )}
         </>
+      )}
+
+      {debugOpen && (
+        <aside
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: 520,
+            background: '#fff',
+            borderLeft: '1px solid #999',
+            boxShadow: '-4px 0 12px rgba(0,0,0,0.15)',
+            zIndex: 50,
+            display: 'flex',
+            flexDirection: 'column',
+            fontFamily: 'sans-serif',
+          }}
+        >
+          <div style={{ padding: 8, borderBottom: '1px solid #ddd', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <b>Extracted text (debug)</b>
+            <span style={{ fontSize: 11, color: '#666' }}>{pages.length} pages</span>
+            <button style={{ marginLeft: 'auto' }} onClick={() => setDebugOpen(false)}>Close</button>
+          </div>
+          <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+            <div style={{ width: 170, overflow: 'auto', borderRight: '1px solid #eee' }}>
+              {pages.map((p) => (
+                <button
+                  key={p.pageNo}
+                  onClick={() => setDebugPageNo(p.pageNo)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '4px 6px',
+                    border: 0,
+                    borderBottom: '1px solid #f0f0f0',
+                    background: p.pageNo === debugPageNo ? '#e8f0fe' : 'transparent',
+                    color: p.status === 'review' ? '#a00' : '#222',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  p{p.pageNo} · {p.status} · {p.text.length}c
+                  {p.reason ? ` · ${p.reason}` : ''}
+                </button>
+              ))}
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+              {(() => {
+                const p = pages.find((x) => x.pageNo === debugPageNo);
+                if (!p) return <div style={{ fontSize: 12 }}>Select a page.</div>;
+                return (
+                  <>
+                    <div style={{ fontSize: 11, color: '#555', marginBottom: 6 }}>
+                      page {p.pageNo} · status {p.status} · source {p.source ?? '-'} · reason {reasonLabel(p.reason) ?? '-'} · dpi{' '}
+                      {p.dpi ?? '-'} · psm {p.ocrPsm ?? '-'} · confidence {p.ocrConfidence != null ? Math.round(p.ocrConfidence) : '-'} · words{' '}
+                      {p.ocrWords ?? '-'} · native chars {p.nativeChars} · text chars {p.text.length}
+                    </div>
+                    <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11, lineHeight: 1.35 }}>
+                      {p.text.trim() ? p.text : '(no text)'}
+                    </pre>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </aside>
       )}
 
       <h3>Log</h3>
