@@ -8,8 +8,16 @@ import type { ReviewingFor } from './types';
 import { executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { keepCitedSentences } from './rollup';
 import { answersAboutQuestion, numericProblems } from './answerGuard';
+import {
+  buildRelevanceInput,
+  buildRelevancePrompt,
+  isValidRelevanceVerdict,
+  judgeRejectedAnswers,
+  RELEVANCE_MAX_TOKENS,
+  RELEVANCE_PROMPT_VERSION,
+} from './answerRelevance';
 import { normalizeQuote, verifyQuotedItems, type Located } from './verify';
-import type { PromptAnswer, PromptResult } from './types';
+import type { AnswerRelevanceStats, PromptAnswer, PromptResult } from './types';
 
 export interface RawAnswer {
   text?: unknown;
@@ -191,6 +199,46 @@ export function finalizeSynthesis(
   return { answer, numericDropped };
 }
 
+// Second chance for what the deterministic guard rejected. Quotes it accepts are kept without a model
+// call. Only the rejected ones are judged, in batches; a "yes" keeps the quote with the model's reason
+// as its "why". Original order is kept, and item ids are not renumbered.
+export async function checkRelevance(args: {
+  answers: PromptAnswer[];
+  request: string;
+  ask: (batches: PromptAnswer[][]) => Promise<unknown[]>;
+}): Promise<{ relevant: PromptAnswer[]; dropped: number; relevance: AnswerRelevanceStats }> {
+  // Matched by object, not id: a quote and its support can share an id in a fixture or a merged list.
+  const { relevant: passing } = prepareSynthesis(args.answers, args.request);
+  const passSet = new Set(passing);
+  const rejected = args.answers.filter((a) => !passSet.has(a));
+  const rejectedSet = new Set(rejected);
+  const judged = await judgeRejectedAnswers({ rejected, ask: args.ask });
+  const relevant = args.answers
+    .filter((a) => passSet.has(a) || (rejectedSet.has(a) && judged.approved.has(a.itemId)))
+    .map((a) => {
+      const reason = judged.approved.get(a.itemId);
+      return reason ? { ...a, why: reason } : a;
+    });
+  return { relevant, dropped: args.answers.length - relevant.length, relevance: judged.stats };
+}
+
+// Retry only: the synthesis task goes back to queued with the current template. Called after the
+// relevance pass, because a queued synthesis task would otherwise run during it.
+async function requeueSynthesis(ctx: ExecuteContext, runId: string): Promise<void> {
+  const ps = await ctx.db.get('tasks', `${runId}:ps`);
+  if (!ps) return;
+  await ctx.db.put('tasks', {
+    ...ps,
+    status: 'queued',
+    prompt: buildPromptSynthesisPrompt(),
+    promptVersion: 'prompt-synthesis-v4',
+    failureCode: null,
+    failureMessage: null,
+    nextAt: 0,
+    updatedAt: Date.now(),
+  });
+}
+
 export async function synthesiseAnswers(args: {
   ctx: ExecuteContext;
   runId: string;
@@ -198,11 +246,60 @@ export async function synthesiseAnswers(args: {
   prompt: string;
   answers: PromptAnswer[];
   maxTokens?: number;
-}): Promise<{ answer: { text: string; cites: string[] }[]; runs: ExecuteResult[]; dropped: number; numericDropped: number }> {
-  if (args.answers.length === 0) return { answer: [], runs: [], dropped: 0, numericDropped: 0 };
-  const { relevant, dropped } = prepareSynthesis(args.answers, args.prompt);
+  retry?: boolean;
+}): Promise<{
+  answer: { text: string; cites: string[] }[];
+  runs: ExecuteResult[];
+  dropped: number;
+  numericDropped: number;
+  // The quotes the synthesis used (deterministic passes plus second-chance keeps).
+  answers: PromptAnswer[];
+  relevance?: AnswerRelevanceStats;
+}> {
+  if (args.answers.length === 0) {
+    if (args.retry) await requeueSynthesis(args.ctx, args.runId);
+    return { answer: [], runs: [], dropped: 0, numericDropped: 0, answers: [] };
+  }
+
+  const relevanceRuns: ExecuteResult[] = [];
+  const checked = await checkRelevance({
+    answers: args.answers,
+    request: args.prompt,
+    ask: async (batches) => {
+      const run = await executeTasks(
+        args.ctx,
+        args.runId,
+        args.doc,
+        batches.map((b, i) => ({
+          suffix: i === 0 ? 'rj' : `rj${i + 1}`,
+          promptVersion: RELEVANCE_PROMPT_VERSION,
+          prompt: buildRelevancePrompt(),
+          input: buildRelevanceInput(args.prompt, b),
+          maxTokens: RELEVANCE_MAX_TOKENS,
+          validate: isValidRelevanceVerdict,
+        })),
+      );
+      relevanceRuns.push(run);
+      return run.collected.flatMap((c) => c.items);
+    },
+  });
+  const { relevance } = checked;
+  if (relevance.checked > 0) {
+    args.ctx.onLog?.(
+      `answer relevance: ${relevance.checked} rejected quote(s) checked in ${relevance.calls} call(s); kept ${relevance.kept}, rejected ${relevance.rejected}${relevance.error ? `; check failed: ${relevance.error}` : ''}`,
+    );
+  }
+  const relevant = checked.relevant;
+  if (args.retry) await requeueSynthesis(args.ctx, args.runId);
   if (relevant.length === 0) {
-    return { answer: [{ text: NOT_CLEAR_ANSWER, cites: [] }], runs: [], dropped, numericDropped: 0 };
+    return {
+      answer: [{ text: NOT_CLEAR_ANSWER, cites: [] }],
+      runs: relevanceRuns,
+      dropped: checked.dropped,
+      numericDropped: 0,
+      answers: relevant,
+      relevance,
+    };
   }
 
   const plan: TaskPlan = {
@@ -219,5 +316,12 @@ export async function synthesiseAnswers(args: {
   const sentences = run.collected.flatMap((c) => c.items);
   const failed = run.tasks.some((t) => t.status === 'failed');
   const out = finalizeSynthesis(relevant, sentences, failed);
-  return { answer: out.answer, runs: [run], dropped, numericDropped: out.numericDropped };
+  return {
+    answer: out.answer,
+    runs: [...relevanceRuns, run],
+    dropped: checked.dropped,
+    numericDropped: out.numericDropped,
+    answers: relevant,
+    relevance,
+  };
 }

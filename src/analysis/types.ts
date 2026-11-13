@@ -140,6 +140,27 @@ export interface PromptAnswer {
   why?: string;
 }
 
+// One quote the deterministic subject guard rejected, and what the second-chance check decided.
+export interface RelevanceDecision {
+  itemId: string;
+  clause: string;
+  page: number;
+  quote: string;
+  verdict: 'yes' | 'no' | 'unchecked';
+  reason: string;
+}
+
+export interface AnswerRelevanceStats {
+  // Rejected quotes sent to the check, and how many it accepted.
+  checked: number;
+  kept: number;
+  rejected: number;
+  // Model calls made (one per batch of up to ten quotes).
+  calls: number;
+  decisions: RelevanceDecision[];
+  error?: string;
+}
+
 export interface PromptResult {
   prompt: string;
   // Chunk-level verified answers. Intermediate: kept for the supporting quotes.
@@ -154,6 +175,8 @@ export interface PromptResult {
   failedChunks: { chunkIndex: number; pages: [number, number]; failureCode: string | null; message: string | null }[];
   // Set when the write-up call failed; the verified quotes are still available.
   error?: string;
+  // Second-chance check on quotes the deterministic guard rejected. Absent when nothing was rejected.
+  relevanceCheck?: AnswerRelevanceStats;
 }
 
 // Unfilled blanks and reviewer comments found in the source text by code, grouped by clause.

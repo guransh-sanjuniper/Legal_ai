@@ -6,6 +6,8 @@ import { quoteMatchesRequest } from './questionTerms';
 //      different thing (another notice, a rate table) is not an answer.
 //   2. Numbers: every number in a sentence must appear in a quote it cites, and a unit the quote
 //      gives next to that number (Rs, %, day, month, year, week) must appear in the sentence.
+// A quote this subject check rejects gets one second chance from a batched model judgement
+// (answerRelevance.ts, checkRelevance in promptPass.ts). The check never replaces this one.
 
 // Answers whose quote states the subject of the request. A request with no terms keeps everything.
 export function answersAboutQuestion<T extends { quote: string }>(answers: T[], request: string): T[] {

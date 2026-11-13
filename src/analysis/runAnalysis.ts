@@ -19,7 +19,6 @@ import { blankAffectsTerm, extractDraftingIssues } from './textQuality';
 import {
   buildClausePrompt,
   buildExecutiveSummaryPrompt,
-  buildPromptSynthesisPrompt,
   buildOverviewFocusPrompt,
   buildStatutoryPrompt,
   buildOverviewPrompt,
@@ -50,7 +49,6 @@ import {
   type ModelPointSentence,
 } from './overviewPoints';
 import { synthesiseAnswers } from './promptPass';
-import { answersAboutQuestion } from './answerGuard';
 import { normalizeQuote } from './verify';
 import {
   applyVerdicts,
@@ -580,22 +578,6 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   // synthesis. There is no separate per-chunk prompt pass.
   let promptResult: PromptResult | undefined;
   if (request.customPrompt) {
-    // Retry: the synthesis input changed when clause tasks were re-run, so run it again.
-    if (opts.retryFailed) {
-      const ps = await db.get('tasks', `${runId}:ps`);
-      if (ps) {
-        await db.put('tasks', {
-          ...ps,
-          status: 'queued',
-          prompt: buildPromptSynthesisPrompt(),
-          promptVersion: 'prompt-synthesis-v4',
-          failureCode: null,
-          failureMessage: null,
-          nextAt: 0,
-          updatedAt: Date.now(),
-        });
-      }
-    }
     const seenQuote = new Set<string>();
     const answers = promptLocated
       .filter((v) => {
@@ -614,7 +596,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         part: 'support' as const,
       }));
     progress(`custom prompt: ${answers.length} verified quote(s) from the clause calls`);
-    const synth = await synthesiseAnswers({ ctx, runId, doc, prompt: request.customPrompt, answers });
+    // Retry: the synthesis input changed when clause tasks were re-run, so run it again.
+    const synth = await synthesiseAnswers({ ctx, runId, doc, prompt: request.customPrompt, answers, retry: opts.retryFailed ?? false });
     for (const r of synth.runs) {
       addLimits(r);
       await pauseIfNeeded(r);
@@ -622,9 +605,10 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     const failedCodes = [...new Set(synth.runs.flatMap((r) => r.tasks).filter((t) => t.status === 'failed').map((t) => t.failureCode ?? 'failed'))];
     promptResult = {
       prompt: request.customPrompt,
-      // Only quotes that state the request's subject are shown as support.
-      answers: answersAboutQuestion(answers, request.customPrompt),
+      // Only quotes that state the request's subject (or that the second-chance check accepted) are shown.
+      answers: synth.answers,
       answer: synth.answer,
+      ...(synth.relevance && synth.relevance.checked > 0 ? { relevanceCheck: synth.relevance } : {}),
       mode: 'inline',
       chunksTotal: chunks.length,
       chunksDone: chunks.length,

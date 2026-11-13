@@ -510,6 +510,29 @@ export function AnalysisPage() {
             </tbody>
           </table>
 
+          {report.promptResult?.relevanceCheck && (
+            <>
+              <h4>Second-chance relevance check (prompt)</h4>
+              <div style={{ fontSize: 12 }}>
+                {report.promptResult.relevanceCheck.checked} rejected quote(s) sent to the model in{' '}
+                {report.promptResult.relevanceCheck.calls} call(s): kept {report.promptResult.relevanceCheck.kept}, rejected{' '}
+                {report.promptResult.relevanceCheck.rejected}
+                {report.promptResult.relevanceCheck.error ? ` · check failed: ${report.promptResult.relevanceCheck.error}` : ''}
+              </div>
+              <details style={{ fontSize: 12 }}>
+                <summary>Decisions ({report.promptResult.relevanceCheck.decisions.length})</summary>
+                <table border={1} cellPadding={3}>
+                  <thead><tr><th>verdict</th><th>clause</th><th>page</th><th>reason</th><th>quote</th></tr></thead>
+                  <tbody>
+                    {report.promptResult.relevanceCheck.decisions.map((d) => (
+                      <tr key={d.itemId}><td>{d.verdict}</td><td>{d.clause}</td><td>{d.page}</td><td>{d.reason}</td><td>{d.quote}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            </>
+          )}
+
           {paymentScore && (
             <>
               <h4>Payment recall (golden)</h4>

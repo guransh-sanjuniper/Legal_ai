@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { NOT_CLEAR_ANSWER, finalizeSynthesis, prepareSynthesis } from './promptPass';
+import { NOT_CLEAR_ANSWER, checkRelevance, finalizeSynthesis, prepareSynthesis } from './promptPass';
 import type { PromptAnswer } from './types';
+
+// A scripted relevance judge: every quote it is sent gets the same verdict.
+const judgeAll = (verdict: 'yes' | 'no', seen: string[][] = []) => async (batches: PromptAnswer[][]) => {
+  for (const b of batches) seen.push(b.map((a) => a.itemId));
+  return batches.flat().map((a) => ({ id: a.itemId, verdict, reason: `scripted ${verdict}` }));
+};
 
 // Scripted model: the sentences a model would write from the verified answers. The guard code is
 // the real synthesis code; only the model's reply is fixed.
@@ -125,5 +131,84 @@ describe('finalizeSynthesis when the call failed', () => {
   it('leaves the answer empty so the caller reports the error, rather than claiming "not clearly stated"', () => {
     const out = finalizeSynthesis([depositClause], [], true);
     expect(out.answer).toEqual([]);
+  });
+});
+
+// The second chance: a quote the subject check rejects is judged by the model in one batch. A "no"
+// keeps it rejected, so the three regression cases above still end in "not clearly stated".
+describe('second-chance relevance check on the regression cases', () => {
+  it('termination from a payment-default clause: sent to the check, judged no, still rejected', async () => {
+    const seen: string[][] = [];
+    const out = await checkRelevance({ answers: [defaultCure], request: TERMINATION_Q, ask: judgeAll('no', seen) });
+    expect(seen).toEqual([['P1']]);
+    expect(out.relevant).toEqual([]);
+    expect(out.relevance).toMatchObject({ checked: 1, kept: 0, rejected: 1, calls: 1 });
+    const finalized = finalizeSynthesis(out.relevant, [{ text: 'The notice period for termination is 15 days.', cites: ['P1'] }], false);
+    expect(finalized.answer).toEqual([{ text: NOT_CLEAR_ANSWER, cites: [] }]);
+  });
+
+  it('security deposit from a rate table: sent to the check, judged no, still rejected', async () => {
+    const seen: string[][] = [];
+    const out = await checkRelevance({ answers: [hardshipRate], request: DEPOSIT_Q, ask: judgeAll('no', seen) });
+    expect(seen).toEqual([['P1']]);
+    expect(out.relevant).toEqual([]);
+    const finalized = finalizeSynthesis(out.relevant, [{ text: 'The security deposit amount is 70.00.', cites: ['P1'] }], false);
+    expect(finalized.answer).toEqual([{ text: NOT_CLEAR_ANSWER, cites: [] }]);
+    expect(JSON.stringify(finalized.answer)).not.toContain('70.00');
+  });
+
+  it('a wrong answer among right ones: only the wrong one is judged, and it stays out', async () => {
+    const right = { ...depositClause, itemId: 'P2' };
+    const seen: string[][] = [];
+    const out = await checkRelevance({ answers: [hardshipRate, right], request: DEPOSIT_Q, ask: judgeAll('no', seen) });
+    expect(seen).toEqual([['P1']]);
+    expect(out.relevant).toEqual([right]);
+    expect(out.dropped).toBe(1);
+    expect(out.relevance).toMatchObject({ checked: 1, kept: 0 });
+  });
+
+  it('a quote that passes the subject check is never sent to the model', async () => {
+    let calls = 0;
+    const out = await checkRelevance({
+      answers: [depositClause],
+      request: DEPOSIT_Q,
+      ask: async () => { calls++; return []; },
+    });
+    expect(calls).toBe(0);
+    expect(out.relevant).toEqual([depositClause]);
+    expect(out.relevance.calls).toBe(0);
+  });
+});
+
+describe('second-chance relevance check keeps a correct answer phrased differently', () => {
+  // "Handover" is not in the synonym map, so the subject check rejects a correct answer.
+  const HANDOVER_Q = 'When is the handover date?';
+  const possession = answer(
+    'P1',
+    'Possession shall be given to the Licensee on 1 May 2026.',
+    '5',
+    4,
+    'Gives the date the Licensee takes possession.',
+  );
+
+  it('the subject check alone rejects it', () => {
+    expect(prepareSynthesis([possession], HANDOVER_Q).relevant).toEqual([]);
+  });
+
+  it('the model check says yes: the quote is kept, with the model reason as its why', async () => {
+    const out = await checkRelevance({
+      answers: [{ ...possession, why: undefined }],
+      request: HANDOVER_Q,
+      ask: judgeAll('yes'),
+    });
+    expect(out.relevant.map((a) => a.itemId)).toEqual(['P1']);
+    expect(out.relevant[0].why).toBe('scripted yes');
+    expect(out.relevance).toMatchObject({ checked: 1, kept: 1, rejected: 0, calls: 1 });
+  });
+
+  it('the kept quote reaches the synthesis input and its figures are checked as usual', async () => {
+    const out = await checkRelevance({ answers: [possession], request: HANDOVER_Q, ask: judgeAll('yes') });
+    const finalized = finalizeSynthesis(out.relevant, [{ text: 'Possession is given on 1 May 2026.', cites: ['P1'] }], false);
+    expect(finalized.answer).toEqual([{ text: 'Possession is given on 1 May 2026.', cites: ['P1'] }]);
   });
 });
