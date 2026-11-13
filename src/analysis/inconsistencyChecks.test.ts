@@ -82,6 +82,32 @@ describe('internal inconsistencies', () => {
     expect(findings).toEqual([]);
   });
 
+  it('does not flag a fee and a deposit as two figures for one subject', () => {
+    const findings = findInconsistencies([
+      clause('2', {
+        obligations: [ob('f1', 'Licensee', 'The Licensee shall pay a licence fee of Rs. 40,000 and a security deposit of Rs. 80,000.')],
+      }),
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it('does not flag an escalation interval as a termination notice period', () => {
+    const findings = findInconsistencies([
+      clause('3', { obligations: [ob('t1', 'Licensor', 'The fee shall increase by 8% every 12 months.')] }),
+      clause('7', { obligations: [ob('t2', 'Licensor', 'The Licensor may terminate this agreement on 30 days notice.')] }),
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it('flags two different termination notice periods for the same right', () => {
+    const findings = findInconsistencies([
+      clause('7', { obligations: [ob('n1', 'Licensor', 'The Licensor may terminate this agreement on 30 days notice.')] }),
+      clause('9', { obligations: [ob('n2', 'Licensor', 'The Licensor may terminate this agreement on 60 days notice.')] }),
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].reason).toMatch(/notice periods/);
+  });
+
   it('uses the affected party on a risk as the party category', () => {
     const findings = findInconsistencies([
       clause('20', { risks: [risk('z1', 'Licensee', 'The grant is irrevocable and perpetual.')] }),

@@ -18,7 +18,8 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
     functionsUrl: `${url}/functions/v1`, anonKey: anon, docId, model: 'fake', fallbackModel: null,
     reasoning: { effort: 'minimal' as const }, maxTokens: 2000, autoReduceConcurrency: false,
     lawSearch: async () => { lawCalls++; return []; },
-    docSearch: async () => [],
+    // A weak, vector-only hit: the claim is kept as verified missing, never counted as coverage.
+    docSearch: async () => [{ pageStart: 1, pageEnd: 1, fused: 1 / 61, keywordScore: 0 }],
     callModel: async (req: CallRequest): Promise<CallResult> => ({
       text: scriptedModel(req), finishReason: 'stop', provider: 'fake', promptTokens: 10, completionTokens: 10, durationMs: 1,
     }),
@@ -35,6 +36,7 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   const risks = withPrompt.clauses.flatMap((c) => c.risks);
   expect(risks.length).toBeGreaterThan(0);
   for (const r of risks) {
+    expect(r.affects && r.affects !== 'Not identified').toBe(true);
     expect(r.severity).toBe('medium');
     expect(r.suggestion?.length ?? 0).toBeGreaterThan(0);
     expect(r.lawPassages).toBeUndefined();
@@ -51,6 +53,8 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(withPrompt.clauses[0].prose?.detailed_summary).toBe('Detailed text.');
 
   expect(withPrompt.missingProtections).toHaveLength(1);
+  expect(withPrompt.missingStats).toMatchObject({ kept: 1, possiblyMissing: 0, passRan: true });
+  expect(withPrompt.possiblyMissing).toEqual([]);
   expect(withPrompt.missingProtections![0]).toMatchObject({ topic: 'insurance cover', severity: 'medium', applicability: 'unverified' });
 
   expect(withPrompt.overviewPoints).toHaveLength(13);
@@ -75,6 +79,7 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(withPrompt.overviewPoints![10].sentences[0]?.text).toMatch(/Unfilled blanks \(1\)/);
   expect(withPrompt.draftingIssues?.blankCount).toBe(1);
   expect(withPrompt.overviewPoints![12].sentences.length).toBeGreaterThan(0);
+  expect(withPrompt.summaryStats?.kept).toBeGreaterThan(0);
 
   const restored = await restoreReportFromSupabase(sb, docId);
   expect(restored?.runId).toBe(withPrompt.runId);

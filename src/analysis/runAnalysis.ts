@@ -11,12 +11,15 @@ import { buildLedger, type LedgerChunkInput } from './ledger';
 import { dedupeVerifiedClauses } from './dedupe';
 import { missingTopicCandidates, paymentTotals, type CrossFinding } from './crossClause';
 import { findInconsistencies } from './inconsistencyChecks';
+import { inferAffects, protectsFromDrop } from './riskGuard';
+import { dropGapClaims, fallbackSummary } from './summaryGuard';
 import { normaliseClauseNo } from './reportModel';
 import { blankAffectsTerm, extractDraftingIssues } from './textQuality';
 import {
   buildClausePrompt,
   buildExecutiveSummaryPrompt,
   buildOverviewFocusPrompt,
+  buildStatutoryPrompt,
   buildOverviewPrompt,
   buildPromptSynthesisPrompt,
   DISPUTE_POINT,
@@ -28,7 +31,8 @@ import {
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
 import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
-import { NO_SUGGESTION, guardPriority, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf } from './rubric';
+import type { MissingStats, SummaryStats } from './types';
+import { NO_SUGGESTION, guardPriority, lawKey, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf } from './rubric';
 import { hitCoversTopic, isValidMissingItem, keepMissingClaims, missingPlans, type MissingInputClause } from './missingProtections';
 import {
   assembleOverviewPoints,
@@ -128,6 +132,13 @@ export function isValidClauseItem(x: unknown): boolean {
 
 const arrOf = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+// Small, generic fallback when the statutory call yields nothing. Names only.
+function docTypeFallbackLaws(docType: string | null): string[] {
+  if (docType === 'lease') return ['Maharashtra Rent Control Act', 'Indian Stamp Act 1899', 'Registration Act 1908'];
+  if (docType === 'agreement' || docType === 'deed' || docType === 'notice') return ['Indian Stamp Act 1899', 'Registration Act 1908'];
+  return ['Indian Stamp Act 1899'];
+}
 
 // Chunk index from a task id such as "<run>:a3" or "<run>:r3/retry0" (-1 when not a chunk task).
 export function taskChunkIndex(taskId: string): number {
@@ -612,13 +623,31 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       isValidVerdictItem,
     ) as RiskVerdictItem[];
     const applied = applyVerdicts(verdicts);
-    const droppedIds = new Set<string>([...applied.dropped, ...duplicates]);
-    const verdictDrops = [...applied.dropped].filter((id) => !duplicates.has(id)).length;
+    // A term that puts a cost or liability on a named party can be downgraded, never dropped.
+    const partyNames = sheet.parties.map((p) => p.name);
+    const protectedIds = new Set(
+      toReview.filter((r) => applied.dropped.has(r.id) && protectsFromDrop({ issue: r.issue, quote: r.quote }, partyNames)).map((r) => r.id),
+    );
+    for (const r of toReview) {
+      if (protectedIds.has(r.id)) log(`validation kept ${r.id}: cost or liability placed on a party`);
+    }
+    const droppedIds = new Set<string>([...[...applied.dropped].filter((id) => !protectedIds.has(id)), ...duplicates]);
+    const verdictDrops = [...droppedIds].filter((id) => !duplicates.has(id)).length;
     riskReview = {
       reviewed: toReview.length,
       kept: toReview.length - verdictDrops - applied.downgraded.size,
-      downgraded: [...applied.downgraded].filter((id) => !duplicates.has(id)).length,
+      downgraded: [...applied.downgraded].filter((id) => !duplicates.has(id) && !droppedIds.has(id)).length,
       dropped: duplicates.size + verdictDrops,
+      drops: toReview
+        .filter((r) => droppedIds.has(r.id))
+        .map((r) => ({
+          clause: r.clause,
+          issue: r.issue,
+          reason:
+            duplicates.has(r.id)
+              ? 'duplicate of another risk for the same clause and issue'
+              : (verdicts.find((v) => v.id === r.id) as RiskVerdictItem | undefined)?.reason || 'dropped by validation',
+        })),
     };
     verifiedClauses = verifiedClauses.map((c) => {
       const risks = c.risks
@@ -627,13 +656,34 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       const verifiedItems = c.obligations.length + c.dates.length + c.payments.length + risks.length;
       return { ...c, risks, verifiedItems };
     });
+    for (const d of riskReview.drops ?? []) log(`validation dropped clause ${d.clause}: ${d.issue} (${d.reason})`);
     progress(
       `${riskReview.reviewed} risks reviewed: ${riskReview.kept} kept, ${riskReview.downgraded} downgraded, ${riskReview.dropped} dropped`,
     );
   }
 
+  // Which party each risk affects: the risk's own text first, then its clause's parties.
+  verifiedClauses = verifiedClauses.map((c) => ({
+    ...c,
+    risks: c.risks.map((r) =>
+      r.affects && r.affects.trim()
+        ? r
+        : {
+            ...r,
+            affects: inferAffects({
+              issue: r.text,
+              quote: r.quote,
+              clauseParties: [...new Set(c.obligations.map((o) => o.party))],
+              partyNames: sheet.parties.map((p) => p.name),
+            }),
+          },
+    ),
+  }));
+
   // 3b. Missing protections: model check over clause summaries; each claim needs a whole-document search miss.
   let missingProtections: MissingProtection[] = [];
+  let possiblyMissing: MissingProtection[] = [];
+  let missingStats: MissingStats = { proposed: 0, kept: 0, droppedCovered: 0, possiblyMissing: 0, passRan: false };
   let missingUnchecked = 0;
   let missingFailed = 0;
   if (verifiedClauses.length > 0) {
@@ -660,7 +710,19 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       opts.docSearch,
     );
     missingProtections = checked.kept;
+    possiblyMissing = checked.possiblyMissing;
     missingUnchecked = checked.unchecked;
+    missingStats = {
+      proposed: checked.proposed,
+      kept: checked.kept.length,
+      droppedCovered: checked.coveredInDocument,
+      possiblyMissing: checked.possiblyMissing.length,
+      passRan: true,
+    };
+    progress(
+      `missing protections: ${checked.proposed} proposed, ${checked.kept.length} kept, ${checked.coveredInDocument} dropped by search, ` +
+        `${checked.possiblyMissing.length} unverified`,
+    );
   }
 
   // 3c. Placeholders and reviewer comments, found by code. A blank that touches money, time or a
@@ -685,7 +747,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         basis: 'other',
         suggestion: 'Fill the blank with the agreed term, or delete the reference before execution.',
         laws: [],
-        affects: '',
+        affects: 'Both/unclear',
         page: entry.page,
         quote: entry.line,
         verified: true,
@@ -819,7 +881,6 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   // 5b. Overview: thirteen numbered points. Statutory Compliance, Notable Drafting Issues and
   // Internal Inconsistencies are built in code. Termination and dispute points are written from
   // focused evidence, and the Executive Summary only from the other points, risks and missing list.
-  const statutory = statutorySentences(lawsEngaged(verifiedClauses, missingProtections));
   const findingItems = crossClause.findings.map((f, i) => ({ id: `F${i + 1}`, text: f.text, cites: f.itemIds }));
   const missingItems = missingProtections.map((m) => ({ id: m.itemId, text: `${m.topic}: ${m.text}`, cites: m.cites }));
   const inconsistencyFindings = crossClause.findings.filter((f) => f.kind !== 'gap');
@@ -931,6 +992,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     for (const c of focusRun.collected) modelSentences.push(...keepPointSentences(c.items, focusValid).kept);
   }
 
+  let summaryStats: SummaryStats | undefined;
   // Executive Summary: only the other points, the risks and the verified missing list.
   const pointItems = OVERVIEW_POINTS.slice(0, SUMMARY_POINT - 1)
     .map((title, i) => ({ id: `PT${i + 1}`, point: i + 1, title, text: '' }))
@@ -956,12 +1018,46 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     addLimits(run);
     await pauseIfNeeded(run);
     const valid = new Set<string>([...pointItems.map((p) => p.id), ...riskLines.map((r) => r.id), ...missingItems.map((m) => m.id)]);
-    const kept = run.collected.flatMap((c) => keepPointSentences(c.items, valid).kept);
-    // A gap may be stated only when the verified missing list has an entry for it.
-    const claimsGap = /\b(no|not|none|absent|missing|without|lacks?|fails? to)\b[^.]{0,60}\b(clause|provision|term|protection|governing law|forum|dispute|exit|notice|indemn)/i;
-    const summary = missingProtections.length > 0 ? kept : kept.filter((k) => !claimsGap.test(k.text));
-    modelSentences.push(...summary.map((k) => ({ point: SUMMARY_POINT, text: k.text, cites: k.cites })));
+    // Summary sentences carry no point number; validate their citations only.
+    const raw = run.collected.flatMap((c) => keepCitedSentences(c.items as never[], valid).kept);
+    const guarded = dropGapClaims(raw, missingProtections.length > 0);
+    summaryStats = { rawItems: run.collected.flatMap((c) => c.items).length, kept: guarded.kept.length, droppedByGuard: guarded.dropped };
+    log(`executive summary: ${summaryStats.rawItems} raw items, ${guarded.kept.length} kept, ${guarded.dropped} gap claims dropped`);
+    modelSentences.push(...guarded.kept.map((k) => ({ point: SUMMARY_POINT, text: k.text, cites: k.cites })));
   }
+
+  // Statutory Compliance: Acts the model proposes for this document type, merged with the Acts the
+  // risks already name. Names only, always labelled model knowledge.
+  let proposedLaws: string[] = [];
+  if (verifiedClauses.length > 0) {
+    const plan: TaskPlan = {
+      suffix: 'laws',
+      promptVersion: 'statutory-laws-v1',
+      prompt: buildStatutoryPrompt(),
+      input: `Document type: ${doc.docType ?? 'unknown'}\n\nClause summaries:\n${JSON.stringify(
+        verifiedClauses.slice(0, 120).map((c) => ({ clause: c.clauseNo, type: c.type, summary: c.summary })),
+      )}`,
+      maxTokens: 400,
+      validate: (x) => typeof x === 'string' && x.trim().length > 0,
+    };
+    const run = await executeTasks(ctx, runId, doc, [plan]);
+    addLimits(run);
+    await pauseIfNeeded(run);
+    proposedLaws = run.collected
+      .flatMap((c) => c.items as string[])
+      .map((l) => l.replace(/^[-*\d.\s]+/, '').trim())
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+  if (proposedLaws.length === 0) proposedLaws = docTypeFallbackLaws(doc.docType ?? null);
+  const engaged = lawsEngaged(verifiedClauses, missingProtections);
+  const knownLaws = new Set(engaged.map((l) => lawKey(l.name)));
+  const statutory = [
+    ...statutorySentences(engaged),
+    ...proposedLaws
+      .filter((name) => !knownLaws.has(lawKey(name)))
+      .map((name) => ({ text: `${name} (model knowledge, applicability unverified).`, cites: [] as string[] })),
+  ];
 
   const overviewPoints = assembleOverviewPoints({ model: modelSentences, statutory, notable, inconsistencies });
   let overview: RollupSentence[] = overviewPoints.flatMap((p) => p.sentences).filter((s) => s.cites.length > 0);
@@ -1147,8 +1243,11 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     chunkClauses: chunks.map((c) => ({ chunkIndex: c.index, clauses: [...new Set(c.clauses)] })),
     overviewPoints,
     missingProtections,
+    possiblyMissing,
+    missingStats,
     riskReview,
     draftingIssues,
+    summaryStats,
     ...(promptResult ? { promptResult } : {}),
   };
 

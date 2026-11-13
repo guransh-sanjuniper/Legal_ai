@@ -143,6 +143,7 @@ export function buildOverviewFocusPrompt(detail: DetailLevel, pointTitles: strin
     `Each point is one short paragraph of ${OVERVIEW_SENTENCES_PER_POINT[detail]} to ${OVERVIEW_SENTENCES_PER_POINT[detail] + 2} sentences.`,
     'Return ONLY a JSON array: {"point":number,"text":"...","cites":["ITEM_ID",...]}.',
     'Every sentence must cite at least one ITEM_ID from the supplied items. A point with nothing in the evidence gets no sentences.',
+    'State the actual terms the evidence shows: who may terminate and on what notice; who decides a dispute, in which forum, and whether any right is waived. Do not say only that a process exists.',
     'State only what the evidence supports. Do not invent facts, and do not name laws here.',
   ].join('\n');
 }
@@ -197,6 +198,17 @@ function typicalProtections(docType: DocType | null): string {
   return [general, extra[docType ?? 'other']].filter(Boolean).join('; ');
 }
 
+// Applicable Acts for this document type, proposed by the model from the checklist. Names only.
+export function buildStatutoryPrompt(): string {
+  return [
+    'You list the Indian and Maharashtra Acts that most likely apply to a document of this type.',
+    UNTRUSTED_NOTICE,
+    'Return ONLY a JSON array of Act names, most relevant first, at most eight: ["Act name", ...].',
+    'Name Acts only, never section numbers. Do not invent Acts, and do not state that any Act certainly applies.',
+    lawChecklistPrompt(),
+  ].join('\n');
+}
+
 export const CUSTOM_PROMPT_HEADER = [
   'Answer the user request using only this excerpt of a legal contract.',
   UNTRUSTED_NOTICE,
@@ -220,6 +232,7 @@ export function buildRiskReviewPrompt(): string {
     'Return ONLY a JSON array, one item per input id: {"id":"...","verdict":"keep"|"downgrade"|"drop","reason":"one short sentence"}.',
     'keep: a genuine risk at its stated level. downgrade: a genuine but minor or overstated risk; it becomes Low. drop: boilerplate or not a risk at all.',
     'Each input gives the clause, the priority, the issue and the verbatim quote. Judge the quote against the issue. Do not invent ids.',
+    'Never drop a term that places a cost or a liability on a named party (stamp duty, registration, taxes, charges, indemnity, insurance, repairs). Downgrade it instead when it is minor.',
   ].join('\n');
 }
 

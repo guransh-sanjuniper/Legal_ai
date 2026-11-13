@@ -59,9 +59,20 @@ export function hitCoversTopic(hits: CoverageHit[]): boolean {
 }
 
 export interface MissingCheckResult {
+  // Verified missing: the search found a weak hit, which is not coverage.
   kept: MissingProtection[];
+  // Kept, but the search failed or returned nothing. Shown apart, never used as a gap claim.
+  possiblyMissing: MissingProtection[];
   coveredInDocument: number;
   unchecked: number;
+  proposed: number;
+}
+
+export interface MissingDrop {
+  topic: string;
+  page: number;
+  fused: number;
+  keywordScore: number;
 }
 
 // A claim of absence is kept only when the whole-document search finds nothing for its topic.
@@ -72,9 +83,11 @@ export async function keepMissingClaims(
   search: (query: string, k: number) => Promise<CoverageHit[]>,
 ): Promise<MissingCheckResult> {
   const kept: MissingProtection[] = [];
+  const possiblyMissing: MissingProtection[] = [];
   const seenTopics = new Set<string>();
   let coveredInDocument = 0;
   let unchecked = 0;
+  let proposed = 0;
   for (const raw of items) {
     if (!isValidMissingItem(raw)) continue;
     const o = raw as Record<string, unknown>;
@@ -83,19 +96,20 @@ export async function keepMissingClaims(
     const key = topic.toLowerCase();
     if (!topic || !text || seenTopics.has(key)) continue;
     seenTopics.add(key);
+    proposed++;
 
-    let hits: CoverageHit[];
+    let hits: CoverageHit[] | null = null;
+    let searchFailed = false;
     try {
       hits = await search(topic, 5);
+      if (!Array.isArray(hits)) searchFailed = true;
     } catch {
-      unchecked++;
-      continue;
+      searchFailed = true;
     }
-    if (!Array.isArray(hits)) {
+    if (searchFailed) {
       unchecked++;
-      continue;
-    }
-    if (hitCoversTopic(hits)) {
+      hits = null;
+    } else if (hits && hitCoversTopic(hits)) {
       coveredInDocument++;
       continue;
     }
@@ -104,8 +118,8 @@ export async function keepMissingClaims(
     const cites = Array.isArray(o.cites)
       ? [...new Set(o.cites.filter((c): c is string => typeof c === 'string' && validClauseIds.has(c)))]
       : [];
-    kept.push({
-      itemId: `M${kept.length + 1}`,
+    const claim: MissingProtection = {
+      itemId: `M${kept.length + possiblyMissing.length + 1}`,
       topic,
       text,
       severity: guardPriority(o.priority, basis),
@@ -114,7 +128,10 @@ export async function keepMissingClaims(
       laws: normaliseLaws(o.laws),
       cites,
       applicability: 'unverified',
-    });
+    };
+    // A failed search or an empty result does not verify the absence: keep it apart.
+    if (hits === null || hits.length === 0) possiblyMissing.push(claim);
+    else kept.push(claim);
   }
-  return { kept, coveredInDocument, unchecked };
+  return { kept, possiblyMissing, coveredInDocument, unchecked, proposed };
 }

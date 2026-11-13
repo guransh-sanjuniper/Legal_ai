@@ -14,10 +14,12 @@ describe('missing protections', () => {
       { topic: 'governing law', text: 'No governing law clause.', priority: 'medium', basis: 'other', suggestion: 'Add one.', laws: ['Indian Contract Act 1872'], cites: ['C1:1:1'] },
       { topic: 'notice period', text: 'No notice period.', priority: 'high', basis: 'illegal', suggestion: 'Add one.', laws: [], cites: [] },
     ];
-    const kept = await keepMissingClaims(items, new Set(['C1:1:1']), async (q) => (q === 'notice period' ? [] : [{ fused: 1 / 61, keywordScore: 2 }]));
+    const weak = { fused: 1 / 61, keywordScore: 0 };
+    const kept = await keepMissingClaims(items, new Set(['C1:1:1']), async (q) => (q === 'notice period' ? [weak] : [{ fused: 1 / 61, keywordScore: 2 }]));
     expect(kept.kept.map((m) => m.topic)).toEqual(['notice period']);
     expect(kept.coveredInDocument).toBe(1);
     expect(kept.kept[0]).toMatchObject({ itemId: 'M1', severity: 'high', applicability: 'unverified' });
+    expect(kept.proposed).toBe(2);
   });
 
   it('drops a claim whose search fails rather than showing it as checked', async () => {
@@ -26,6 +28,7 @@ describe('missing protections', () => {
     };
     const r = await keepMissingClaims([{ topic: 'x', text: 'y', priority: 'low', basis: 'other', suggestion: 's', laws: [], cites: [] }], new Set(), boom);
     expect(r.kept).toEqual([]);
+    expect(r.possiblyMissing).toHaveLength(1);
     expect(r.unchecked).toBe(1);
   });
 
@@ -33,7 +36,7 @@ describe('missing protections', () => {
     const r = await keepMissingClaims(
       [{ topic: 'deposit', text: 'No deposit refund.', priority: 'low', basis: 'other', cites: ['C1:1:1', 'ghost'] }],
       new Set(['C1:1:1']),
-      none,
+      vectorOnly,
     );
     expect(r.kept[0].cites).toEqual(['C1:1:1']);
     expect(r.kept[0].suggestion).toBe(NO_SUGGESTION);
@@ -47,9 +50,20 @@ describe('missing protections', () => {
         { topic: 42, text: 'bad' },
       ],
       new Set(),
-      none,
+      vectorOnly,
     );
     expect(r.kept).toHaveLength(1);
+  });
+
+  it('keeps a claim apart as possibly missing when the search returns nothing', async () => {
+    const r = await keepMissingClaims(
+      [{ topic: 'indemnity', text: 'No indemnity.', priority: 'medium', basis: 'other', suggestion: 'Add one.' }],
+      new Set(),
+      none,
+    );
+    expect(r.kept).toEqual([]);
+    expect(r.possiblyMissing.map((m) => m.topic)).toEqual(['indemnity']);
+    expect(r.proposed).toBe(1);
   });
 
   it('treats a keyword hit as coverage, so the claim is dropped', async () => {

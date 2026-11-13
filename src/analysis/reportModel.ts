@@ -130,7 +130,14 @@ export type ReportSection =
   | (SectionBase<'obligations'> & {
       groups: { party: string; rows: { clause: string; page: number; text: string; citation: Citation }[] }[];
     })
-  | (SectionBase<'risks'> & { risks: RiskRow[]; missing: RiskRow[]; reviewLine: string | null })
+  | (SectionBase<'risks'> & {
+      risks: RiskRow[];
+      missing: RiskRow[];
+      possiblyMissing: RiskRow[];
+      reviewLine: string | null;
+      missingLine: string | null;
+      drops: { clause: string; issue: string; reason: string }[];
+    })
   | (SectionBase<'inconsistencies'> & { findings: { text: string; citations: Citation[] }[] })
   | (SectionBase<'coverage'> & { lines: string[] });
 
@@ -536,7 +543,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
         laws: r.laws ?? [],
         suggestion: r.suggestion || NO_SUGGESTION,
         kind: 'risk',
-        affects: r.affects?.trim() || 'Not identified',
+        affects: r.affects?.trim() || 'Both/unclear',
         citation: cite(r.page, r.quote, c.clauseNo),
       });
     }
@@ -551,10 +558,26 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       laws: m.laws,
       suggestion: m.suggestion || NO_SUGGESTION,
       kind: 'missing',
-      affects: 'Both parties',
+      affects: 'Both/unclear',
       citation: affected[0] ?? null,
     };
   });
+  const toRow = (m: MissingProtection): RiskRow => ({
+    priority: m.severity,
+    clause: 'Whole document',
+    affects: 'Both/unclear',
+    pages: '',
+    issue: `${m.topic}: ${m.text}`,
+    laws: m.laws,
+    suggestion: m.suggestion || NO_SUGGESTION,
+    kind: 'missing',
+    citation: null,
+  });
+  const possiblyRows: RiskRow[] = (report.possiblyMissing ?? []).map(toRow);
+  const ms = report.missingStats;
+  const missingLine = ms
+    ? `${ms.proposed} proposed, ${ms.kept} kept, ${ms.droppedCovered} dropped by search${ms.possiblyMissing ? `, ${ms.possiblyMissing} unverified` : ''}.`
+    : null;
   const rr = report.riskReview;
   const reviewLine = rr ? `${rr.reviewed} risks after validation (${rr.dropped} dropped).` : null;
   sections.push({
@@ -563,7 +586,10 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
     number: 0,
     risks: sortByPriorityOf(riskRows, (r) => r.priority),
     missing: sortByPriorityOf(missingRows, (r) => r.priority),
+    possiblyMissing: sortByPriorityOf(possiblyRows, (r) => r.priority),
     reviewLine,
+    missingLine,
+    drops: rr?.drops ?? [],
   });
 
   const findings = report.crossClause.findings

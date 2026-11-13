@@ -1,5 +1,6 @@
 import { OVERVIEW_POINTS, STATUTORY_POINT, NOTABLE_POINT, INCONSISTENCY_POINT, SUMMARY_POINT } from './prompts';
 import { keepCitedSentences, type KeptSentence } from './rollup';
+import { fallbackSummary } from './summaryGuard';
 import type { MissingProtection, OverviewPoint, RollupSentence, VerifiedClause } from './types';
 
 export interface LawEngaged {
@@ -101,9 +102,8 @@ export function assembleOverviewPoints(input: OverviewInputs): OverviewPoint[] {
 
   const summary = points.find((p) => p.point === SUMMARY_POINT)!;
   if (summary.sentences.length === 0) {
-    const fallback = points
-      .filter((p) => p.point !== SUMMARY_POINT && p.sentences.length > 0)
-      .map((p) => p.sentences[0]);
+    // Short fallback: nature, parties and key terms, at most six cited sentences.
+    const fallback = fallbackSummary(points);
     if (fallback.length > 0) summary.sentences = fallback;
     summary.note = fallback.length > 0 ? EXECUTIVE_FALLBACK_NOTE : undefined;
   }

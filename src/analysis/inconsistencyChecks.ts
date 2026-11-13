@@ -1,4 +1,4 @@
-import type { VerifiedClause, VerifiedRisk } from './types';
+import type { VerifiedClause } from './types';
 import type { CrossFinding } from './crossClause';
 
 // Internal inconsistencies. Every finding needs two verified quotes and one line of reason, and a
@@ -33,101 +33,123 @@ function partyCompatible(a: Evidence[], b: Evidence[]): boolean {
   return false;
 }
 
-// Pairs two evidence sets that live in different clauses, share a subject, and share a party.
-function pair(differentClauses: Evidence[], other: Evidence[], reason: (a: Evidence, b: Evidence) => string): CrossFinding[] {
-  const findings: CrossFinding[] = [];
-  for (const a of differentClauses) {
-    for (const b of other) {
-      if (a.clause === b.clause) continue;
-      if (!partyCompatible([a], [b])) continue;
-      if (findings.some((f) => f.itemIds.includes(a.itemId) && f.itemIds.includes(b.itemId))) continue;
-      findings.push({
-        kind: 'contradiction',
-        text: `Clause ${a.clause} and clause ${b.clause} conflict.`,
-        itemIds: [a.itemId, b.itemId],
-        severity: 'medium',
-        reason: reason(a, b),
-      });
-    }
-  }
-  return findings;
+// Pairs two evidence sets that live in different clauses and share a party.
+function pair(a: Evidence, b: Evidence, reason: string): CrossFinding {
+  return {
+    kind: 'contradiction',
+    text: `Clause ${a.clause} and clause ${b.clause} conflict.`,
+    itemIds: [a.itemId, b.itemId],
+    severity: 'medium',
+    reason,
+  };
 }
 
 const matchAny = (items: Evidence[], re: RegExp) => items.filter((e) => re.test(e.quote));
+
+const STOP = new Set(['the', 'a', 'an', 'of', 'and', 'or', 'to', 'for', 'by', 'at', 'in', 'on', 'as', 'per', 'with']);
+
+function subjectBefore(quote: string, at: number): string {
+  const words = quote
+    .slice(0, at)
+    .replace(/[^A-Za-z0-9 ]+/g, ' ')
+    .trim()
+    .split(/\s+/);
+  return words
+    .slice(-4)
+    .filter((w) => w && !STOP.has(w.toLowerCase()))
+    .join(' ')
+    .toLowerCase();
+}
 
 export function findInconsistencies(clauses: VerifiedClause[]): CrossFinding[] {
   const ev = evidenceOf(clauses);
   const findings: CrossFinding[] = [];
 
   // 1. An irrevocable or non-terminable grant against a termination right.
-  findings.push(
-    ...pair(
-      matchAny(ev, /irrevocab|non[- ]terminable|not be terminated|cannot be terminated|perpetual/i),
-      matchAny(ev, /may terminate|right to terminate|terminate (this|the) agreement|termination/i),
-      (a, b) =>
-        `Clause ${a.clause} grants a right that cannot be withdrawn, while clause ${b.clause} allows termination of the same arrangement.`,
-    ),
-  );
-
-  // 2. Arbitration against exclusive court jurisdiction.
-  findings.push(
-    ...pair(
-      matchAny(ev, /arbitrat/i),
-      matchAny(ev, /exclusive jurisdiction|courts? (?:at|of|in) [A-Za-z]|sole jurisdiction/i),
-      (a, b) => `Clause ${a.clause} sends disputes to arbitration, while clause ${b.clause} gives exclusive court jurisdiction.`,
-    ),
-  );
-
-  // 3. Two different guarantees or deposits for one purpose.
-  const deposits = matchAny(ev, /(security )?deposit|guarantee/i);
-  findings.push(
-    ...pair(
-      deposits,
-      deposits.filter((d) => /(security )?deposit|guarantee/i.test(d.quote)),
-      (a, b) =>
-        `Clause ${a.clause} and clause ${b.clause} each create a deposit or guarantee for the same purpose with different terms.`,
-    ),
-  );
-
-  // 4. Clause text against a table figure: the same clause states two different numbers for one subject.
-  for (const c of clauses) {
-    const nums = new Map<string, Evidence[]>();
-    for (const o of c.obligations) {
-      const amounts = o.quote.match(/(?:rs\.?|inr|₹)\s?[\d,]+|[\d,]+\s?(?:per cent|%)/gi) ?? [];
-      for (const amount of amounts) {
-        const key = norm(amount).replace(/\s/g, '');
-        nums.set(key, [...(nums.get(key) ?? []), { clause: c.clauseNo, itemId: o.itemId, quote: o.quote, party: o.party, page: o.page }]);
-      }
-    }
-    const keys = [...nums.keys()];
-    if (keys.length > 1) {
-      const a = nums.get(keys[0])![0];
-      const b = nums.get(keys[1])![0];
-      findings.push({
-        kind: 'contradiction',
-        text: `Clause ${c.clauseNo} states two different figures (${keys[0]} and ${keys[1]}) for the same subject.`,
-        itemIds: [a.itemId, b.itemId],
-        severity: 'medium',
-        reason: 'Two figures appear in one clause; the operative text and the table must agree.',
-      });
+  for (const a of matchAny(ev, /irrevocab|non[- ]terminable|not be terminated|cannot be terminated|perpetual/i)) {
+    for (const b of matchAny(ev, /may terminate|right to terminate|terminate (this|the) agreement|termination/i)) {
+      if (a.clause === b.clause || !partyCompatible([a], [b])) continue;
+      findings.push(
+        pair(
+          a,
+          b,
+          `Clause ${a.clause} grants a right that cannot be withdrawn, while clause ${b.clause} allows termination of the same arrangement.`,
+        ),
+      );
     }
   }
 
-  // 5. Two different notice or time periods for termination.
+  // 2. Arbitration against exclusive court jurisdiction.
+  for (const a of matchAny(ev, /arbitrat/i)) {
+    for (const b of matchAny(ev, /exclusive jurisdiction|courts? (?:at|of|in) [A-Za-z]|sole jurisdiction/i)) {
+      if (a.clause === b.clause || !partyCompatible([a], [b])) continue;
+      findings.push(pair(a, b, `Clause ${a.clause} sends disputes to arbitration, while clause ${b.clause} gives exclusive court jurisdiction.`));
+    }
+  }
+
+  // 3. Two different guarantees or deposits for one purpose.
+  const deposits = matchAny(ev, /(security )?deposit|guarantee/i);
+  for (let i = 0; i < deposits.length; i++) {
+    for (let j = i + 1; j < deposits.length; j++) {
+      const a = deposits[i];
+      const b = deposits[j];
+      if (a.clause === b.clause || !partyCompatible([a], [b])) continue;
+      findings.push(
+        pair(a, b, `Clause ${a.clause} and clause ${b.clause} each create a deposit or guarantee for the same purpose with different terms.`),
+      );
+    }
+  }
+
+  // 4. Two figures in one clause for the same subject. Different subjects (a fee and a deposit)
+  // and different kinds (money and a rate) are not a conflict.
+  const FIGURE = /(?:rs\.?|inr|₹)\s?[\d,]+(?:\.[\d]+)?|[\d,]+\s?(?:per cent|%)/gi;
+  for (const c of clauses) {
+    const figures = c.obligations.flatMap((o) =>
+      [...o.quote.matchAll(FIGURE)].map((m) => ({
+        amount: m[0],
+        subject: subjectBefore(o.quote, m.index ?? 0),
+        kind: /%|per cent/i.test(m[0]) ? ('rate' as const) : ('money' as const),
+        clause: c.clauseNo,
+        itemId: o.itemId,
+      })),
+    );
+    for (let i = 0; i < figures.length; i++) {
+      for (let j = i + 1; j < figures.length; j++) {
+        const a = figures[i];
+        const b = figures[j];
+        if (!a.subject || a.subject !== b.subject || a.kind !== b.kind) continue;
+        if (a.amount.replace(/\s/g, '') === b.amount.replace(/\s/g, '')) continue;
+        findings.push({
+          kind: 'contradiction',
+          text: `Clause ${c.clauseNo} gives two different figures (${a.amount} and ${b.amount}) for ${a.subject}.`,
+          itemIds: [a.itemId, b.itemId],
+          severity: 'medium',
+          reason: 'The same subject is given two different figures in one clause.',
+        });
+      }
+    }
+  }
+
+  // 5. Two different notice periods for the same right (termination). Escalation, review and
+  // interest intervals are not notice periods and never pair with one.
+  const isTerminationNotice = (q: string) =>
+    /terminat/i.test(q) && /notice/i.test(q) && !/escalat|increas|review|every|interest|penalt|late|renewal/i.test(q);
   const periods = ev
-    .map((e) => ({ ...e, days: /(\d{1,3})\s*(?:days?|weeks?|months?)/i.exec(e.quote) }))
-    .filter((e) => e.days && /terminat|notice/i.test(e.quote));
+    .filter((e) => isTerminationNotice(e.quote))
+    .map((e) => ({ ...e, span: /(\d{1,3})\s*(days?|weeks?|months?)/i.exec(e.quote) }))
+    .filter((e) => e.span);
   for (let i = 0; i < periods.length; i++) {
     for (let j = i + 1; j < periods.length; j++) {
       const a = periods[i];
       const b = periods[j];
-      if (a.clause === b.clause || a.days![0] === b.days![0] || !partyCompatible([a], [b])) continue;
+      if (a.clause === b.clause || a.span![0].toLowerCase() === b.span![0].toLowerCase()) continue;
+      if (!partyCompatible([a], [b])) continue;
       findings.push({
         kind: 'contradiction',
-        text: `Clause ${a.clause} and clause ${b.clause} state different notice periods (${a.days![0]} and ${b.days![0]}).`,
+        text: `Clause ${a.clause} and clause ${b.clause} state different termination notice periods (${a.span![0]} and ${b.span![0]}).`,
         itemIds: [a.itemId, b.itemId],
         severity: 'medium',
-        reason: 'The same notice is given two different periods.',
+        reason: 'The same termination right is given two different notice periods.',
       });
     }
   }

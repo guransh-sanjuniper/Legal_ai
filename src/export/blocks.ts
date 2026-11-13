@@ -177,7 +177,16 @@ function sectionBlocks(section: ReportSection, model: ReportModel): Block[] {
       out.push({ kind: 'heading', level: 3, text: 'Risks' });
       out.push(riskTable(section.risks));
       out.push({ kind: 'heading', level: 3, text: 'Missing clauses and protections' });
+      if (section.missingLine) out.push({ kind: 'paragraph', text: section.missingLine, muted: true });
       out.push(riskTable(section.missing));
+      if (section.possiblyMissing.length > 0) {
+        out.push({ kind: 'heading', level: 3, text: 'Possibly missing (not verified by search)' });
+        out.push(riskTable(section.possiblyMissing));
+      }
+      if (section.drops.length > 0) {
+        out.push({ kind: 'paragraph', text: `Validation drops (${section.drops.length})`, muted: true });
+        out.push({ kind: 'bullets', items: section.drops.map((d) => `Clause ${d.clause}: ${d.issue} — ${d.reason}`) });
+      }
       return out;
 
     case 'inconsistencies':

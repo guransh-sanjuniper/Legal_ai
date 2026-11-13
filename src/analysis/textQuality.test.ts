@@ -50,6 +50,28 @@ describe('drafting issues', () => {
     expect(issues.blankCount).toBe(1);
   });
 
+  it('excludes party labels, witness and presence lines in any format', () => {
+    const text = [
+      '1. Payment',
+      'The Buyer shall pay Rs. ____ on completion.',
+      'LICENSOR: ____',
+      'In the presence of ____',
+      'Witness ____',
+    ].join('\n');
+    const p = pages([text]);
+    const issues = extractDraftingIssues(p, buildAnchorIndex(p));
+    expect(issues.blankCount).toBe(1);
+    expect(issues.groups.every((g) => !g.blanks.some((b) => /LICENSOR|presence|Witness/.test(b)))).toBe(true);
+  });
+
+  it('does not attribute signature-region blanks to a clause', () => {
+    const text = ['1. Payment', 'The Buyer shall pay the price.', 'SIGNED by the parties:', 'Name: ____'].join('\n');
+    const p = pages([text]);
+    const issues = extractDraftingIssues(p, buildAnchorIndex(p));
+    expect(issues.blankCount).toBe(0);
+    expect(issues.groups).toEqual([]);
+  });
+
   it('leaves the section empty and adds nothing when a document has no blanks or comments', () => {
     const p = pages(['1. Payment', 'The Buyer shall pay Rs. 48,000 on completion.']);
     const issues = extractDraftingIssues(p, buildAnchorIndex(p));

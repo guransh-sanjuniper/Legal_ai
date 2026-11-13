@@ -169,6 +169,24 @@ export interface RiskReviewStats {
   kept: number;
   downgraded: number;
   dropped: number;
+  // Why each risk was dropped, for the dev-visible list.
+  drops?: { clause: string; issue: string; reason: string }[];
+}
+
+// Missing-protection counts, so an empty list is explainable.
+export interface MissingStats {
+  proposed: number;
+  kept: number;
+  droppedCovered: number;
+  // Kept, but the whole-document search failed or found nothing: shown apart, not as verified.
+  possiblyMissing: number;
+  passRan: boolean;
+}
+
+export interface SummaryStats {
+  rawItems: number;
+  kept: number;
+  droppedByGuard: number;
 }
 
 export interface DropRecord {
@@ -259,8 +277,11 @@ export interface AnalysisReport {
   chunkClauses?: { chunkIndex: number; clauses: string[] }[];
   overviewPoints?: OverviewPoint[];
   missingProtections?: MissingProtection[];
+  possiblyMissing?: MissingProtection[];
+  missingStats?: MissingStats;
   riskReview?: RiskReviewStats;
   draftingIssues?: DraftingIssues;
+  summaryStats?: SummaryStats;
   promptResult?: PromptResult;
   judgement?: JudgementSnapshot;
   partial?: boolean;

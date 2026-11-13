@@ -352,7 +352,29 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
           <h4>Risks</h4>
           <RiskTable rows={section.risks} onCite={onCite} />
           <h4>Missing clauses and protections</h4>
+          {section.missingLine && <p className="app-muted">{section.missingLine}</p>}
           <RiskTable rows={section.missing} onCite={onCite} />
+          {section.possiblyMissing.length > 0 && (
+            <>
+              <h4>Possibly missing (not verified by search)</h4>
+              <p className="app-muted">
+                The document search failed or found nothing for these topics, so the absence is not verified. A lawyer should check each one.
+              </p>
+              <RiskTable rows={section.possiblyMissing} onCite={onCite} />
+            </>
+          )}
+          {section.drops.length > 0 && (
+            <details className="ana-drops">
+              <summary>Validation drops ({section.drops.length})</summary>
+              <ul className="ana-list">
+                {section.drops.map((d, i) => (
+                  <li key={i}>
+                    Clause {d.clause}: {d.issue} — {d.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           <p className="app-muted">Priority is High only for void or unenforceable terms, illegal terms, statutory violations or major financial exposure.</p>
         </>
       );

@@ -9,9 +9,53 @@ import type { DraftingIssueGroup, DraftingIssues } from './types';
 const BLANKS = [/_{3,}/g, /\[\s*\]/g, /_{2,}\s*(?:days?|weeks?|months?|years?)/gi];
 const COMMENTS = [/commented\s*\[[^\]]*\]/gi, /\[\s*(?:note|tbc|tbd|insert|to be (?:confirmed|inserted|added)|draft|placeholder)[^\]]*\]/gi];
 
-const SIGNATURE_START = /^\s*(in witness whereof|signed (?:and delivered|sealed)|witness(?:es)?\b|signature\b|name\s*:)/i;
-// A signature block ends at a schedule/annexure heading or a numbered clause.
-const BLOCK_END = /^\s*(schedule|annexure|part\s+[A-Z0-9]|article\s+[A-Z0-9])\b|^\s*\d{1,3}(?:\.\d{1,3})*[.)]\s+\S/i;
+// Signature lines in any format: a block heading, a party label with underscores, or a bare
+// witness/signature line. The region after the last operative clause is signature material unless
+// a schedule or annexure heading follows.
+const SIGNATURE_START =
+  /^\s*(in witness whereof|signed (?:and delivered|sealed|by)|witness(?:es)?\b|signature\b|in the presence of|name\s*:|date\s*:)/i;
+// A signature party label: capitalised words only ("LICENSOR: ____", "Name of Witness ____"),
+// never an ordinary sentence that happens to end in underscores.
+const PARTY_SIGNATURE =
+  /^\s*(?:[A-Z]{2,}(?:[ .&()'-]+[A-Z]{2,}){0,5}|[A-Z][a-z]+(?:[ .&()'-]+[A-Z][a-z]+){0,3})\s*[:\-]?\s*_{3,}/;
+const SIGNATURE_WORD = /\b(witness|witnesses|signed|signature|in the presence of)\b/i;
+const BLOCK_END = /^\s*(schedule|annexure|part\s+[A-Z0-9]|article\s+[A-Z0-9])\b/i;
+const OPERATIVE_CLAUSE = /^\s*\d{1,3}(?:\.\d{1,3})*[.)]\s+\S/;
+
+export function isSignatureLine(line: string): boolean {
+  return SIGNATURE_START.test(line) || PARTY_SIGNATURE.test(line) || SIGNATURE_WORD.test(line);
+}
+
+// Lines excluded from the blanks count, per page, in source order.
+export function excludedLines(text: string): Set<string> {
+  const lines = text.split('\n').map((l) => l.trim());
+  const excluded = new Set<string>();
+  let lastOperative = -1;
+  let scheduleAt = -1;
+  lines.forEach((line, i) => {
+    if (OPERATIVE_CLAUSE.test(line)) lastOperative = i;
+    if (BLOCK_END.test(line)) scheduleAt = i;
+  });
+
+  // The trailing region after the last operative clause is signature material only when it
+  // actually contains signature lines; otherwise those lines are the last clause's body.
+  if (lastOperative >= 0 && (scheduleAt < 0 || scheduleAt > lastOperative)) {
+    const end = scheduleAt > lastOperative ? scheduleAt : lines.length;
+    const tail = lines.slice(lastOperative + 1, end);
+    const firstSignature = tail.findIndex((l) => l && isSignatureLine(l));
+    if (firstSignature >= 0) for (const l of tail.slice(firstSignature)) if (l) excluded.add(l);
+  }
+
+  let inSignature = false;
+  for (const line of lines) {
+    if (!line) continue;
+    if (excluded.has(line)) continue;
+    if (!inSignature && isSignatureLine(line)) inSignature = true;
+    else if (inSignature && BLOCK_END.test(line)) inSignature = false;
+    if (inSignature) excluded.add(line);
+  }
+  return excluded;
+}
 
 // One blank is counted once, even when two patterns match it ("___ days" also matches "___").
 export function findBlanks(line: string): string[] {
@@ -46,15 +90,7 @@ export function blankAffectsTerm(line: string): boolean {
 
 export function signatureBlockLines(pages: Map<number, string>): Set<string> {
   const inBlock = new Set<string>();
-  for (const text of pages.values()) {
-    let skipping = false;
-    for (const raw of text.split('\n')) {
-      const line = raw.trim();
-      if (!skipping && SIGNATURE_START.test(line)) skipping = true;
-      else if (skipping && BLOCK_END.test(line) && !SIGNATURE_START.test(line)) skipping = false;
-      if (skipping) inBlock.add(line);
-    }
-  }
+  for (const text of pages.values()) for (const line of excludedLines(text)) inBlock.add(line);
   return inBlock;
 }
 

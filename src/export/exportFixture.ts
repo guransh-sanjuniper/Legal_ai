@@ -151,6 +151,9 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
     number: 0,
     risks: [risk({ priority: 'medium', clause: '2', pages: 'page 2', issue: 'A late-delivery penalty runs one way only.' })],
     reviewLine: '1 risks after validation (0 dropped).',
+    missingLine: '1 proposed, 1 kept, 0 dropped by search.',
+    possiblyMissing: [],
+    drops: [],
     missing: [
       risk({
         priority: 'medium',
