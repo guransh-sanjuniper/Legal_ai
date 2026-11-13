@@ -462,6 +462,11 @@ export function ReportView({
           <strong>Partial report.</strong> {model.banner.join(' ')}
         </div>
       )}
+      {model.unreviewed && (
+        <div className="app-banner app-banner--notice ana-banner" role="status">
+          <strong>Pages not reviewed.</strong> {model.unreviewed}
+        </div>
+      )}
 
       <nav className="ana-toc" aria-label="Table of contents">
         <div className="ana-card-title">Table of Contents</div>

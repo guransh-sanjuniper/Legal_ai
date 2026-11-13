@@ -16,8 +16,11 @@ import {
 
 export interface PreparationOptions {
   db?: HarnessDBHandle;
-  // Re-run ingestion even when the document is already ready (used by "Recheck").
+  // Re-run ingestion even when the document is already ready (used by "Recheck" and
+  // after a review decision on a ready document).
   forceIngest?: boolean;
+  // Re-OCR pages without a saved decision (decisions always win). Implies forceIngest.
+  recheck?: boolean;
   // Re-run the definitions sheet even when a matching sheet exists (used by "Retry").
   forceDefinitions?: boolean;
   onEvent?: (state: PreparationState) => void;
@@ -128,7 +131,7 @@ export async function runPreparation(docId: string, opts: PreparationOptions = {
   const existing = readPreparationState(docId);
 
   // A failed document is not "ready": the user asked to Retry, so run the stages again.
-  if (durable.prepared && existing?.stage !== 'failed' && !opts.forceDefinitions) {
+  if (durable.prepared && existing?.stage !== 'failed' && !opts.forceDefinitions && !opts.forceIngest && !opts.recheck) {
     const state = await ensureReadyState(doc, durable);
     opts.onEvent?.(state);
     return state;
@@ -187,13 +190,13 @@ async function runStages(
 
   // 1. Ingestion (extraction, OCR, page decisions, chunking). Chunking is already
   // part of finalize, so it is not a separate stage.
-  if (doc.status !== 'ready' || opts.forceIngest) {
+  if (doc.status !== 'ready' || opts.forceIngest || opts.recheck) {
     state.stage = 'ingest';
     state.completedStages = state.completedStages.filter((s) => s !== 'ingest');
     state.progress = { done: 0, total: 0 };
     state.message = 'Extracting text and running OCR…';
     emit(state);
-    await runIngest(doc, state);
+    await runIngest(doc, state, Boolean(opts.recheck));
 
     const fresh = await db.get('documents', doc.id);
     if (!fresh) throw new Error('The document disappeared during ingestion.');
@@ -267,7 +270,7 @@ async function runStages(
   emit(state);
 }
 
-async function runIngest(doc: DocumentRecord, state: PreparationState): Promise<void> {
+async function runIngest(doc: DocumentRecord, state: PreparationState, recheck: boolean): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     startIngestWorker(doc.id, (event) => {
       switch (event.type) {
@@ -289,7 +292,7 @@ async function runIngest(doc: DocumentRecord, state: PreparationState): Promise<
           resolve();
           break;
       }
-    });
+    }, { recheck });
   });
 }
 

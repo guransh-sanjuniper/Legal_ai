@@ -14,7 +14,24 @@ export interface IngestHandle {
 
 // Thin wrapper over the existing ingest worker. The pipeline, its lock and its incremental
 // saves are unchanged; this only lets the library start and observe the same stages.
-export function startIngestWorker(docId: string, onEvent: (event: IngestRunnerEvent) => void): IngestHandle {
+export function startIngestWorker(
+  docId: string,
+  onEvent: (event: IngestRunnerEvent) => void,
+  opts: { recheck?: boolean } = {},
+): IngestHandle {
+  return startWorker({ type: 'ingest', docId, recheck: opts.recheck ?? false }, onEvent);
+}
+
+// Re-OCR one page (the review screen's "Retry OCR"). Same worker message as the harness page.
+export function startPageOcr(
+  docId: string,
+  pageNo: number,
+  onEvent: (event: IngestRunnerEvent) => void,
+): IngestHandle {
+  return startWorker({ type: 'ocr', docId, pageNo }, onEvent);
+}
+
+function startWorker(message: IngestMessage, onEvent: (event: IngestRunnerEvent) => void): IngestHandle {
   const worker = new Worker(new URL('../../ingest/ingest.worker.ts', import.meta.url), { type: 'module' });
   let closed = false;
 
@@ -55,6 +72,6 @@ export function startIngestWorker(docId: string, onEvent: (event: IngestRunnerEv
     terminate();
   };
 
-  worker.postMessage({ type: 'ingest', docId } satisfies IngestMessage);
+  worker.postMessage(message);
   return { terminate };
 }

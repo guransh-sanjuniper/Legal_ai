@@ -9,6 +9,7 @@ import { preprocessCanvas } from './ocrPreprocess';
 import { OcrEngine } from './ocr';
 import { DEFAULT_CHUNK_CONFIG } from './chunk';
 import { chunkDocumentWithConfidence } from './chunkQuality';
+import { waivedPageFields } from './review';
 
 export const EXTRACTOR_VERSION = 'pdfjs-v1+tesseract-v1';
 const BATCH_PAGES = 5;
@@ -125,6 +126,9 @@ async function processPage(
   if (decision) {
     if (decision.decision === 'blank') {
       return { ...base, text: '', status: 'blank', source: 'manual', reason: null, dpi: null };
+    }
+    if (decision.decision === 'waived') {
+      return { ...base, ...waivedPageFields(decision) };
     }
     if (decision.decision === 'unresolved') {
       const prev = await db.get('pages', [docId, pageNo]);

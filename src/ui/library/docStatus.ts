@@ -60,6 +60,18 @@ export function statusLabel(status: LibraryStatus, reviewPages = 0, stage?: Prep
   return 'Preparing';
 }
 
+// Ready stays Ready when pages were proceeded without review; the count is shown beside it.
+export function readyLabel(unreviewedPages = 0): string {
+  if (unreviewedPages <= 0) return 'Ready';
+  return `Ready · ${unreviewedPages} page${unreviewedPages === 1 ? '' : 's'} not reviewed`;
+}
+
+// A review document with no unresolved pages was left between "Proceed" writing the
+// decisions and finalize running (tab closed). Preparation should continue on its own.
+export function needsResumeAfterReview(status: DocStatus, unresolvedPages: number): boolean {
+  return status === 'review' && unresolvedPages === 0;
+}
+
 export function statusTone(status: LibraryStatus): StatusTone {
   if (status === 'ready') return 'ok';
   if (status === 'needs_review') return 'warn';

@@ -6,6 +6,7 @@ import { ConfigMissingPage, LoginPage } from './LoginPage';
 import { useTheme, type Theme } from './theme';
 import { ChatPage } from './pages/ChatPage';
 import { DocumentsPage } from '../library/DocumentsPage';
+import { ReviewPage } from '../library/ReviewPage';
 import { AnalysisIndexPage } from './pages/AnalysisIndexPage';
 import { AnalysisDocPage } from './pages/AnalysisDocPage';
 import { DraftPage } from './pages/DraftPage';
@@ -50,6 +51,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
         <Route path="/" element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/documents/:docId/review" element={<ReviewPage />} />
         <Route path="/analysis" element={<AnalysisIndexPage />} />
         <Route path="/analysis/:docId" element={<AnalysisDocPage />} />
         <Route path="/draft" element={<DraftPage />} />

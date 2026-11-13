@@ -987,3 +987,104 @@
     padding: 10px 18px;
   }
 }
+
+.app-review-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+.app-review-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.app-review-pages {
+  width: 200px;
+  max-height: 70vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  background: var(--app-surface);
+}
+
+.app-review-page {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text);
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-review-page--active {
+  background: var(--app-accent-soft);
+}
+
+.app-review-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-review-heading h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.app-review-compare {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 8px;
+}
+
+.app-review-image {
+  width: 420px;
+  max-width: 45%;
+  height: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.app-review-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-review-text textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.app-review-actions,
+.app-review-footer {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.app-review-footer {
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px solid var(--app-border);
+}

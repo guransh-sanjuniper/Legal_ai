@@ -31,7 +31,8 @@ export interface PageRecord {
   pageNo: number;
   text: string;
   status: PageStatus;
-  source: 'native' | 'ocr' | 'manual' | null;
+  // 'waived': accepted with its extracted text because the user proceeded without reviewing.
+  source: 'native' | 'ocr' | 'manual' | 'waived' | null;
   reason: string | null;
   dpi: number | null;
   ocrConfidence?: number | null;
@@ -45,7 +46,7 @@ export interface PageRecord {
 export interface OcrDecision {
   docId: string;
   pageNo: number;
-  decision: 'accept' | 'correct' | 'blank' | 'unresolved';
+  decision: 'accept' | 'correct' | 'blank' | 'unresolved' | 'waived';
   text: string;
   savedAt: number;
 }

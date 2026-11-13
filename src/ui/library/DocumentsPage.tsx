@@ -7,8 +7,9 @@ import {
 } from '../../runner/db';
 import { sha256Bytes } from '../../ingest/hash';
 import { requestPersistence, storageReport, type StorageReport } from '../../ingest/storage';
-import { libraryStatusFrom, stageLabel, statusLabel, statusTone } from './docStatus';
+import { libraryStatusFrom, needsResumeAfterReview, readyLabel, stageLabel, statusLabel, statusTone } from './docStatus';
 import { countReviewPages, isPrepared, readPreparationState, type PreparationState } from './preparationState';
+import { countWaivedPages, waiveUnresolvedPages } from '../../ingest/review';
 import { getActiveDocId, runPreparation, subscribePreparation } from './prepare';
 import { documentLock, removeDocumentWhenIdle } from './removeDocument';
 import { PageHeader } from '../app/pages/Placeholder';
@@ -36,6 +37,7 @@ export function DocumentsPage() {
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
   const [reviewCounts, setReviewCounts] = useState<Record<string, number>>({});
+  const [waivedCounts, setWaivedCounts] = useState<Record<string, number>>({});
   const [prepStates, setPrepStates] = useState<Record<string, PreparationState | null>>({});
   const [preparedIds, setPreparedIds] = useState<Record<string, boolean>>({});
   const [activeState, setActiveState] = useState<PreparationState | null>(null);
@@ -52,6 +54,8 @@ export function DocumentsPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const reviewCacheRef = useRef(new Map<string, number>());
   const reviewSigRef = useRef(new Map<string, string>());
+  const waivedCacheRef = useRef(new Map<string, number>());
+  const waivedSigRef = useRef(new Map<string, string>());
   const preparedCacheRef = useRef(new Map<string, PreparedCacheEntry>());
   const resumeAttemptRef = useRef(false);
 
@@ -84,6 +88,7 @@ export function DocumentsPage() {
       setDocs(all);
 
       const counts: Record<string, number> = {};
+      const waived: Record<string, number> = {};
       const states: Record<string, PreparationState | null> = {};
       const prepared: Record<string, boolean> = {};
 
@@ -105,6 +110,22 @@ export function DocumentsPage() {
           }
         }
 
+        // Waived pages only matter for documents that can be Ready.
+        if (doc.status !== 'ready') {
+          waived[doc.id] = 0;
+        } else {
+          const signature = `${doc.status}|${doc.prepFingerprint}|${doc.chunkCount}`;
+          const cached = waivedCacheRef.current.get(doc.id);
+          if (cached !== undefined && waivedSigRef.current.get(doc.id) === signature) {
+            waived[doc.id] = cached;
+          } else {
+            const count = await countWaivedPages(target, doc.id);
+            waivedCacheRef.current.set(doc.id, count);
+            waivedSigRef.current.set(doc.id, signature);
+            waived[doc.id] = count;
+          }
+        }
+
         const key = `${doc.status}|${doc.prepFingerprint}|${doc.chunkCount}`;
         const cached = preparedCacheRef.current.get(doc.id);
         if (cached && cached.key === key) {
@@ -117,6 +138,7 @@ export function DocumentsPage() {
       }
 
       setReviewCounts(counts);
+      setWaivedCounts(waived);
       setPrepStates(states);
       setPreparedIds(prepared);
       setBusyDocId(getActiveDocId());
@@ -149,6 +171,7 @@ export function DocumentsPage() {
   useEffect(() => {
     const onFocus = () => {
       reviewSigRef.current.clear();
+      waivedSigRef.current.clear();
       preparedCacheRef.current.clear();
       void refresh();
     };
@@ -174,14 +197,15 @@ export function DocumentsPage() {
     [db, refresh],
   );
 
-  // Auto-resume the first document that stopped mid-preparation. A review or failed
-  // document waits for the user: the review page is a decision, and Retry is explicit.
+  // Auto-resume the first document that stopped mid-preparation. A review document waits
+  // for the user unless nothing is left to review (Proceed was chosen and the tab closed
+  // before finalize). A failed document waits too: Retry is explicit.
   useEffect(() => {
     if (!db || loading || resumeAttemptRef.current) return;
     if (getActiveDocId()) return;
     const first = docs.find((doc) => {
       if (preparedIds[doc.id]) return false;
-      if (doc.status === 'review') return false;
+      if (doc.status === 'review' && !needsResumeAfterReview(doc.status, reviewCounts[doc.id] ?? 0)) return false;
       const state = prepStates[doc.id];
       if (state?.stage === 'failed') return false;
       return true;
@@ -189,7 +213,7 @@ export function DocumentsPage() {
     if (!first) return;
     resumeAttemptRef.current = true;
     runFor(first);
-  }, [db, loading, docs, preparedIds, prepStates, runFor]);
+  }, [db, loading, docs, preparedIds, prepStates, reviewCounts, runFor]);
 
   async function onFile(file: File) {
     if (!db || importing) return;
@@ -243,7 +267,26 @@ export function DocumentsPage() {
 
   function openDoc(doc: DocumentRecord) {
     if (preparedIds[doc.id]) navigate(`/analysis/${doc.id}`);
-    else window.location.assign(`/?page=ingest&doc=${encodeURIComponent(doc.id)}`);
+    else if (doc.status === 'review') openReview(doc);
+    else if (!busyDocId) runFor(doc);
+  }
+
+  function openReview(doc: DocumentRecord) {
+    navigate(`/documents/${encodeURIComponent(doc.id)}/review`);
+  }
+
+  async function proceedWithoutReview(doc: DocumentRecord) {
+    if (!db) return;
+    const pending = reviewCounts[doc.id] ?? 0;
+    const confirmed = window.confirm(
+      `Proceed without reviewing "${doc.name}"?\n\n${pending} page(s) need a decision. ` +
+        'OCR text will be used as extracted; unreviewed pages may contain errors.',
+    );
+    if (!confirmed) return;
+    setError(null);
+    const waived = await waiveUnresolvedPages(db, doc.id);
+    setNotice(`${waived} page(s) proceed with their OCR text as extracted. Preparing "${doc.name}".`);
+    runFor(doc, { forceIngest: true });
   }
 
   async function removeDoc(doc: DocumentRecord) {
@@ -268,6 +311,8 @@ export function DocumentsPage() {
       }
       reviewCacheRef.current.delete(doc.id);
       reviewSigRef.current.delete(doc.id);
+      waivedCacheRef.current.delete(doc.id);
+      waivedSigRef.current.delete(doc.id);
       preparedCacheRef.current.delete(doc.id);
       await refresh();
       setNotice(`Removed "${doc.name}" from this device.`);
@@ -388,9 +433,14 @@ export function DocumentsPage() {
                   reviewPages: reviewCounts[doc.id] ?? 0,
                 });
                 const label = statusLabel(status, reviewCounts[doc.id] ?? 0, state?.stage);
+                const waivedPages = waivedCounts[doc.id] ?? 0;
                 const current = state?.progress;
                 const statusText =
-                  status === 'preparing' && current && current.total > 0 ? `${label} ${current.done}/${current.total}` : label;
+                  status === 'preparing' && current && current.total > 0
+                    ? `${label} ${current.done}/${current.total}`
+                    : status === 'ready'
+                      ? readyLabel(waivedPages)
+                      : label;
                 const indeterminate = status === 'preparing' && (!current || current.total === 0);
                 const failed = state?.failed;
                 return (
@@ -434,13 +484,37 @@ export function DocumentsPage() {
                     <td>{doc.pageCount > 0 ? doc.pageCount : '—'}</td>
                     <td>{formatBytes(doc.size)}</td>
                     <td>
-                      <span className={`app-chip app-chip--${statusTone(status)}`}>{statusText}</span>
+                      <span
+                        className={`app-chip app-chip--${statusTone(status)}`}
+                        title={
+                          status === 'ready' && waivedPages > 0
+                            ? `${waivedPages} page(s) were accepted with their OCR text as extracted, not reviewed by a person.`
+                            : undefined
+                        }
+                      >
+                        {statusText}
+                      </span>
                     </td>
                     <td>
                       <div className="app-row-actions">
                         <button type="button" className="app-link-button" onClick={() => openDoc(doc)}>
                           {status === 'ready' ? 'Open' : status === 'needs_review' ? 'Review' : 'Prepare'}
                         </button>
+                        {status === 'ready' && waivedPages > 0 && (
+                          <button type="button" className="app-link-button" onClick={() => openReview(doc)}>
+                            Review
+                          </button>
+                        )}
+                        {status === 'needs_review' && (
+                          <button
+                            type="button"
+                            className="app-link-button"
+                            disabled={Boolean(busyDocId)}
+                            onClick={() => void proceedWithoutReview(doc)}
+                          >
+                            Proceed without reviewing
+                          </button>
+                        )}
                         {status === 'preparing' && (
                           <button
                             type="button"

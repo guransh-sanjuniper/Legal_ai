@@ -11,6 +11,7 @@ import { DEFAULT_CHUNK_CONFIG } from '../ingest/chunk';
 import type { ChunkCheck } from '../ingest/checkChunks';
 import { PageNav } from './PageNav';
 import { runPreparation } from './library/prepare';
+import { saveReviewDecision, type ReviewDecision } from '../ingest/review';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
 const reasonLabel = (reason: string | null) =>
@@ -216,20 +217,9 @@ export function IngestPage() {
         })
       : null;
 
-  async function decide(page: PageRecord, decision: 'accept' | 'correct' | 'blank' | 'unresolved', text?: string) {
+  async function decide(page: PageRecord, decision: ReviewDecision, text?: string) {
     if (!db) return;
-    const now = Date.now();
-    const finalText = decision === 'blank' ? '' : decision === 'correct' ? (text ?? '') : page.text;
-    await db.put('ocr_decisions', { docId: page.docId, pageNo: page.pageNo, decision, text: finalText, savedAt: now }, [page.docId, page.pageNo]);
-    if (decision === 'unresolved') {
-      await db.put('pages', { ...page, status: 'review', reason: 'unresolved', updatedAt: now }, [page.docId, page.pageNo]);
-    } else {
-      await db.put(
-        'pages',
-        { ...page, text: finalText, status: decision === 'blank' ? 'blank' : 'accepted', source: 'manual', reason: null, updatedAt: now },
-        [page.docId, page.pageNo],
-      );
-    }
+    await saveReviewDecision(db, page, decision, text);
     addLog(`page ${page.pageNo}: decision ${decision} saved`);
     setCorrection('');
     setReviewPageNo(null);

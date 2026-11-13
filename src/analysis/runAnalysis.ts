@@ -59,6 +59,7 @@ import {
   type RiskVerdictItem,
 } from './riskReview';
 import type { Task } from '../tasks/types';
+import { countWaivedPages } from '../ingest/review';
 import type {
   AnalysisReport,
   CrossClauseResult,
@@ -1238,6 +1239,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     longClauses: new Set(chunks.filter((c) => c.unusuallyLong).flatMap((c) => c.clauses)).size,
   };
 
+  const unreviewedPages = await countWaivedPages(db, docId);
   const report: AnalysisReport = {
     docId,
     docHash: doc.hash,
@@ -1282,6 +1284,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     ],
     partial,
     unreliable,
+    unreviewedPages,
     failedClauses,
     coverage: {
       mode: analysisMode,

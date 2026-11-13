@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildReportModel, compareClauseNo, longestOf, mergeClauses, placeEntry, NOT_STATED } from './reportModel';
+import { buildReportModel, compareClauseNo, longestOf, mergeClauses, placeEntry, unreviewedText, NOT_STATED } from './reportModel';
 import type { AnalysisReport, VerifiedClause, VerifiedRisk } from './types';
 
 const risk = (id: string, severity: 'high' | 'medium' | 'low', page: number, quote: string, clause: string): VerifiedRisk => ({
@@ -281,4 +281,16 @@ describe('report model', () => {
     expect(risks.missing[0]).toMatchObject({ clause: 'Whole document', kind: 'missing' });
   });
 
+});
+
+describe('unreviewed pages banner', () => {
+  it('states how many pages were not reviewed and stays absent otherwise', () => {
+    expect(unreviewedText(0)).toBeNull();
+    expect(unreviewedText(1)).toBe('1 page was not reviewed; OCR text was used as extracted.');
+    expect(unreviewedText(4)).toBe('4 pages were not reviewed; OCR text was used as extracted.');
+    expect(buildReportModel(report([], { unreviewedPages: 2 })).unreviewed).toBe(
+      '2 pages were not reviewed; OCR text was used as extracted.',
+    );
+    expect(buildReportModel(report([])).unreviewed).toBeNull();
+  });
 });

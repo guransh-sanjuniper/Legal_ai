@@ -28,8 +28,9 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
 - `/chat`, `/draft`, `/compare` are placeholders.
 - `/documents` lists IndexedDB documents, imports a PDF and runs the whole preparation (ingestion, embeddings, index, definitions), removes a document from this device.
+- `/documents/:docId/review` is the in-app review screen (page image beside OCR text, decisions, Retry OCR, Recheck, Proceed without reviewing). Needs-review rows and the Review action open it; the harness page is not linked from the library.
 - `/analysis` lists ready documents; `/analysis/:docId` is the Deep Analysis page (Ready documents only, see "Deep Analysis page").
-- Status: `ready` → Ready; `review` → Needs review (N pages); `new`/`processing` → Preparing. The library's Ready is the durable preparation result (see Document preparation); the document-level `status` stays the ingestion status.
+- Status: `ready` → Ready (with "Ready · N pages not reviewed" when pages were waived); `review` → Needs review (N pages); `new`/`processing` → Preparing. The library's Ready is the durable preparation result (see Document preparation); the document-level `status` stays the ingestion status.
 - Login: Supabase Auth email+password. The app shell and the harness pages share one persisted session (same project URL, same localStorage key).
 - "Remove from this device" deletes the document, pages, chunks, OCR decisions, embeddings, definitions, analysis reports/state, tasks and run state for that document. It refuses while a preparation or analysis lock is held. Supabase reports are kept.
 - Theme: light/dark, scoped to the app shell; the harness pages keep their look.
@@ -41,6 +42,14 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - The keyword index is derived in the retrieval worker, not persisted. Preparation warms it with a search call; the Search page rebuilds its own index. A document with no definition/party text gets an empty `definitions` record so it can reach Ready.
 - `Ready` is the durable preparation result: `doc.status === 'ready'` plus chunks, embeddings and a matching definitions sheet. The document's `status` stays the ingestion status; a ready document with a missing stage is `Preparing`.
 - Status: Preparing (stage + progress bar) / Needs review (N pages) / Ready / Failed (stage + reason + Retry). A review document pauses and waits for the user; the review page continues the preparation automatically after the last page decision. A failed stage is retried explicitly; partial definitions (some failed tasks) are treated as failed.
+- Proceed without reviewing (library row and review screen, after a confirm): every page still needing review (`status` review, or already waived) gets an `ocr_decisions` row with `decision: 'waived'` holding its extracted text. The page is `accepted` with `source: 'waived'` (so it is never shown as human-confirmed), and an empty page stays empty. Ingestion then finalizes and preparation continues to Ready with no special casing. Pages a person already decided are not touched. The waiver is one IndexedDB transaction (`src/ingest/review.ts`).
+- Waived pages stay reviewable. A manual decision replaces the waiver (source `manual`). A recheck keeps every decision, waived included.
+- Ready with waived pages shows "Ready · N pages not reviewed" (tooltip on the chip) and a Review action. Failed definitions on such a document follow the normal path (Failed, Retry); no special bypass.
+- Resume: a review document with zero unresolved pages (tab closed after Proceed, before finalize) resumes automatically on the next load. A document with unresolved pages still waits for the user.
+- `runPreparation` honours `forceIngest` and `recheck` even for a prepared document; the review screen uses that to re-ingest after each decision. Preparation is not started while another document is being prepared in the tab.
+- The review screen disables decisions while a preparation runs for the same document (a decision during a run could be skipped by the run's finalize).
+- Decisions are shared by the harness page and the review screen (`saveReviewDecision`). The harness page's Retry OCR and the review screen's Retry OCR write the same page; a saved decision still wins on a later recheck (existing behaviour, not changed).
+- Analysis reports carry `unreviewedPages` (count of waived pages when the run was saved). The report shows a separate "Pages not reviewed." banner, also in exports. Older reports have no count and show no banner.
 - "Retry" re-runs the failed stage; "Remove" deletes the document and its local state. `preparedAt` and the prepared fingerprint (including the embedding model version) are stored on Ready.
 
 ## Tables
@@ -74,7 +83,7 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - `/?page=search` embedding progress, hybrid document search, law stand-in search, definitions sheet
 - `/?page=analysis` clause analysis, verification, roll-up, cross-clause pass, ledger, metrics, Ask (retrieval / whole-document), custom prompt, restore, forced-failure and fallback checks
 - `/?page=quality` quality suite: per-document scores, thresholds, hold-outs, misses/drops, repeat-run comparison, regression set and stored score changes
-- Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing.
+- Ingestion: a page is Ready only when every page is native/ocr/accepted/blank and chunks are saved. Decisions in `ocr_decisions` win over reprocessing (accept, correct, blank, unresolved, waived). The only ingestion change for review work is the `waived` branch in `processPage`; OCR, extraction, chunking and fingerprints are unchanged.
 - OCR is multi-pass and document-neutral: 200/300/400 DPI, PSM 3/4/6, and grayscale/Otsu preprocessing; the best attempt is chosen by `checkOcrOutput`, confidence and word count. Page records store confidence, words and PSM for review.
 - pdf.js assets: `scripts/copy-pdfjs-assets.mjs` copies `wasm/`, `cmaps/` and `standard_fonts/` from `node_modules/pdfjs-dist` into `public/` on predev/prebuild/pretest. `openPdf` passes `/wasm/`, `/cmaps/` and `/standard_fonts/`; without them CCITT/JBIG2 masks decode to an almost blank page.
 - If a rendered page has more than one image object but under 1% ink, the page is marked `render_decode_failed` instead of being OCR'd as a blank page. The review panel and log show a wasm-asset hint.

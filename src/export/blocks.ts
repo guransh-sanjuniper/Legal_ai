@@ -232,6 +232,9 @@ function headBlocks(model: ReportModel): Block[] {
   if (model.banner.length > 0) {
     blocks.push({ kind: 'paragraph', text: `Partial report. ${model.banner.join(' ')}`, muted: true });
   }
+  if (model.unreviewed) {
+    blocks.push({ kind: 'paragraph', text: `Pages not reviewed. ${model.unreviewed}`, muted: true });
+  }
   blocks.push({ kind: 'heading', level: 2, text: 'Table of Contents' });
   blocks.push({ kind: 'toc', entries: model.toc.map((t) => ({ number: t.number, title: t.title })) });
   return blocks;

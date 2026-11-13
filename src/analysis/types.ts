@@ -296,6 +296,8 @@ export interface AnalysisReport {
   judgement?: JudgementSnapshot;
   partial?: boolean;
   unreliable?: boolean;
+  // Pages accepted with their OCR text as extracted ("proceed without reviewing") when the report ran.
+  unreviewedPages?: number;
   failedClauses?: {
     taskId: string;
     clause: string;

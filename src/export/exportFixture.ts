@@ -194,6 +194,7 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
       reviewingFor: 'licensee',
     },
     banner: [],
+    unreviewed: null,
     toc: numbered.map((s) => ({ number: s.number, title: s.title, key: s.key })),
     sections: numbered,
     clauses,

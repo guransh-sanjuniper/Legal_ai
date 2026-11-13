@@ -148,6 +148,8 @@ export type ReportSection =
 export interface ReportModel {
   title: { matter: string; document: string; reviewDate: string; detailLevel: string; focus: string; reviewingFor: string };
   banner: string[];
+  // Shown in its own banner: the document was prepared with pages not reviewed by a person.
+  unreviewed: string | null;
   toc: { number: number; title: string; key: SectionKey }[];
   sections: ReportSection[];
   clauses: ClauseView[];
@@ -416,6 +418,11 @@ function pageLabel(start: number, end: number): string {
   return start === end ? `page ${start}` : `pages ${start}–${end}`;
 }
 
+export function unreviewedText(pages: number): string | null {
+  if (pages <= 0) return null;
+  return `${pages} page${pages === 1 ? ' was' : 's were'} not reviewed; OCR text was used as extracted.`;
+}
+
 export function buildReportModel(report: AnalysisReport): ReportModel {
   const { rows, stats } = mergeClauses(report);
   // Numbered clauses in numeric order; entries that could not be placed follow them.
@@ -644,6 +651,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       reviewingFor: r?.reviewingFor ?? 'neutral',
     },
     banner: report.partial || report.unreliable ? report.notices.filter((n) => /partial|unreliable|not analysed|could not be checked|incomplete/i.test(n)) : [],
+    unreviewed: unreviewedText(report.unreviewedPages ?? 0),
     toc: numbered.map((s) => ({ number: s.number, title: s.title, key: s.key })),
     sections: numbered,
     clauses,
