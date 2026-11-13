@@ -642,8 +642,261 @@
   outline: none;
 }
 
-.app-composer--disabled {
-  opacity: 0.7;
+.app-composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 180px;
+  resize: vertical;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+  color: var(--app-text);
+  font: inherit;
+}
+
+.app-composer textarea:focus {
+  outline: none;
+}
+
+.app-chat-composer {
+  align-items: flex-end;
+}
+
+.app-chat-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-chat-new {
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  padding: 8px 12px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.app-chat-new:hover:not(:disabled) {
+  background: var(--app-surface-2);
+}
+
+.app-chat-sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-chat-session {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+}
+
+.app-chat-session.is-active {
+  background: var(--app-surface-2);
+}
+
+.app-chat-session-open {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--app-text);
+  padding: 7px 8px;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.app-chat-session-delete {
+  border: 0;
+  background: transparent;
+  color: var(--app-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.app-chat-session-delete:hover:not(:disabled) {
+  color: var(--app-danger);
+}
+
+.app-chat-new:disabled,
+.app-chat-session-open:disabled,
+.app-chat-session-delete:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.app-chat-list-empty {
+  padding: 4px 8px;
+}
+
+.app-chat-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  gap: 10px;
+}
+
+.app-chat-thread {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 240px;
+  padding: 4px 2px 8px;
+}
+
+.app-chat-msg {
+  max-width: 100%;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.app-chat-msg--user {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--app-accent-soft);
+  border-radius: 14px;
+  padding: 10px 14px;
+  white-space: pre-wrap;
+}
+
+.app-chat-msg--assistant {
+  align-self: stretch;
+  padding: 2px 4px;
+}
+
+.app-chat-msg--error {
+  border-left: 3px solid var(--app-danger);
+  padding-left: 10px;
+}
+
+.app-chat-error-text {
+  margin: 6px 0;
+  color: var(--app-danger);
+}
+
+.app-chat-retry {
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  padding: 5px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.app-chat-retry:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.app-chat-notice {
+  margin: 0;
+  color: var(--app-danger);
+}
+
+.app-md > :first-child {
+  margin-top: 0;
+}
+
+.app-md > :last-child {
+  margin-bottom: 0;
+}
+
+.app-md p {
+  margin: 0 0 10px;
+}
+
+.app-md ul,
+.app-md ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.app-md h1,
+.app-md h2,
+.app-md h3,
+.app-md h4 {
+  margin: 14px 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.app-md code {
+  background: var(--app-surface-2);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 0.92em;
+}
+
+.app-md pre {
+  background: var(--app-surface-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.app-md pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.app-md table {
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+
+.app-md th,
+.app-md td {
+  border: 1px solid var(--app-border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.app-md th {
+  background: var(--app-surface-2);
+  font-weight: 600;
+}
+
+.app-md a {
+  color: var(--app-accent);
+}
+
+@media (max-width: 760px) {
+  .app-chat-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ---------- Document library ---------- */

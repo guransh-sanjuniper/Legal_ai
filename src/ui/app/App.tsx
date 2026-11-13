@@ -50,6 +50,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       <Routes>
         <Route path="/" element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<ChatPage />} />
+        <Route path="/chat/:sessionId" element={<ChatPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/documents/:docId/review" element={<ReviewPage />} />
         <Route path="/analysis" element={<AnalysisIndexPage />} />

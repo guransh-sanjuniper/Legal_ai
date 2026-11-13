@@ -8,7 +8,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - React + Vite SPA (`src/`), TypeScript
 - `docx` produces the Word export in the browser; no server build step.
 - Browser IndexedDB via `idb` (documents with PDF Blob, pages, chunks, embeddings, tasks, raw_responses, ocr_decisions, run_state)
-- Supabase (local CLI + Docker): Postgres, Auth, Edge Functions. RLS off (throwaway).
+- Supabase (local CLI + Docker): Postgres, Auth, Edge Functions. RLS off (throwaway) for `runs`, `task_results`, `reports`, `rate_limits`; RLS on with owner-only policies for `chat_sessions` and `chat_messages` (migration 0004). Pending (P8): enable owner-only RLS on the older tables too.
 - Hosted Supabase for the app shell: `npm run dev:hosted` reads `.env.hosted`; local `npm run dev` reads `.env.local`. The `ai-proxy` proxy is the same function in both. See `docs/hosted-supabase.md`.
 - OpenRouter via the `ai-proxy` Edge Function. The key lives in `supabase/functions/.env`, never in the browser. The function sends CORS headers for hosted browser preflights; `ALLOWED_ORIGIN` (optional, comma-separated) locks the allowed origin.
 - Default model: `deepseek/deepseek-v4.1-flash`.
@@ -26,7 +26,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 
 ## App shell (routes)
 - `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
-- `/chat`, `/draft`, `/compare` are placeholders.
+- `/chat` and `/chat/:sessionId` are general chat (see "Chat" below). `/draft`, `/compare` are placeholders.
 - `/documents` lists IndexedDB documents, imports a PDF and runs the whole preparation (ingestion, embeddings, index, definitions), removes a document from this device.
 - `/documents/:docId/review` is the in-app review screen (page image beside OCR text, decisions, Retry OCR, Recheck, Proceed without reviewing). Needs-review rows and the Review action open it; the harness page is not linked from the library.
 - `/analysis` lists ready documents; `/analysis/:docId` is the Deep Analysis page (Ready documents only, see "Deep Analysis page").
@@ -53,7 +53,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - "Retry" re-runs the failed stage; "Remove" deletes the document and its local state. `preparedAt` and the prepared fingerprint (including the embedding model version) are stored on Ready.
 
 ## Tables
-Supabase: `runs`, `task_results`, `reports`, `rate_limits`. RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.
+Supabase: `runs`, `task_results`, `reports`, `rate_limits`, `chat_sessions`, `chat_messages`. RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.
 IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `embedding_windows`, `embedding_state`, `definitions`, `analysis_reports`, `analysis_state`, `tasks`, `raw_responses`, `ocr_decisions`, `run_state`.
 
 ## Key rules
@@ -156,6 +156,18 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Retry-failed refreshes the stored prompt, prompt version and fingerprint from the current plan before re-queuing a failed task, so a retry after a prompt fix uses the new prompt. The synthesis task is re-queued with the current template too.
 - The failed-task table shows the first 300 characters of the stored raw response for each failed attempt, so `bad_json` and similar failures can be diagnosed without the browser devtools.
 - Tests use the hosted Supabase project (`testSupport.ts` helpers); `runAnalysis.retry.test.ts` covers retry.
+
+## Chat (`/chat`, `/chat/:sessionId`)
+- General chat with no document. The request carries only the system prompt and the thread; no retrieval.
+- Pages: `src/ui/app/pages/ChatPage.tsx` (session list, thread, composer). Persistence: `src/chat/store.ts` (takes the Supabase client as a parameter). Streaming: `src/chat/stream.ts` (own NDJSON reader, same `ai-proxy` contract as the runner; the runner's `callModel` is unchanged). Thread windowing and titles: `src/chat/thread.ts`. Error text: `src/chat/errors.ts`.
+- Tables: `chat_sessions` (id, user_id, title, created_at, updated_at) and `chat_messages` (id, session_id, role `user`/`assistant`, content, created_at). Owner-only RLS (`user_id = auth.uid()`); messages follow their session; deleting a session cascades.
+- A session is created on the first message and titled from it (60 characters). The user message is saved before the request; the assistant reply is saved only when the stream completes with a finish reason. A failed reply keeps the user message and shows Retry; no partial reply is saved.
+- The session in the URL restores on reload. The session list and New chat are disabled while a reply streams. A reply that finishes after the user has left its session is saved but not drawn.
+- Only the last `CHAT_HISTORY_MESSAGES` (30) messages are sent. The window never starts on an assistant message, so it can hold 29.
+- Model: `VITE_CHAT_MODEL` (fallback `VITE_SEARCH_MODEL`, then `VITE_MODEL`, then the default). Output cap `CHAT_MAX_TOKENS` (4000).
+- Markdown in replies: `react-markdown` + `remark-gfm` (tables, lists, bold). Raw HTML is not rendered; links open in a new tab.
+- The shell footer shows "AI-assisted, requires lawyer review." on every page, including chat.
+- Migration `0004_chat.sql`: apply with `npx supabase db push` (hosted) or `npx supabase db reset` (local).
 
 ## Commands
 - `npm run dev` the SPA (local `.env.local`; runs `scripts/copy-pdfjs-assets.mjs` first)
