@@ -7,6 +7,7 @@ import { reviewingLine } from './request';
 import type { ReviewingFor } from './types';
 import { executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { keepCitedSentences } from './rollup';
+import { answersAboutQuestion, numericProblems } from './answerGuard';
 import { normalizeQuote, verifyQuotedItems, type Located } from './verify';
 import type { PromptAnswer, PromptResult } from './types';
 
@@ -16,12 +17,21 @@ export interface RawAnswer {
   page?: unknown;
   clause_no?: unknown;
   part?: unknown;
+  why?: unknown;
 }
 
+// An item needs its quote and a one-line reason that it answers the request. Without the reason
+// the item is rejected, so a quote that only mentions a related term is never passed on.
 export function isValidAnswerItem(x: unknown): boolean {
   if (typeof x !== 'object' || x === null) return false;
   const o = x as Record<string, unknown>;
-  return typeof o.text === 'string' && typeof o.quote === 'string' && typeof o.page === 'number';
+  return (
+    typeof o.text === 'string' &&
+    typeof o.quote === 'string' &&
+    typeof o.page === 'number' &&
+    typeof o.why === 'string' &&
+    o.why.trim().length > 0
+  );
 }
 
 export function promptPrompt(request: string, reviewingFor: ReviewingFor = 'neutral'): string {
@@ -43,7 +53,8 @@ export function mergeAnswers(located: Located<RawAnswer>[]): PromptAnswer[] {
     if (seen.has(key)) continue;
     seen.add(key);
     const part: 'answer' | 'support' = v.item.part === 'support' ? 'support' : 'answer';
-    const answer = { itemId: '', text, clause: v.item.clause, page: v.item.page, quote: v.item.quote, verified: true as const, part };
+    const why = typeof v.item.why === 'string' && v.item.why.trim() ? v.item.why.trim() : undefined;
+    const answer = { itemId: '', text, clause: v.item.clause, page: v.item.page, quote: v.item.quote, verified: true as const, part, why };
     (part === 'answer' ? direct : support).push(answer);
   }
   return [...direct, ...support].map((a, i) => ({ ...a, itemId: `P${i + 1}` }));
@@ -143,6 +154,43 @@ export async function runPromptPass(
 
 // One synthesis over verified quotes/answers: the final answer in prose, citing their ids.
 // Used by the inline (clause-call) mode and the post-report modes.
+// Answers whose quote does not state the request's subject are removed before the model sees them;
+// the model then writes "not clearly stated" when nothing is left. A sentence whose numbers or
+// units do not match its cited quotes is removed after the model writes it. Both counts are
+// returned so a caller can tell a guarded answer from one the model never wrote.
+export const NOT_CLEAR_ANSWER = 'Not clearly stated in the document.';
+
+// Before the model: keep only the answers whose quote states the request's subject.
+export function prepareSynthesis(answers: PromptAnswer[], request: string): { relevant: PromptAnswer[]; dropped: number } {
+  const relevant = answersAboutQuestion(answers, request);
+  return { relevant, dropped: answers.length - relevant.length };
+}
+
+// After the model: keep sentences that cite only the relevant answers, and drop any whose numbers
+// or units do not match the cited quotes. A failed call is left to the caller as an error; if the
+// model wrote nothing usable otherwise, the answer is "not clearly stated".
+export function finalizeSynthesis(
+  relevant: PromptAnswer[],
+  sentences: unknown[],
+  failed: boolean,
+): { answer: { text: string; cites: string[] }[]; numericDropped: number } {
+  const ids = new Set(relevant.map((a) => a.itemId));
+  const quoteById = new Map(relevant.map((a) => [a.itemId, a.quote]));
+  const kept = keepCitedSentences(sentences as never[], ids).kept;
+  let numericDropped = 0;
+  const answer: { text: string; cites: string[] }[] = [];
+  for (const k of kept) {
+    const quotes = k.cites.map((id) => quoteById.get(id) ?? '');
+    if (numericProblems(k.text, quotes).length > 0) {
+      numericDropped++;
+      continue;
+    }
+    answer.push({ text: k.text, cites: k.cites });
+  }
+  if (answer.length === 0 && !failed) answer.push({ text: NOT_CLEAR_ANSWER, cites: [] });
+  return { answer, numericDropped };
+}
+
 export async function synthesiseAnswers(args: {
   ctx: ExecuteContext;
   runId: string;
@@ -150,20 +198,26 @@ export async function synthesiseAnswers(args: {
   prompt: string;
   answers: PromptAnswer[];
   maxTokens?: number;
-}): Promise<{ answer: { text: string; cites: string[] }[]; runs: ExecuteResult[] }> {
-  if (args.answers.length === 0) return { answer: [], runs: [] };
-  const ids = new Set(args.answers.map((a) => a.itemId));
+}): Promise<{ answer: { text: string; cites: string[] }[]; runs: ExecuteResult[]; dropped: number; numericDropped: number }> {
+  if (args.answers.length === 0) return { answer: [], runs: [], dropped: 0, numericDropped: 0 };
+  const { relevant, dropped } = prepareSynthesis(args.answers, args.prompt);
+  if (relevant.length === 0) {
+    return { answer: [{ text: NOT_CLEAR_ANSWER, cites: [] }], runs: [], dropped, numericDropped: 0 };
+  }
+
   const plan: TaskPlan = {
     suffix: 'ps',
-    promptVersion: 'prompt-synthesis-v2',
+    promptVersion: 'prompt-synthesis-v3',
     prompt: buildPromptSynthesisPrompt(),
     input: `USER REQUEST: ${args.prompt}\n\nVerified answers:\n${JSON.stringify(
-      args.answers.map((a) => ({ id: a.itemId, text: a.text, clause: a.clause, page: a.page, quote: a.quote })),
+      relevant.map((a) => ({ id: a.itemId, text: a.text, clause: a.clause, page: a.page, quote: a.quote, why: a.why ?? null })),
     )}`,
     maxTokens: args.maxTokens ?? 1200,
     validate: (x) => typeof x === 'object' && x !== null && typeof (x as { text?: unknown }).text === 'string',
   };
   const run = await executeTasks(args.ctx, args.runId, args.doc, [plan]);
-  const kept = run.collected.flatMap((c) => keepCitedSentences(c.items as never[], ids).kept);
-  return { answer: kept.map((k) => ({ text: k.text, cites: k.cites })), runs: [run] };
+  const sentences = run.collected.flatMap((c) => c.items);
+  const failed = run.tasks.some((t) => t.status === 'failed');
+  const out = finalizeSynthesis(relevant, sentences, failed);
+  return { answer: out.answer, runs: [run], dropped, numericDropped: out.numericDropped };
 }

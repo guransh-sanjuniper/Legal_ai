@@ -5,6 +5,7 @@ import { buildAnalysisChunks, type AnalysisChunk } from './analysisChunks';
 import { loadPageMap } from './runAnalysis';
 import { createRun, computeMetrics, type ExecuteContext } from './execute';
 import { runPromptPass, synthesiseAnswers } from './promptPass';
+import { answersAboutQuestion } from './answerGuard';
 import { getDefinitions, definitionsContext } from '../retrieval/definitions';
 import { PROMPT_RETRIEVAL_CHUNKS } from './config';
 import type { AnalysisMetrics, PromptResult, ReviewingFor } from './types';
@@ -145,7 +146,8 @@ export async function promptOnReport(opts: PromptOnReportOptions): Promise<Promp
   return {
     result: {
       prompt: opts.prompt,
-      answers: pass.result.answers,
+      // Only quotes that state the request's subject are shown as support.
+      answers: answersAboutQuestion(pass.result.answers, opts.prompt),
       answer: synth.answer,
       mode: opts.mode,
       selectedChunks: selected.length,

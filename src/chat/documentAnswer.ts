@@ -72,8 +72,6 @@ export function promptResultContent(result: PromptResult, opts: PromptTextOption
   if (answers.length === 0) {
     return { content: ['I could not find an answer to this in the document.', ...notes].join('\n\n'), citations: [] };
   }
-  return {
-    content: ['The verified quotes below answer the question.', ...notes].join('\n\n'),
-    citations: uniqueCitations(answers.slice(0, SOURCE_LIMIT).map(citeOf)),
-  };
+  // Quotes were found but none was written up as an answer: they do not clearly state the subject.
+  return { content: ['Not clearly stated in the document.', ...notes].join('\n\n'), citations: [] };
 }

@@ -31,37 +31,9 @@ const DATE = /\b(dates?|deadlines?|due|when|expir\w*|notice|periods?|term|commen
 const OBLIGATION = /\b(obligations?|duty|duties|responsib\w*|must|who (?:must|has to|should|is required))\b/i;
 const RISK = /\b(risks?|liabilit\w*|penalt\w*|concerns?|exposure|unfair|one-sided|dangers?)\b/i;
 
-// Words that name the kind of row. A question made only of these returns every row of that kind.
-const GENERIC = new Set([
-  'amount', 'amounts', 'pay', 'payment', 'payments', 'payable', 'paid', 'money', 'cost', 'price', 'fee', 'fees',
-  'charge', 'charges', 'date', 'dates', 'deadline', 'deadlines', 'due', 'when', 'risk', 'risks', 'liability',
-  'liabilities', 'obligation', 'obligations', 'duty', 'duties', 'responsibility', 'responsibilities', 'party',
-  'parties', 'much', 'many', 'missing', 'term', 'notice', 'period', 'periods', 'must', 'have', 'has',
-]);
+import { contentTokens, significantTerms } from '../analysis/questionTerms';
 
-const STOP = new Set([
-  'what', 'which', 'where', 'how', 'does', 'doesn', 'the', 'and', 'for', 'are', 'was', 'were', 'will', 'shall',
-  'that', 'this', 'with', 'from', 'into', 'about', 'under', 'have', 'has', 'document', 'agreement', 'contract',
-  'clause', 'say', 'says', 'tell', 'give', 'show', 'find', 'there', 'their', 'them', 'they', 'your', 'you', 'can',
-  'any', 'all', 'not', 'our', 'its', 'per', 'also', 'than', 'then', 'who', 'why', 'anything', 'something',
-]);
-
-const stem = (w: string) => (w.length > 4 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w);
-
-// Lower-case words of three letters or more, minus stop words, with a simple plural stem.
-export function contentTokens(text: string): string[] {
-  const words = text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length >= 3 && !STOP.has(w))
-    .map(stem);
-  return [...new Set(words)];
-}
-
-// The words of a question that name something in a document: stop and generic words removed.
-export function significantTerms(question: string): string[] {
-  return contentTokens(question).filter((t) => !GENERIC.has(t));
-}
+export { contentTokens, significantTerms };
 
 interface Candidate extends SavedRow {
   // Text the question is matched against. Not shown.
@@ -115,7 +87,7 @@ function candidatesFor(model: ReportModel, kind: 'money' | 'date' | 'obligation'
 // one word is not enough: "late rent" must not return the monthly rent row.
 function pick(candidates: Candidate[], question: string): { rows: Candidate[]; total: number } | null {
   if (candidates.length === 0) return null;
-  const specific = contentTokens(question).filter((t) => !GENERIC.has(t));
+  const specific = significantTerms(question);
   const matched = specific.length === 0
     ? candidates
     : candidates.filter((c) => {

@@ -50,6 +50,7 @@ import {
   type ModelPointSentence,
 } from './overviewPoints';
 import { synthesiseAnswers } from './promptPass';
+import { answersAboutQuestion } from './answerGuard';
 import { normalizeQuote } from './verify';
 import {
   applyVerdicts,
@@ -587,7 +588,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
           ...ps,
           status: 'queued',
           prompt: buildPromptSynthesisPrompt(),
-          promptVersion: 'prompt-synthesis-v2',
+          promptVersion: 'prompt-synthesis-v3',
           failureCode: null,
           failureMessage: null,
           nextAt: 0,
@@ -621,7 +622,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     const failedCodes = [...new Set(synth.runs.flatMap((r) => r.tasks).filter((t) => t.status === 'failed').map((t) => t.failureCode ?? 'failed'))];
     promptResult = {
       prompt: request.customPrompt,
-      answers,
+      // Only quotes that state the request's subject are shown as support.
+      answers: answersAboutQuestion(answers, request.customPrompt),
       answer: synth.answer,
       mode: 'inline',
       chunksTotal: chunks.length,

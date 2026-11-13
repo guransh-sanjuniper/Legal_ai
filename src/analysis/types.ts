@@ -136,6 +136,8 @@ export interface PromptAnswer {
   verified: true;
   // The direct answer to the prompt, or a supporting quote. Answers come first.
   part?: 'answer' | 'support';
+  // One line from the model: how the quote answers the request. Absent for inline clause answers.
+  why?: string;
 }
 
 export interface PromptResult {

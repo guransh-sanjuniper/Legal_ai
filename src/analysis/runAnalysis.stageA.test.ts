@@ -27,7 +27,7 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
 
   const withPrompt = await runAnalysis({
     ...opts,
-    request: { detailLevel: 'brief', focus: 'notice and exit', customPrompt: 'Which clause states the obligation?' },
+    request: { detailLevel: 'brief', focus: 'notice and exit', customPrompt: 'Which clause says what the Developer must perform?' },
   });
 
   expect(lawCalls).toBe(0);

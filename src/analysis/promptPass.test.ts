@@ -14,8 +14,10 @@ describe('custom prompt pass', () => {
     expect(p).toMatch(/verbatim quote/);
   });
 
-  it('validates answer items by shape', () => {
-    expect(isValidAnswerItem({ text: 'a', quote: 'b', page: 2 })).toBe(true);
+  it('validates answer items by shape, and needs the reason that the quote answers the request', () => {
+    expect(isValidAnswerItem({ text: 'a', quote: 'b', page: 2, why: 'states the deposit' })).toBe(true);
+    expect(isValidAnswerItem({ text: 'a', quote: 'b', page: 2 })).toBe(false);
+    expect(isValidAnswerItem({ text: 'a', quote: 'b', page: 2, why: '   ' })).toBe(false);
     expect(isValidAnswerItem({ text: 'a', quote: 'b' })).toBe(false);
     expect(isValidAnswerItem(null)).toBe(false);
   });

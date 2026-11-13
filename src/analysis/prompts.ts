@@ -232,8 +232,9 @@ export const CUSTOM_PROMPT_HEADER = [
 ].join('\n');
 
 export const CUSTOM_PROMPT_FOOTER = [
-  'Return ONLY a JSON array, in answer order: {"text":"...","part":"answer"|"support","page":number,"quote":"...","clause_no":"..."}.',
+  'Return ONLY a JSON array, in answer order: {"text":"...","part":"answer"|"support","page":number,"quote":"...","clause_no":"...","why":"..."}.',
   'Use "answer" for the direct response to the request and "support" for the quotations behind it. Every item still needs a verbatim quote from the excerpt.',
+  'Every item needs "why": one line saying how that quote answers the request, naming the subject it states. A quote that only mentions a related word, number or term, such as another notice, fee or rate table, does not answer the request. If nothing in this excerpt states what the request asks, return [].',
 ].join('\n');
 
 // Validation pass over High and Medium risks. Batched; one verdict per risk id.
@@ -258,7 +259,9 @@ export function buildPromptSynthesisPrompt(): string {
     UNTRUSTED_NOTICE,
     'The form and length of the answer follow the request: a yes/no question gets a short answer, a request to list items gets a list, a broad question gets a fuller answer.',
     'Start with the direct answer, then the supporting detail. Cite the item ids behind every statement.',
-    'If the verified answers do not answer the request, use one element whose text says it is not found in the document, with an empty cites list; do not pad.',
+    'Each verified answer has a "why" saying how its quote answers the request. Use an answer only when its quote states the subject the request asks about. An answer about a related but different thing (another clause, a rate or fee table, another notice or period) must not be used.',
+    'If no verified answer states what the request asks, reply with one element: {"text":"Not clearly stated in the document.","cites":[]}. Do not guess from a related number.',
+    'For any amount, give its currency or unit exactly as the quote gives it (for example Rs, %, days, months). Never write a bare number.',
     'Your entire reply is one JSON array. No text before or after it, and no markdown fences.',
     'Every element is an object, never a bare string: {"text":"...","cites":["ITEM_ID"]}.',
     'Put the answer in the text fields. Keep it short and in the form the request asks for.',

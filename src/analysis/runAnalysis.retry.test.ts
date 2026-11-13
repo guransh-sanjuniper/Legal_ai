@@ -27,7 +27,7 @@ it('retry failed re-runs only the failed tasks, including the custom pass, then 
     functionsUrl: `${url}/functions/v1`, anonKey: anon, docId, model: 'fake', fallbackModel: null,
     reasoning: { effort: 'minimal' as const }, maxTokens: 2000, autoReduceConcurrency: false,
     lawSearch: async () => [], docSearch: async () => [], callModel,
-    request: { customPrompt: 'Which clause states the obligation?' },
+    request: { customPrompt: 'Which clause says what the Developer must perform?' },
   };
 
   const first = await runAnalysis(opts);
@@ -70,7 +70,7 @@ it('retry failed re-runs only the failed tasks, including the custom pass, then 
   const afterTasks = await db.getAllFromIndex('tasks', 'byRun', first.runId);
   const psAfterTask = afterTasks.find((t) => t.id.endsWith(':ps'));
   expect(psAfterTask?.prompt).toMatch(/entire reply is one JSON array/);
-  expect(psAfterTask?.promptVersion).toBe('prompt-synthesis-v2');
+  expect(psAfterTask?.promptVersion).toBe('prompt-synthesis-v3');
   const esAfterTask = afterTasks.find((t) => t.id.endsWith(':es'));
   if (esAfterTask) {
     expect(esAfterTask.prompt).toMatch(/entire reply is one JSON array/);
