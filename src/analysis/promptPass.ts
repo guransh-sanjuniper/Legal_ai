@@ -87,7 +87,7 @@ export async function runPromptPass(
   const prompt = promptPrompt(request, args.reviewingFor);
   const plan = (chunk: AnalysisChunk, suffix: string, delayMs?: number): TaskPlan => ({
     suffix,
-    promptVersion: 'custom-prompt-v1',
+    promptVersion: 'custom-prompt-v2',
     prompt,
     input: `${defsContext}\n\n${chunk.pageMarkedText}`,
     maxTokens,
@@ -207,7 +207,7 @@ export async function synthesiseAnswers(args: {
 
   const plan: TaskPlan = {
     suffix: 'ps',
-    promptVersion: 'prompt-synthesis-v3',
+    promptVersion: 'prompt-synthesis-v4',
     prompt: buildPromptSynthesisPrompt(),
     input: `USER REQUEST: ${args.prompt}\n\nVerified answers:\n${JSON.stringify(
       relevant.map((a) => ({ id: a.itemId, text: a.text, clause: a.clause, page: a.page, quote: a.quote, why: a.why ?? null })),

@@ -234,7 +234,7 @@ export const CUSTOM_PROMPT_HEADER = [
 export const CUSTOM_PROMPT_FOOTER = [
   'Return ONLY a JSON array, in answer order: {"text":"...","part":"answer"|"support","page":number,"quote":"...","clause_no":"...","why":"..."}.',
   'Use "answer" for the direct response to the request and "support" for the quotations behind it. Every item still needs a verbatim quote from the excerpt.',
-  'Every item needs "why": one line saying how that quote answers the request, naming the subject it states. A quote that only mentions a related word, number or term, such as another notice, fee or rate table, does not answer the request. If nothing in this excerpt states what the request asks, return [].',
+  'Every item needs "why": one line saying how that quote answers the request, naming the subject it states. A quote that only mentions a related word, number or term, such as another notice, fee or rate table, does not answer the request. A quote may name the same thing with a synonym (deposit for security deposit, Lessor for landlord); that still answers the request. If nothing in this excerpt states what the request asks, return [].',
 ].join('\n');
 
 // Validation pass over High and Medium risks. Batched; one verdict per risk id.
@@ -259,7 +259,7 @@ export function buildPromptSynthesisPrompt(): string {
     UNTRUSTED_NOTICE,
     'The form and length of the answer follow the request: a yes/no question gets a short answer, a request to list items gets a list, a broad question gets a fuller answer.',
     'Start with the direct answer, then the supporting detail. Cite the item ids behind every statement.',
-    'Each verified answer has a "why" saying how its quote answers the request. Use an answer only when its quote states the subject the request asks about. An answer about a related but different thing (another clause, a rate or fee table, another notice or period) must not be used.',
+    'Each verified answer has a "why" saying how its quote answers the request. Use an answer only when its quote states the subject the request asks about. A quote may name the same thing with a synonym (deposit for security deposit, Lessor for landlord); that still counts. An answer about a related but different thing (another clause, a rate or fee table, another notice or period) must not be used.',
     'If no verified answer states what the request asks, reply with one element: {"text":"Not clearly stated in the document.","cites":[]}. Do not guess from a related number.',
     'For any amount, give its currency or unit exactly as the quote gives it (for example Rs, %, days, months). Never write a bare number.',
     'Your entire reply is one JSON array. No text before or after it, and no markdown fences.',

@@ -90,6 +90,37 @@ describe('a correct answer is still answered', () => {
   });
 });
 
+// The reported case: clause 19(g) states a refundable deposit, and says "deposit", not "security
+// deposit". A synonym must not make a correct answer look like a wrong one.
+describe('a synonym is not a mismatch', () => {
+  const DEPOSIT_REFUND_Q = 'What is the security deposit amount and is it refundable?';
+  const refundableDeposit = answer(
+    'P1',
+    "The Licensee pays a refundable deposit of one or three months' rent, returned at the end of the licence.",
+    '19(g)',
+    7,
+    'States the deposit amount and that it is refundable.',
+  );
+
+  it('keeps a quote that says deposit for a security deposit question', () => {
+    const { relevant, dropped } = prepareSynthesis([refundableDeposit], DEPOSIT_REFUND_Q);
+    expect(relevant.map((a) => a.itemId)).toEqual(['P1']);
+    expect(dropped).toBe(0);
+  });
+
+  it('shows the answer from that kept quote, not "not clearly stated"', () => {
+    const { relevant } = prepareSynthesis([refundableDeposit], DEPOSIT_REFUND_Q);
+    const scripted = [{ text: "The deposit is refundable and is one or three months' rent.", cites: ['P1'] }];
+    const out = finalizeSynthesis(relevant, scripted, false);
+    expect(out.answer).toEqual([{ text: "The deposit is refundable and is one or three months' rent.", cites: ['P1'] }]);
+  });
+
+  it('still rejects the wrong clause for the same question (no deposit, no refund)', () => {
+    const { relevant } = prepareSynthesis([defaultCure], DEPOSIT_REFUND_Q);
+    expect(relevant).toEqual([]);
+  });
+});
+
 describe('finalizeSynthesis when the call failed', () => {
   it('leaves the answer empty so the caller reports the error, rather than claiming "not clearly stated"', () => {
     const out = finalizeSynthesis([depositClause], [], true);

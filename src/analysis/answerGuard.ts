@@ -1,15 +1,15 @@
-import { quoteHasAllTerms, significantTerms } from './questionTerms';
+import { quoteMatchesRequest } from './questionTerms';
 
 // Checks on a synthesised answer, before it is shown. Pure: no I/O, no model call.
-//   1. Subject: an answer is kept only when its quote contains every significant term of the request.
-//      A quote about a related but different thing (another notice, a rate table) is not an answer.
+//   1. Subject: an answer is kept only when its quote has every concept of the request. A concept is
+//      a significant term or one of its listed synonyms (synonyms.ts). A quote about a related but
+//      different thing (another notice, a rate table) is not an answer.
 //   2. Numbers: every number in a sentence must appear in a quote it cites, and a unit the quote
 //      gives next to that number (Rs, %, day, month, year, week) must appear in the sentence.
 
 // Answers whose quote states the subject of the request. A request with no terms keeps everything.
 export function answersAboutQuestion<T extends { quote: string }>(answers: T[], request: string): T[] {
-  const terms = significantTerms(request);
-  return answers.filter((a) => quoteHasAllTerms(a.quote, terms));
+  return answers.filter((a) => quoteMatchesRequest(a.quote, request));
 }
 
 const NUMBER = /\d[\d,]*(?:\.\d+)?/g;

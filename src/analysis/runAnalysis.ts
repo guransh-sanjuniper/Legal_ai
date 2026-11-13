@@ -588,7 +588,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
           ...ps,
           status: 'queued',
           prompt: buildPromptSynthesisPrompt(),
-          promptVersion: 'prompt-synthesis-v3',
+          promptVersion: 'prompt-synthesis-v4',
           failureCode: null,
           failureMessage: null,
           nextAt: 0,

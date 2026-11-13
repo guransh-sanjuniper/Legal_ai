@@ -70,7 +70,7 @@ it('retry failed re-runs only the failed tasks, including the custom pass, then 
   const afterTasks = await db.getAllFromIndex('tasks', 'byRun', first.runId);
   const psAfterTask = afterTasks.find((t) => t.id.endsWith(':ps'));
   expect(psAfterTask?.prompt).toMatch(/entire reply is one JSON array/);
-  expect(psAfterTask?.promptVersion).toBe('prompt-synthesis-v3');
+  expect(psAfterTask?.promptVersion).toBe('prompt-synthesis-v4');
   const esAfterTask = afterTasks.find((t) => t.id.endsWith(':es'));
   if (esAfterTask) {
     expect(esAfterTask.prompt).toMatch(/entire reply is one JSON array/);
