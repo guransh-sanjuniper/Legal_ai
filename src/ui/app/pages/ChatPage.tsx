@@ -26,6 +26,8 @@ import { answerFromDocument, estimatesFor, loadDocumentContext, type DocumentCon
 import { citationLabel, MODE_LABEL } from '../../../chat/documentAnswer';
 import { describePass } from '../../../chat/estimate';
 import { scanNote } from '../../../chat/scanFilter';
+import { formatMessageTime } from '../../../chat/format';
+import { CopyButton } from '../../chat/CopyButton';
 import { openHarnessDb, type HarnessDBHandle } from '../../../runner/db';
 import { isPrepared } from '../../library/preparationState';
 import { RetrievalClient } from '../../../retrieval/client';
@@ -569,6 +571,7 @@ function Bubble({
       <div className="app-chat-msg app-chat-msg--user">
         {message.content}
         {message.documentName && <div className="app-chat-doc-tag">About {message.documentName}</div>}
+        <MessageMeta message={message} />
       </div>
     );
   }
@@ -597,6 +600,19 @@ function Bubble({
           ))}
         </div>
       )}
+      <MessageMeta message={message} />
+    </div>
+  );
+}
+
+// Time and copy for a saved message. The copy is the stored text only; citation buttons are not in it.
+function MessageMeta({ message }: { message: ChatMessage }) {
+  return (
+    <div className="app-chat-meta">
+      <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
+        {formatMessageTime(message.createdAt)}
+      </time>
+      <CopyButton text={message.content} />
     </div>
   );
 }

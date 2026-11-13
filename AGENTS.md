@@ -174,6 +174,7 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Only the last `CHAT_HISTORY_MESSAGES` (30) messages are sent. The window never starts on an assistant message, so it can hold 29.
 - Model: `VITE_CHAT_MODEL` (fallback `VITE_SEARCH_MODEL`, then `VITE_MODEL`, then the default). Output cap `CHAT_MAX_TOKENS` (4000).
 - Markdown in replies: `react-markdown` + `remark-gfm` (tables, lists, bold). Raw HTML is not rendered; links open in a new tab.
+- Each saved message (user and assistant) shows its `created_at` in local time (`formatMessageTime`: time today, otherwise day and time, with the year only when it differs) and a Copy button (`src/ui/chat/CopyButton.tsx`). Copy writes the stored `content` as written (Markdown source, no citation buttons) via `copyText`, which reports failure when the clipboard is missing or refuses; the button then says "Copy failed". Streaming and error bubbles have neither. No new columns.
 - The shell footer shows "AI-assisted, requires lawyer review." on every page, including chat.
 - Migration `0004_chat.sql`: apply with `npx supabase db push` (hosted) or `npx supabase db reset` (local).
 - Migration `0005_chat_documents.sql` adds the document columns on `chat_messages` and `runs.source`. Apply the same way.
