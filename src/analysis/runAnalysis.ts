@@ -34,7 +34,14 @@ import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE }
 import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
 import type { MissingStats, SummaryStats } from './types';
 import { NO_SUGGESTION, guardPriority, lawKey, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf } from './rubric';
-import { hitCoversTopic, isValidMissingItem, keepMissingClaims, missingPlans, type MissingInputClause } from './missingProtections';
+import {
+  hitCoversTopic,
+  isValidMissingItem,
+  keepMissingClaims,
+  missingGroups,
+  missingPlanFor,
+  type MissingInputClause,
+} from './missingProtections';
 import {
   assembleOverviewPoints,
   keepPointSentences,
@@ -683,6 +690,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   let missingUnchecked = 0;
   let missingFailed = 0;
   let missingDrops: { topic: string; page: number; fused: number; keywordScore: number }[] = [];
+  let missingRawItems = 0;
+  let missingRejected = 0;
   if (verifiedClauses.length > 0) {
     const clauseInputs: MissingInputClause[] = verifiedClauses.map((c) => ({
       id: c.itemId,
@@ -691,18 +700,48 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       summary: c.summary,
     }));
     progress(`checking missing protections (${clauseInputs.length} clauses)`);
-    const missingRun = await executeTasks(
-      ctx,
-      runId,
-      doc,
-      missingPlans(clauseInputs, defsContext, request.focus, doc.docType ?? null, request.reviewingFor),
-    );
-    addLimits(missingRun);
-    await pauseIfNeeded(missingRun);
-    missingFailed = missingRun.tasks.filter((t) => t.status === 'failed').length;
+    const present = [...new Set(clauseInputs.map((c) => c.clause).filter(Boolean))];
+    const planOpts = {
+      defsContext,
+      focus: request.focus,
+      docType: doc.docType ?? null,
+      reviewingFor: request.reviewingFor,
+      present,
+    };
+    const groups = missingGroups(clauseInputs);
+    const firstPass = await executeTasks(ctx, runId, doc, groups.map((g, i) => missingPlanFor(g, `m${i}`, planOpts)));
+    addLimits(firstPass);
+    await pauseIfNeeded(firstPass);
+    const runs = [firstPass];
+
+    // A group cut off at the output cap is retried as two smaller calls, not with a bigger cap.
+    const truncated = firstPass.tasks.filter((t) => t.status === 'failed' && t.failureCode === 'length');
+    if (truncated.length > 0) {
+      const retryPlans: TaskPlan[] = [];
+      for (const task of truncated) {
+        const suffix = task.id.slice(task.id.lastIndexOf(':') + 1).split('/')[0];
+        const m = /^m(\d+)$/.exec(suffix);
+        const group = m ? groups[Number(m[1])] : undefined;
+        if (!group || group.length < 2) continue;
+        const mid = Math.ceil(group.length / 2);
+        [group.slice(0, mid), group.slice(mid)].forEach((half, h) =>
+          retryPlans.push(missingPlanFor(half, `m${m![1]}s${h}`, { ...planOpts, maxTokens: 1200 })),
+        );
+      }
+      if (retryPlans.length > 0) {
+        progress(`splitting ${truncated.length} over-length missing-protection calls`);
+        const retryRun = await executeTasks(ctx, runId, doc, retryPlans);
+        addLimits(retryRun);
+        await pauseIfNeeded(retryRun);
+        runs.push(retryRun);
+      }
+    }
+    missingFailed = runs.flatMap((r) => r.tasks).filter((t) => t.status === 'failed').length;
+    missingRawItems = runs.reduce((n, r) => n + r.rawItems, 0);
+    missingRejected = runs.reduce((n, r) => n + r.rejected.reduce((m, x) => m + x.count, 0), 0);
     const validClauseIds = new Set(verifiedClauses.map((c) => c.itemId));
     const checked = await keepMissingClaims(
-      missingRun.collected.flatMap((c) => c.items.filter(isValidMissingItem)),
+      runs.flatMap((r) => r.collected).flatMap((c) => c.items.filter(isValidMissingItem)),
       validClauseIds,
       opts.docSearch,
     );
@@ -715,6 +754,10 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       droppedCovered: checked.coveredInDocument,
       possiblyMissing: checked.possiblyMissing.length,
       passRan: true,
+      rawItems: missingRawItems,
+      rejectedBySchema: missingRejected,
+      tasksDone: runs.flatMap((r) => r.tasks).filter((t) => t.status === 'done').length,
+      tasksFailed: missingFailed,
     };
     missingDrops = checked.drops;
     progress(

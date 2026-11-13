@@ -181,6 +181,11 @@ export interface MissingStats {
   // Kept, but the whole-document search failed or found nothing: shown apart, not as verified.
   possiblyMissing: number;
   passRan: boolean;
+  // What the pass actually produced, so an empty list is explainable.
+  rawItems?: number;
+  rejectedBySchema?: number;
+  tasksDone?: number;
+  tasksFailed?: number;
 }
 
 export interface SummaryStats {

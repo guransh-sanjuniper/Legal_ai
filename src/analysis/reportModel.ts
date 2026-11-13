@@ -577,7 +577,11 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
   const possiblyRows: RiskRow[] = (report.possiblyMissing ?? []).map(toRow);
   const ms = report.missingStats;
   const missingLine = ms
-    ? `${ms.proposed} proposed, ${ms.kept} kept, ${ms.droppedCovered} dropped by search${ms.possiblyMissing ? `, ${ms.possiblyMissing} unverified` : ''}.`
+    ? ms.passRan
+      ? `${ms.proposed} proposed, ${ms.kept} kept, ${ms.droppedCovered} dropped by search${ms.possiblyMissing ? `, ${ms.possiblyMissing} unverified` : ''}; ` +
+        `pass ran: yes; raw items: ${ms.rawItems ?? 0}; rejected by schema: ${ms.rejectedBySchema ?? 0}; ` +
+        `tasks done: ${ms.tasksDone ?? 0}, failed: ${ms.tasksFailed ?? 0}.`
+      : 'pass ran: no (no verified clauses to check).'
     : null;
   const rr = report.riskReview;
   const reviewLine = rr ? `${rr.reviewed} risks after validation (${rr.dropped} dropped).` : null;

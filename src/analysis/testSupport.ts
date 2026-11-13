@@ -108,8 +108,10 @@ export function scriptedModel(req: CallRequest): string {
     ]);
   }
   if (req.prompt.includes('check a legal contract for missing protections')) {
+    // One usable claim and one unusable item: the rejection must be counted, not hidden.
     return JSON.stringify([
       { topic: 'insurance cover', text: 'No insurance cover is stated.', priority: 'high', basis: 'other', suggestion: 'Ask for insurance terms.', laws: [], cites: [] },
+      { topic: 'unusable item without text' },
     ]);
   }
   if (req.prompt.includes('You summarise verified clause analysis')) {

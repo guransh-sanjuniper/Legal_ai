@@ -66,6 +66,9 @@ export interface TaskPlan {
 export interface ExecuteResult {
   runId: string;
   collected: { taskId: string; items: unknown[] }[];
+  // Items the model returned that the plan's validator rejected. Counted, never silently lost.
+  rejected: { taskId: string; count: number }[];
+  rawItems: number;
   tasks: Task[];
   failed: number;
   aborted: boolean;
@@ -126,6 +129,8 @@ export async function executeTasks(
 ): Promise<ExecuteResult> {
   const cfg = makeRunConfig(ctx);
   const collected: { taskId: string; items: unknown[] }[] = [];
+  const rejected: { taskId: string; count: number }[] = [];
+  let rawItems = 0;
   const bySuffix = new Map<string, TaskPlan>();
 
   const now = Date.now();
@@ -181,7 +186,10 @@ export async function executeTasks(
     if (payload?.items) {
       const baseTaskId = row.task_id.split('/')[0];
       const plan = bySuffix.get(baseTaskId.slice(baseTaskId.lastIndexOf(':') + 1));
+      rawItems += payload.items.length;
       const items = payload.items.filter((i) => (plan ? plan.validate(i) : true));
+      const bad = payload.items.length - items.length;
+      if (bad > 0) rejected.push({ taskId: row.task_id, count: bad });
       if (items.length) collected.push({ taskId: row.task_id, items });
     }
   };
@@ -251,6 +259,8 @@ export async function executeTasks(
   return {
     runId,
     collected,
+    rejected,
+    rawItems,
     tasks,
     failed: tasks.filter((t) => t.status === 'failed').length,
     aborted,

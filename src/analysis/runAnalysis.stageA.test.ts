@@ -53,7 +53,7 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(withPrompt.clauses[0].prose?.detailed_summary).toBe('Detailed text.');
 
   expect(withPrompt.missingProtections).toHaveLength(1);
-  expect(withPrompt.missingStats).toMatchObject({ kept: 1, possiblyMissing: 0, passRan: true });
+  expect(withPrompt.missingStats).toMatchObject({ kept: 1, possiblyMissing: 0, passRan: true, rawItems: 2, rejectedBySchema: 1 });
   expect(withPrompt.possiblyMissing).toEqual([]);
   expect(withPrompt.missingProtections![0]).toMatchObject({ topic: 'insurance cover', severity: 'medium', applicability: 'unverified' });
 

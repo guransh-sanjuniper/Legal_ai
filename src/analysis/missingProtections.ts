@@ -12,10 +12,51 @@ export interface MissingInputClause {
   summary: string;
 }
 
-export function isValidMissingItem(x: unknown): boolean {
-  if (typeof x !== 'object' || x === null) return false;
+// Tolerant shape: the model may name the protection "title" and describe it "description".
+// Anything without a usable name and description is rejected, and the rejection is counted.
+export interface MissingItemText {
+  topic: string;
+  text: string;
+}
+
+export function readMissingItem(x: unknown): MissingItemText | null {
+  if (typeof x !== 'object' || x === null) return null;
   const o = x as Record<string, unknown>;
-  return typeof o.topic === 'string' && typeof o.text === 'string';
+  const pick = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const topic = pick(o.topic) || pick(o.title) || pick(o.protection);
+  const text = pick(o.text) || pick(o.description) || pick(o.detail);
+  if (!topic || !text) return null;
+  return { topic, text };
+}
+
+export function isValidMissingItem(x: unknown): boolean {
+  return readMissingItem(x) !== null;
+}
+
+export interface MissingPlanOptions {
+  defsContext: string;
+  focus: string;
+  docType: DocType | null;
+  reviewingFor: ReviewingFor;
+  present: string[];
+  maxTokens?: number;
+}
+
+// One task for one group of clause summaries.
+export function missingPlanFor(group: MissingInputClause[], suffix: string, opts: MissingPlanOptions): TaskPlan {
+  return {
+    suffix,
+    promptVersion: 'missing-protections-v3',
+    prompt: buildMissingPrompt({ focus: opts.focus || undefined, docType: opts.docType, checklistOfClauses: opts.present, reviewingFor: opts.reviewingFor }),
+    input: `${opts.defsContext}\n\nClause summaries:\n${JSON.stringify(group)}`,
+    maxTokens: opts.maxTokens ?? 2000,
+    validate: isValidMissingItem,
+  };
+}
+
+// Groups the clauses once, so a truncated group can later be split into two smaller calls.
+export function missingGroups(clauses: MissingInputClause[]): MissingInputClause[][] {
+  return groupForRollup(clauses);
 }
 
 // One task per group of clause summaries, so a long document stays within the input limit.
@@ -27,14 +68,9 @@ export function missingPlans(
   reviewingFor: ReviewingFor = 'neutral',
 ): TaskPlan[] {
   const present = [...new Set(clauses.map((c) => c.clause).filter(Boolean))];
-  return groupForRollup(clauses).map((group, i) => ({
-    suffix: `m${i}`,
-    promptVersion: 'missing-protections-v2',
-    prompt: buildMissingPrompt({ focus: focus || undefined, docType, checklistOfClauses: present, reviewingFor }),
-    input: `${defsContext}\n\nClause summaries:\n${JSON.stringify(group)}`,
-    maxTokens: 1500,
-    validate: isValidMissingItem,
-  }));
+  return missingGroups(clauses).map((group, i) =>
+    missingPlanFor(group, `m${i}`, { defsContext, focus, docType, reviewingFor, present }),
+  );
 }
 
 // Coverage gate for a missing-protection claim.
@@ -123,10 +159,11 @@ export async function keepMissingClaims(
   let proposed = 0;
   const drops: MissingDrop[] = [];
   for (const raw of items) {
-    if (!isValidMissingItem(raw)) continue;
+    const read = readMissingItem(raw);
+    if (!read) continue;
     const o = raw as Record<string, unknown>;
-    const topic = (o.topic as string).replace(/\s+/g, ' ').trim();
-    const text = (o.text as string).replace(/\s+/g, ' ').trim();
+    const topic = read.topic.replace(/\s+/g, ' ').trim();
+    const text = read.text.replace(/\s+/g, ' ').trim();
     const key = topic.toLowerCase();
     if (!topic || !text || seenTopics.has(key)) continue;
     seenTopics.add(key);

@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { coreTerms, hitCoversTopic, keepMissingClaims, missingPlans, isValidMissingItem } from './missingProtections';
+import {
+  coreTerms,
+  hitCoversTopic,
+  isValidMissingItem,
+  keepMissingClaims,
+  missingGroups,
+  missingPlanFor,
+  missingPlans,
+  readMissingItem,
+} from './missingProtections';
 import { NO_SUGGESTION } from './rubric';
 
 const none = async () => [];
@@ -27,6 +36,36 @@ describe('coverage gate: the topic\'s own words', () => {
 
   it('keeps only non-generic core terms', () => {
     expect(coreTerms('who pays duties')).toEqual(['duties']);
+  });
+});
+
+describe('tolerant item shape', () => {
+  it('accepts title/description aliases and string trimming', () => {
+    expect(readMissingItem({ title: ' indemnity ', description: 'No indemnity clause.' })).toEqual({
+      topic: 'indemnity',
+      text: 'No indemnity clause.',
+    });
+    expect(isValidMissingItem({ protection: 'forum', detail: 'No forum.' })).toBe(true);
+  });
+
+  it('rejects an unusable item so it is counted, not hidden', () => {
+    expect(isValidMissingItem({ topic: 'governing law' })).toBe(false);
+    expect(isValidMissingItem({ text: 'No text field.' })).toBe(false);
+    expect(isValidMissingItem('governing law')).toBe(false);
+  });
+});
+
+describe('missing plans', () => {
+  it('builds one plan per group and can split a group into two smaller calls', () => {
+    const clauses = Array.from({ length: 80 }, (_, i) => ({ id: `C${i}`, clause: String(i), type: 'other', summary: 's' }));
+    const groups = missingGroups(clauses);
+    expect(groups.length).toBeGreaterThan(1);
+    const opts = { defsContext: 'defs', focus: '', docType: 'lease' as const, reviewingFor: 'neutral' as const, present: ['1'] };
+    const full = missingPlanFor(groups[0], 'm0', opts);
+    expect(full.maxTokens).toBe(2000);
+    const mid = Math.ceil(groups[0].length / 2);
+    const half = missingPlanFor(groups[0].slice(0, mid), 'm0s0', opts);
+    expect(half.input.length).toBeLessThan(full.input.length);
   });
 });
 

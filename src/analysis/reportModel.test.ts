@@ -203,6 +203,22 @@ describe('report model', () => {
     expect(da.amounts[0]).toMatchObject({ amount: 'Rs. 48,000', purpose: 'Price', payerToPayee: 'Buyer to Supplier', due: 'on delivery' });
   });
 
+  it('shows whether the missing pass ran, with raw and rejected counts', () => {
+    const run = buildReportModel(
+      report([clause({ itemId: 'a', clauseNo: '1' })], {
+        missingStats: { proposed: 0, kept: 0, droppedCovered: 0, possiblyMissing: 0, passRan: true, rawItems: 3, rejectedBySchema: 3, tasksDone: 1, tasksFailed: 0 },
+      }),
+    );
+    const sec = run.sections.find((s) => s.key === 'risks') as Extract<(typeof run.sections)[number], { key: 'risks' }>;
+    expect(sec.missingLine).toMatch(/pass ran: yes/);
+    expect(sec.missingLine).toMatch(/raw items: 3/);
+    expect(sec.missingLine).toMatch(/rejected by schema: 3/);
+
+    const skipped = buildReportModel(report([], { missingStats: { proposed: 0, kept: 0, droppedCovered: 0, possiblyMissing: 0, passRan: false } }));
+    const s2 = skipped.sections.find((s) => s.key === 'risks') as Extract<(typeof skipped.sections)[number], { key: 'risks' }>;
+    expect(s2.missingLine).toMatch(/pass ran: no/);
+  });
+
   it('shows the risk validation count when a review ran', () => {
     const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1' })], { riskReview: { reviewed: 12, kept: 9, downgraded: 1, dropped: 2 } }));
     const risks = model.sections.find((s) => s.key === 'risks') as Extract<(typeof model.sections)[number], { key: 'risks' }>;
@@ -224,6 +240,22 @@ describe('report model', () => {
     expect(risks.risks.map((r) => r.priority)).toEqual(['high', 'low']);
     expect(risks.risks.every((r) => r.suggestion.length > 0 && r.laws.length > 0)).toBe(true);
     expect(risks.missing[0]).toMatchObject({ clause: 'Whole document', kind: 'missing' });
+  });
+
+  it('shows whether the missing pass ran, with raw and rejected counts', () => {
+    const run = buildReportModel(
+      report([clause({ itemId: 'a', clauseNo: '1' })], {
+        missingStats: { proposed: 0, kept: 0, droppedCovered: 0, possiblyMissing: 0, passRan: true, rawItems: 3, rejectedBySchema: 3, tasksDone: 1, tasksFailed: 0 },
+      }),
+    );
+    const sec = run.sections.find((s) => s.key === 'risks') as Extract<(typeof run.sections)[number], { key: 'risks' }>;
+    expect(sec.missingLine).toMatch(/pass ran: yes/);
+    expect(sec.missingLine).toMatch(/raw items: 3/);
+    expect(sec.missingLine).toMatch(/rejected by schema: 3/);
+
+    const skipped = buildReportModel(report([], { missingStats: { proposed: 0, kept: 0, droppedCovered: 0, possiblyMissing: 0, passRan: false } }));
+    const s2 = skipped.sections.find((s) => s.key === 'risks') as Extract<(typeof skipped.sections)[number], { key: 'risks' }>;
+    expect(s2.missingLine).toMatch(/pass ran: no/);
   });
 
   it('shows the risk validation count when a review ran', () => {
