@@ -133,6 +133,18 @@ describe('chat persistence', () => {
     ]);
   });
 
+  it('saves and restores the document context of a message', async () => {
+    const s = await createSession(db, 'user-a', 'Lease');
+    const cite = { page: 3, clause: '4', quote: 'a deposit of Rs 50,000' };
+    await appendMessage(db, s.id, 'user', "what's the deposit?", { documentId: 'doc-1', documentName: 'Lease.pdf', mode: null, citations: null });
+    await appendMessage(db, s.id, 'assistant', 'Rs 50,000.', { documentId: 'doc-1', documentName: 'Lease.pdf', mode: 'saved', citations: [cite] });
+    await appendMessage(db, s.id, 'user', 'hello');
+    const [q, a, general] = await loadMessages(db, s.id);
+    expect([q.documentId, q.documentName]).toEqual(['doc-1', 'Lease.pdf']);
+    expect([a.mode, a.citations]).toEqual(['saved', [cite]]);
+    expect([general.documentId, general.documentName, general.mode, general.citations]).toEqual([null, null, null, null]);
+  });
+
   it('lists sessions with the most recently updated first', async () => {
     const first = await createSession(db, 'user-a', 'First');
     const second = await createSession(db, 'user-a', 'Second');

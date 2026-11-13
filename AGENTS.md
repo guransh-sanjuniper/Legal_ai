@@ -53,7 +53,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - "Retry" re-runs the failed stage; "Remove" deletes the document and its local state. `preparedAt` and the prepared fingerprint (including the embedding model version) are stored on Ready.
 
 ## Tables
-Supabase: `runs`, `task_results`, `reports`, `rate_limits`, `chat_sessions`, `chat_messages`. RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.
+Supabase: `runs` (with `source`, `chat` for chat-originated runs), `task_results`, `reports`, `rate_limits`, `chat_sessions`, `chat_messages`. RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.
 IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `embedding_windows`, `embedding_state`, `definitions`, `analysis_reports`, `analysis_state`, `tasks`, `raw_responses`, `ocr_decisions`, `run_state`.
 
 ## Key rules
@@ -158,9 +158,16 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Tests use the hosted Supabase project (`testSupport.ts` helpers); `runAnalysis.retry.test.ts` covers retry.
 
 ## Chat (`/chat`, `/chat/:sessionId`)
-- General chat with no document. The request carries only the system prompt and the thread; no retrieval.
+- General chat with no document. The request carries only the system prompt and the thread; no retrieval. The thread sent to the model includes only messages that have no document context (`generalHistory`), so a General answer is never grounded in an earlier document answer.
+- Document chat: the composer's "Ask about" picker lists only Ready documents (`isPrepared`); General is the default. Each message stores its own document id, name (as at send time), and for replies the mode and citations. Switching documents per message is allowed; a reloaded thread keeps each message's context.
+- Routing (`src/chat/route.ts`, pure): "Scan whole document" → whole. Otherwise, if the document has a saved report (`analysis_reports`, else Supabase `reports`) and a question's specific words all appear in one row of the report model (amounts, dates, obligations, risks; the missing list for "missing"; the summary for "clause N"), the answer is the matching rows, cited to their source, with no model call (mode `saved`). Anything else → retrieval.
+- Retrieval and whole modes call the existing `promptOnReport` (`src/chat/documentTurn.ts`): the top `PROMPT_RETRIEVAL_CHUNKS` sections by hybrid search (or every section for whole), the prompt pass, one synthesis. The answer's sources are the verified quotes its sentences cite. Only the question is sent to the model for a document turn (no thread). Search that fails or matches nothing reads the first sections; the answer says so.
+- The saved report is never changed by chat; chat runs are tagged `runs.source = 'chat'` (analysis runs keep `source` null). The tag is written after the run, so a run that fails before it finishes stays untagged.
+- Pre-send estimates (`src/chat/estimate.ts`): calls, input tokens, cost, and time. Time comes only from the document's last measured p95 call duration and concurrency; with no completed run it reads "time unknown". Retrieval's estimate uses the largest sections (upper bound); whole uses every section.
+- Sources: the assistant message shows its document, mode label (Saved report / Retrieval / Whole document) and "Clause N · p. X" buttons. A button opens `CitationPanel` (the Deep Analysis slide-over) with the stored PDF page. Stored citations are page, clause and quote only; chunk text is not stored.
+- Known limit: a document question that depends on an earlier document answer is not answered from that history (the model sees only the question and its excerpts).
 - Pages: `src/ui/app/pages/ChatPage.tsx` (session list, thread, composer). Persistence: `src/chat/store.ts` (takes the Supabase client as a parameter). Streaming: `src/chat/stream.ts` (own NDJSON reader, same `ai-proxy` contract as the runner; the runner's `callModel` is unchanged). Thread windowing and titles: `src/chat/thread.ts`. Error text: `src/chat/errors.ts`.
-- Tables: `chat_sessions` (id, user_id, title, created_at, updated_at) and `chat_messages` (id, session_id, role `user`/`assistant`, content, created_at). Owner-only RLS (`user_id = auth.uid()`); messages follow their session; deleting a session cascades.
+- Tables: `chat_sessions` (id, user_id, title, created_at, updated_at) and `chat_messages` (id, session_id, role `user`/`assistant`, content, created_at, document_id, document_name, mode `saved`/`retrieval`/`whole`, citations jsonb). Owner-only RLS (`user_id = auth.uid()`); messages follow their session; deleting a session cascades.
 - A session is created on the first message and titled from it (60 characters). The user message is saved before the request; the assistant reply is saved only when the stream completes with a finish reason. A failed reply keeps the user message and shows Retry; no partial reply is saved.
 - The session in the URL restores on reload. The session list and New chat are disabled while a reply streams. A reply that finishes after the user has left its session is saved but not drawn.
 - Only the last `CHAT_HISTORY_MESSAGES` (30) messages are sent. The window never starts on an assistant message, so it can hold 29.
@@ -168,6 +175,7 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Markdown in replies: `react-markdown` + `remark-gfm` (tables, lists, bold). Raw HTML is not rendered; links open in a new tab.
 - The shell footer shows "AI-assisted, requires lawyer review." on every page, including chat.
 - Migration `0004_chat.sql`: apply with `npx supabase db push` (hosted) or `npx supabase db reset` (local).
+- Migration `0005_chat_documents.sql` adds the document columns on `chat_messages` and `runs.source`. Apply the same way.
 
 ## Commands
 - `npm run dev` the SPA (local `.env.local`; runs `scripts/copy-pdfjs-assets.mjs` first)

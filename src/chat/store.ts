@@ -1,8 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ChatRole } from './thread';
+import type { Citation } from '../analysis/reportModel';
 
 // Persistence for chat sessions and messages. Every query runs as the signed-in user; row level
 // security (migration 0004) limits the rows to that user's sessions.
+
+export type ChatMode = 'saved' | 'retrieval' | 'whole';
 
 export interface ChatSession {
   id: string;
@@ -11,7 +14,15 @@ export interface ChatSession {
   updatedAt: string;
 }
 
-export interface ChatMessage {
+// Document context of one message. General messages have none (all null).
+export interface MessageDocument {
+  documentId: string | null;
+  documentName: string | null;
+  mode: ChatMode | null;
+  citations: Citation[] | null;
+}
+
+export interface ChatMessage extends MessageDocument {
   id: string;
   sessionId: string;
   role: ChatRole;
@@ -32,10 +43,16 @@ interface MessageRow {
   role: ChatRole;
   content: string;
   created_at: string;
+  document_id: string | null;
+  document_name: string | null;
+  mode: ChatMode | null;
+  citations: Citation[] | null;
 }
 
 const SESSION_COLUMNS = 'id,title,created_at,updated_at';
-const MESSAGE_COLUMNS = 'id,session_id,role,content,created_at';
+const MESSAGE_COLUMNS = 'id,session_id,role,content,created_at,document_id,document_name,mode,citations';
+
+const NO_DOCUMENT: MessageDocument = { documentId: null, documentName: null, mode: null, citations: null };
 
 const toSession = (row: SessionRow): ChatSession => ({
   id: row.id,
@@ -50,6 +67,10 @@ const toMessage = (row: MessageRow): ChatMessage => ({
   role: row.role,
   content: row.content,
   createdAt: row.created_at,
+  documentId: row.document_id ?? null,
+  documentName: row.document_name ?? null,
+  mode: row.mode ?? null,
+  citations: row.citations ?? null,
 });
 
 function check<T>(result: { data: T; error: { message: string } | null }): T {
@@ -89,17 +110,27 @@ export async function loadMessages(db: SupabaseClient, sessionId: string): Promi
   return (rows ?? []).map(toMessage);
 }
 
-// Saves one message right away and moves its session to the top of the list.
+// Saves one message right away and moves its session to the top of the list. The document
+// context is optional; a General message is saved with it all null.
 export async function appendMessage(
   db: SupabaseClient,
   sessionId: string,
   role: ChatRole,
   content: string,
+  doc: MessageDocument = NO_DOCUMENT,
 ): Promise<ChatMessage> {
   const row = check(
     await db
       .from('chat_messages')
-      .insert({ session_id: sessionId, role, content })
+      .insert({
+        session_id: sessionId,
+        role,
+        content,
+        document_id: doc.documentId,
+        document_name: doc.documentName,
+        mode: doc.mode,
+        citations: doc.citations,
+      })
       .select(MESSAGE_COLUMNS)
       .single(),
   ) as MessageRow;

@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { CHAT_SYSTEM_PROMPT, TITLE_MAX, buildRequestMessages, titleFrom, type ThreadMessage } from './thread';
+import {
+  CHAT_SYSTEM_PROMPT,
+  TITLE_MAX,
+  buildRequestMessages,
+  generalHistory,
+  titleFrom,
+  type ThreadMessage,
+} from './thread';
+
+describe('generalHistory', () => {
+  it('drops messages that came from a document turn', () => {
+    const msgs = [
+      { role: 'user' as const, content: 'general q', documentId: null },
+      { role: 'assistant' as const, content: 'general a', documentId: null },
+      { role: 'user' as const, content: 'doc q', documentId: 'doc-1' },
+      { role: 'assistant' as const, content: 'doc a', documentId: 'doc-1' },
+    ];
+    expect(generalHistory(msgs).map((m) => m.content)).toEqual(['general q', 'general a']);
+  });
+
+  it('keeps a general thread whole', () => {
+    const msgs = [{ role: 'user' as const, content: 'hi', documentId: null }];
+    expect(generalHistory(msgs)).toEqual(msgs);
+  });
+});
 
 describe('titleFrom', () => {
   it('collapses whitespace and keeps short text whole', () => {

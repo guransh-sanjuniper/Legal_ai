@@ -27,6 +27,12 @@ export function titleFrom(text: string): string {
   return `${collapsed.slice(0, TITLE_MAX - 1).trimEnd()}…`;
 }
 
+// General requests carry only messages that have no document context. Document turns are never
+// sent back to the model as history, so a General answer is not grounded in a document.
+export function generalHistory<T extends { documentId: string | null }>(messages: T[]): T[] {
+  return messages.filter((m) => m.documentId === null);
+}
+
 // The request thread: the system prompt, then the last CHAT_HISTORY_MESSAGES messages. The
 // window always starts with a user message so the model never sees a reply without its question.
 export function buildRequestMessages(
