@@ -1088,3 +1088,37 @@
   padding-top: 12px;
   border-top: 1px solid var(--app-border);
 }
+
+/* Secondary buttons and the page nav would otherwise keep the browser's light
+   button face, which makes their (theme) text unreadable in dark mode. */
+.app-review-actions button:not(.app-primary-button),
+.app-review-footer button:not(.app-primary-button):not(.app-link-button) {
+  padding: 7px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface-2);
+  color: var(--app-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-review-actions button:not(.app-primary-button):hover:not(:disabled),
+.app-review-footer button:not(.app-primary-button):not(.app-link-button):hover:not(:disabled) {
+  background: var(--app-border);
+}
+
+.app-review-actions button:not(.app-primary-button):disabled,
+.app-review-footer button:not(.app-primary-button):not(.app-link-button):disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* `.app-root button { color: inherit }` outranks the link-button colour, which hides
+   the danger tone on this button. */
+.app-review-footer button.app-link-button--danger {
+  color: var(--app-danger);
+}
+
+.app-review-footer button.app-link-button--danger:disabled {
+  color: var(--app-text-muted);
+}
