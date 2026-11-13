@@ -47,6 +47,8 @@ export function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  // Replies that stopped at the output cap. Kept in memory for this view only; nothing is saved.
+  const [truncated, setTruncated] = useState<Set<string>>(() => new Set());
 
   // Guards against two replies at once (the state update is too late to block a double submit).
   const busyRef = useRef(false);
@@ -143,6 +145,7 @@ export function ChatPage() {
       if (!result.text.trim()) throw new ChatError('empty_output');
       const reply = await appendMessage(db, sid, 'assistant', result.text);
       if (owns()) {
+        if (result.finishReason === 'length') setTruncated((prev) => new Set(prev).add(reply.id));
         setSaved((prev) => [...prev, reply]);
         setPending(null);
       }
@@ -234,7 +237,12 @@ export function ChatPage() {
     return (
       <>
         {saved.map((m) => (
-          <Bubble key={m.id} role={m.role} content={m.content} />
+          <Bubble
+            key={m.id}
+            role={m.role}
+            content={m.content}
+            note={truncated.has(m.id) ? 'Response may be incomplete.' : undefined}
+          />
         ))}
         {pending?.status === 'streaming' && (
           <div className="app-chat-msg app-chat-msg--assistant" aria-busy="true">
@@ -328,11 +336,12 @@ export function ChatPage() {
   );
 }
 
-function Bubble({ role, content }: { role: ChatMessage['role']; content: string }) {
+function Bubble({ role, content, note }: { role: ChatMessage['role']; content: string; note?: string }) {
   if (role === 'user') return <div className="app-chat-msg app-chat-msg--user">{content}</div>;
   return (
     <div className="app-chat-msg app-chat-msg--assistant">
       <Markdown text={content} />
+      {note && <p className="app-chat-note">{note}</p>}
     </div>
   );
 }

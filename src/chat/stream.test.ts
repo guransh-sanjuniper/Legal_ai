@@ -27,6 +27,11 @@ describe('readChatStream', () => {
     expect(out).toEqual({ text: 'Hello', finishReason: 'stop' });
   });
 
+  it('returns a reply cut at the output cap with finishReason length', async () => {
+    const res = ndjsonResponse([{ t: 'd', c: 'cut off' }, { ...end, finish_reason: 'length' }]);
+    await expect(readChatStream(res, () => {})).resolves.toEqual({ text: 'cut off', finishReason: 'length' });
+  });
+
   it('treats a stream with no end line as interrupted', async () => {
     const res = ndjsonResponse([{ t: 'd', c: 'partial' }]);
     await expect(readChatStream(res, () => {})).rejects.toMatchObject({ code: 'stream_interrupted' });

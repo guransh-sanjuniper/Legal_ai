@@ -105,11 +105,6 @@ export function Sidebar({ email, theme, onToggleTheme, onSignOut }: SidebarProps
         New chat
       </NavLink>
 
-      <div className="app-sidebar-section app-sidebar-section--history">
-        <div className="app-sidebar-label">Chats</div>
-        <p className="app-sidebar-note">History appears here once Chat is enabled.</p>
-      </div>
-
       <nav className="app-nav" aria-label="Workspace">
         <div className="app-sidebar-label">Workspace</div>
         {WORKSPACE.map((item) => (
