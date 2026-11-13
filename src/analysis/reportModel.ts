@@ -74,9 +74,22 @@ export interface RiskRow {
   citation: Citation | null;
 }
 
-export interface TimelineRow {
+// Dates: date, what it is, fixed or relative, clause, source.
+export interface DateRow {
   date: string;
-  event: string;
+  purpose: string;
+  timing: 'fixed' | 'relative';
+  clause: string;
+  citation: Citation;
+}
+
+// Amounts: amount, what it is for, payer to payee, when due, clause, source.
+export interface AmountRow {
+  amount: string;
+  purpose: string;
+  payerToPayee: string;
+  due: string;
+  clause: string;
   citation: Citation;
 }
 
@@ -86,7 +99,6 @@ export type SectionKey =
   | 'clauses'
   | 'datesAmounts'
   | 'obligations'
-  | 'timeline'
   | 'risks'
   | 'inconsistencies'
   | 'coverage';
@@ -103,20 +115,20 @@ export type ReportSection =
     })
   | (SectionBase<'promptResult'> & {
       prompt: string;
-      answers: { text: string; citation: Citation; part: 'answer' | 'support' }[];
+      // One answer in prose. Sentences cite verified chunk answers.
+      answer: { text: string; citations: Citation[] }[];
+      // Supporting quotes, grouped by clause.
+      groups: { clause: string; quotes: { quote: string; citation: Citation }[] }[];
       failed: string[];
       chunksDone: number;
       chunksTotal: number;
     })
   | SectionBase<'clauses'>
-  | (SectionBase<'datesAmounts'> & {
-      rows: { kind: 'Date' | 'Amount'; clause: string; page: number; detail: string; citation: Citation }[];
-    })
+  | (SectionBase<'datesAmounts'> & { dates: DateRow[]; amounts: AmountRow[] })
   | (SectionBase<'obligations'> & {
       groups: { party: string; rows: { clause: string; page: number; text: string; citation: Citation }[] }[];
     })
-  | (SectionBase<'timeline'> & { rows: TimelineRow[] })
-  | (SectionBase<'risks'> & { risks: RiskRow[]; missing: RiskRow[] })
+  | (SectionBase<'risks'> & { risks: RiskRow[]; missing: RiskRow[]; reviewLine: string | null })
   | (SectionBase<'inconsistencies'> & { findings: { text: string; citations: Citation[] }[] })
   | (SectionBase<'coverage'> & { lines: string[] });
 
@@ -135,7 +147,6 @@ const TITLES: Record<SectionKey, string> = {
   clauses: 'Clause Breakdown',
   datesAmounts: 'Dates and Amounts',
   obligations: 'Obligations by Party',
-  timeline: 'Timeline',
   risks: 'Risk Register',
   inconsistencies: 'Internal Inconsistencies',
   coverage: 'Coverage',
@@ -438,12 +449,31 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
 
   if (report.promptResult) {
     const pr = report.promptResult;
+    const citationOf = (a: { page: number; quote: string; clause: string }) => cite(a.page, a.quote, a.clause);
+    const byId = new Map(pr.answers.map((a) => [a.itemId, a]));
+    const answer = (pr.answer ?? []).map((s) => ({
+      text: s.text,
+      citations: s.cites.flatMap((id) => {
+        const a = byId.get(id);
+        return a ? [citationOf(a)] : [];
+      }),
+    }));
+    const grouped = new Map<string, { clause: string; quotes: { quote: string; citation: Citation }[] }>();
+    for (const a of pr.answers) {
+      const g = grouped.get(a.clause) ?? { clause: a.clause, quotes: [] };
+      // The same quote can come back as both an answer and its support.
+      if (!g.quotes.some((q) => q.citation.page === a.page && q.quote === a.quote)) {
+        g.quotes.push({ quote: a.quote, citation: citationOf(a) });
+      }
+      grouped.set(a.clause, g);
+    }
     sections.push({
       key: 'promptResult',
       title: TITLES.promptResult,
       number: 0,
       prompt: pr.prompt,
-      answers: pr.answers.map((a) => ({ text: a.text, citation: cite(a.page, a.quote, a.clause), part: a.part ?? 'answer' })),
+      answer,
+      groups: [...grouped.values()],
       failed: pr.failedChunks.map((f) => `pages ${f.pages[0]}–${f.pages[1]}: ${f.message ?? f.failureCode ?? 'not completed'}`),
       chunksDone: pr.chunksDone,
       chunksTotal: pr.chunksTotal,
@@ -452,12 +482,35 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
 
   sections.push({ key: 'clauses', title: TITLES.clauses, number: 0 });
 
-  const amountRows: Extract<ReportSection, { key: 'datesAmounts' }>['rows'] = [];
+  // Dates and amounts are separate tables. A date with no stated purpose and no quote is dropped.
+  const dateRows: DateRow[] = [];
+  const amountRows: AmountRow[] = [];
   for (const c of all) {
-    for (const d of c.dates) amountRows.push({ kind: 'Date', clause: c.clauseNo, page: d.page, detail: dateLabel(d), citation: cite(d.page, d.quote, c.clauseNo) });
-    for (const p of c.payments) amountRows.push({ kind: 'Amount', clause: c.clauseNo, page: p.page, detail: paymentLabel(p), citation: cite(p.page, p.quote, c.clauseNo) });
+    for (const d of c.dates) {
+      const purpose = d.purpose?.trim() || d.quote.trim();
+      if (!purpose) continue;
+      dateRows.push({
+        date: d.text,
+        purpose,
+        timing: d.timing_type === 'event_relative' ? 'relative' : 'fixed',
+        clause: c.clauseNo,
+        citation: cite(d.page, d.quote, c.clauseNo),
+      });
+    }
+    for (const p of c.payments) {
+      const purpose = p.purpose?.trim() || p.quote.trim();
+      if (!purpose) continue;
+      amountRows.push({
+        amount: p.amount,
+        purpose,
+        payerToPayee: `${p.payer || 'payer not named'} to ${p.payee || 'payee not named'}`,
+        due: p.due,
+        clause: c.clauseNo,
+        citation: cite(p.page, p.quote, c.clauseNo),
+      });
+    }
   }
-  sections.push({ key: 'datesAmounts', title: TITLES.datesAmounts, number: 0, rows: amountRows });
+  sections.push({ key: 'datesAmounts', title: TITLES.datesAmounts, number: 0, dates: dateRows, amounts: amountRows });
 
   const groups = new Map<string, { party: string; rows: { clause: string; page: number; text: string; citation: Citation }[] }>();
   for (const c of all) {
@@ -469,27 +522,6 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
     }
   }
   sections.push({ key: 'obligations', title: TITLES.obligations, number: 0, groups: [...groups.values()] });
-
-  const timeline: TimelineRow[] = [];
-  for (const c of all) {
-    for (const d of c.dates) {
-      timeline.push({ date: d.text, event: c.summary || c.type || `Clause ${c.clauseNo}`, citation: cite(d.page, d.quote, c.clauseNo) });
-    }
-  }
-  // Dates that parse are sorted; the others keep their document order after them.
-  const parse = (s: string) => {
-    const t = Date.parse(s.replace(/(\d+)(st|nd|rd|th)\b/i, '$1'));
-    return Number.isNaN(t) ? null : t;
-  };
-  timeline.sort((a, b) => {
-    const pa = parse(a.date);
-    const pb = parse(b.date);
-    if (pa !== null && pb !== null) return pa - pb;
-    if (pa !== null) return -1;
-    if (pb !== null) return 1;
-    return 0;
-  });
-  sections.push({ key: 'timeline', title: TITLES.timeline, number: 0, rows: timeline });
 
   const riskRows: RiskRow[] = [];
   for (const c of all) {
@@ -519,12 +551,15 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       citation: affected[0] ?? null,
     };
   });
+  const rr = report.riskReview;
+  const reviewLine = rr ? `${rr.reviewed} risks after validation (${rr.dropped} dropped).` : null;
   sections.push({
     key: 'risks',
     title: TITLES.risks,
     number: 0,
     risks: sortByPriorityOf(riskRows, (r) => r.priority),
     missing: sortByPriorityOf(missingRows, (r) => r.priority),
+    reviewLine,
   });
 
   const findings = report.crossClause.findings

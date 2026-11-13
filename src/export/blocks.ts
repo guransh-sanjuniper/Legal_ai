@@ -99,15 +99,18 @@ function sectionBlocks(section: ReportSection, model: ReportModel): Block[] {
 
     case 'promptResult': {
       out.push({ kind: 'paragraph', text: `Prompt: “${section.prompt}”`, muted: true });
-      if (section.answers.length === 0) {
-        out.push({ kind: 'paragraph', text: 'No verified answer was found in the document.', muted: true });
+      if (section.answer.length === 0) {
+        out.push({ kind: 'paragraph', text: 'Not found in this document.', muted: true });
       } else {
-        const answers = section.answers.filter((a) => a.part !== 'support');
-        const support = section.answers.filter((a) => a.part === 'support');
-        if (answers.length) out.push({ kind: 'bullets', items: answers.map((a) => withCitation(a.text, a.citation)) });
-        if (support.length) {
-          out.push({ kind: 'paragraph', text: 'Supporting quotes', muted: true });
-          out.push({ kind: 'bullets', items: support.map((a) => `“${a.citation.quote}” (${citationText(a.citation)})`) });
+        out.push({
+          kind: 'paragraph',
+          text: section.answer.map((a) => a.text).join(' '),
+        });
+      }
+      if (section.groups.length > 0) {
+        out.push({ kind: 'heading', level: 3, text: 'Supporting quotes' });
+        for (const g of section.groups) {
+          out.push({ kind: 'bullets', items: g.quotes.map((q) => `“${q.quote}” (${citationText(q.citation)})`) });
         }
       }
       out.push({
@@ -136,13 +139,24 @@ function sectionBlocks(section: ReportSection, model: ReportModel): Block[] {
     }
 
     case 'datesAmounts':
-      if (section.rows.length === 0) {
-        out.push({ kind: 'paragraph', text: 'No dates or amounts were found in the verified items.', muted: true });
+      out.push({ kind: 'heading', level: 3, text: 'Dates' });
+      if (section.dates.length === 0) {
+        out.push({ kind: 'paragraph', text: 'No dates with a stated purpose were found.', muted: true });
       } else {
         out.push({
           kind: 'table',
-          columns: ['Type', 'Clause', 'Detail', 'Source'],
-          rows: section.rows.map((r) => [r.kind, r.clause, r.detail, citationText(r.citation)]),
+          columns: ['Date', 'What it is', 'Fixed or relative', 'Clause', 'Source'],
+          rows: section.dates.map((r) => [r.date, r.purpose, cap(r.timing), r.clause, citationText(r.citation)]),
+        });
+      }
+      out.push({ kind: 'heading', level: 3, text: 'Amounts' });
+      if (section.amounts.length === 0) {
+        out.push({ kind: 'paragraph', text: 'No amounts were found.', muted: true });
+      } else {
+        out.push({
+          kind: 'table',
+          columns: ['Amount', 'What it is for', 'Payer to payee', 'When due', 'Clause', 'Source'],
+          rows: section.amounts.map((r) => [r.amount, r.purpose, r.payerToPayee, r.due, r.clause, citationText(r.citation)]),
         });
       }
       return out;
@@ -157,19 +171,8 @@ function sectionBlocks(section: ReportSection, model: ReportModel): Block[] {
       }
       return out;
 
-    case 'timeline':
-      if (section.rows.length === 0) {
-        out.push({ kind: 'paragraph', text: 'No dates were found in the verified items.', muted: true });
-      } else {
-        out.push({
-          kind: 'table',
-          columns: ['Date', 'Event'],
-          rows: section.rows.map((r) => [`${r.date}\n(${citationText(r.citation)})`, r.event]),
-        });
-      }
-      return out;
-
     case 'risks':
+      if (section.reviewLine) out.push({ kind: 'paragraph', text: section.reviewLine, muted: true });
       out.push({ kind: 'heading', level: 3, text: 'Risks' });
       out.push(riskTable(section.risks));
       out.push({ kind: 'heading', level: 3, text: 'Missing clauses and protections' });

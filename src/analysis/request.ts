@@ -6,7 +6,8 @@ export const REVIEWING_FOR: ReviewingFor[] = ['licensor', 'licensee', 'neutral']
 // Detail level sets how long the clause summaries and overview points may be.
 export const DETAILED_SUMMARY_SENTENCES: Record<DetailLevel, number> = { brief: 2, standard: 4, detailed: 7 };
 export const PROSE_SENTENCES: Record<DetailLevel, number> = { brief: 1, standard: 2, detailed: 3 };
-export const OVERVIEW_SENTENCES_PER_POINT: Record<DetailLevel, number> = { brief: 1, standard: 2, detailed: 3 };
+// Each overview point is a short paragraph: this is the base sentence count (plus up to 2).
+export const OVERVIEW_SENTENCES_PER_POINT: Record<DetailLevel, number> = { brief: 3, standard: 4, detailed: 5 };
 
 export interface AnalysisRequestInput {
   matter?: string;

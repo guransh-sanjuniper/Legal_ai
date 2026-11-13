@@ -66,6 +66,8 @@ export function taskLabel(taskId: string): string {
     cx: 'Custom prompt retry',
     m: 'Missing protections',
     ov: 'Overview',
+    rq: 'Risk validation',
+    ps: 'Prompt synthesis',
     s: 'Section summary',
   };
   return labels[kind] ?? 'Task';

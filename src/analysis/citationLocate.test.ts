@@ -40,8 +40,11 @@ describe('cost estimate', () => {
     const without = estimateRun(base);
     const withPrompt = estimateRun({ ...base, customPrompt: 'Which clauses name a notice period?' });
     expect(without.customCalls).toBe(0);
+    expect(without.synthesisCalls).toBe(0);
+    expect(withPrompt.synthesisCalls).toBe(1);
+    expect(without.reviewCalls).toBeGreaterThan(0);
     expect(withPrompt.customCalls).toBe(base.chunkTexts.length);
-    expect(withPrompt.calls).toBe(without.calls + base.chunkTexts.length);
+    expect(withPrompt.calls).toBe(without.calls + base.chunkTexts.length + withPrompt.synthesisCalls);
     expect(withPrompt.costUsd).toBeGreaterThan(without.costUsd);
   });
 

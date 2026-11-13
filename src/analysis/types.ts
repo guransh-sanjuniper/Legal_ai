@@ -15,6 +15,8 @@ export interface VerifiedDate extends VerifiedItemBase {
   itemId: string;
   clause: string;
   text: string;
+  // What the date is for. When empty, the quote is shown as the description.
+  purpose?: string;
   timing_type: 'fixed' | 'event_relative' | 'none';
 }
 
@@ -22,6 +24,8 @@ export interface VerifiedPayment extends VerifiedItemBase {
   itemId: string;
   clause: string;
   amount: string;
+  // What the amount is for. When empty, the quote is shown as the description.
+  purpose?: string;
   payer: string;
   payee: string;
   due: string;
@@ -134,10 +138,21 @@ export interface PromptAnswer {
 
 export interface PromptResult {
   prompt: string;
+  // Chunk-level verified answers. Intermediate: kept for the supporting quotes.
   answers: PromptAnswer[];
+  // Synthesis over the verified answers: the final answer in prose, citing answers.
+  answer?: { text: string; cites: string[] }[];
   chunksTotal: number;
   chunksDone: number;
   failedChunks: { chunkIndex: number; pages: [number, number]; failureCode: string | null; message: string | null }[];
+}
+
+// Result of the validation pass over High and Medium risks.
+export interface RiskReviewStats {
+  reviewed: number;
+  kept: number;
+  downgraded: number;
+  dropped: number;
 }
 
 export interface DropRecord {
@@ -228,6 +243,7 @@ export interface AnalysisReport {
   chunkClauses?: { chunkIndex: number; clauses: string[] }[];
   overviewPoints?: OverviewPoint[];
   missingProtections?: MissingProtection[];
+  riskReview?: RiskReviewStats;
   promptResult?: PromptResult;
   judgement?: JudgementSnapshot;
   partial?: boolean;

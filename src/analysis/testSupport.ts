@@ -72,6 +72,15 @@ export function scriptedModel(req: CallRequest): string {
       })),
     );
   }
+  if (req.prompt.includes('review proposed risks')) {
+    const batch = JSON.parse(req.input) as { id: string }[];
+    return JSON.stringify(batch.map((r) => ({ id: r.id, verdict: 'keep', reason: 'genuine risk' })));
+  }
+  if (req.prompt.includes('final answer to a user request')) {
+    const answers = JSON.parse(req.input.slice(req.input.indexOf('Verified answers:\n') + 18));
+    const first = answers[0];
+    return JSON.stringify([{ text: 'Clause two states the obligation.', cites: first ? [first.id] : [] }]);
+  }
   if (req.prompt.includes('numbered overview')) {
     const cite = itemsFromInput().sections[0]?.cites?.[0];
     return JSON.stringify([

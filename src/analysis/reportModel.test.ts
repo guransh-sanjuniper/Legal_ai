@@ -89,10 +89,10 @@ describe('report model', () => {
   it('numbers sections in order and drops Prompt Result when unused', () => {
     const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1' })]));
     expect(model.sections.map((s) => s.title)).toEqual([
-      'Overview', 'Clause Breakdown', 'Dates and Amounts', 'Obligations by Party', 'Timeline',
+      'Overview', 'Clause Breakdown', 'Dates and Amounts', 'Obligations by Party',
       'Risk Register', 'Internal Inconsistencies', 'Coverage',
     ]);
-    expect(model.sections.map((s) => s.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(model.sections.map((s) => s.number)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(model.sections.some((s) => /Defined Terms/.test(s.title))).toBe(false);
   });
 
@@ -103,7 +103,7 @@ describe('report model', () => {
       }),
     );
     expect(model.toc.slice(0, 3).map((t) => t.title)).toEqual(['Overview', 'Prompt Result', 'Clause Breakdown']);
-    expect(model.toc.map((t) => t.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(model.toc.map((t) => t.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
   it('keeps the clause table to the rows that have content, with Summary always present', () => {
@@ -159,15 +159,14 @@ describe('report model', () => {
     expect(lines[0]).toMatch(/Chunks analysed 3 of 3/);
   });
 
-  it('keeps the answer and support labels on Prompt Result answers', () => {
+  it('shows the synthesized answer in prose and supporting quotes grouped by clause', () => {
+    const a = { itemId: 'P1', text: 'Yes, sixty days.', clause: '3', page: 2, quote: 'sixty days written notice', verified: true as const, part: 'answer' as const };
     const model = buildReportModel(
       report([clause({ itemId: 'a', clauseNo: '1' })], {
         promptResult: {
           prompt: 'Is there a notice period?',
-          answers: [
-            { itemId: 'P1', text: 'Yes, 60 days.', clause: '3', page: 2, quote: 'sixty days written notice', verified: true, part: 'answer' },
-            { itemId: 'P2', text: 'support', clause: '3', page: 2, quote: 'sixty days written notice', verified: true, part: 'support' },
-          ],
+          answers: [a, { ...a, itemId: 'P2', part: 'support' }],
+          answer: [{ text: 'Yes, either party may end it on sixty days.', cites: ['P1'] }],
           chunksTotal: 1,
           chunksDone: 1,
           failedChunks: [],
@@ -175,7 +174,39 @@ describe('report model', () => {
       }),
     );
     const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
-    expect(pr.answers.map((a) => a.part)).toEqual(['answer', 'support']);
+    expect(pr.answer).toHaveLength(1);
+    expect(pr.answer[0].citations[0]).toMatchObject({ clause: '3', page: 2 });
+    expect(pr.groups).toEqual([{ clause: '3', quotes: [{ quote: 'sixty days written notice', citation: expect.objectContaining({ page: 2 }) }] }]);
+  });
+
+  it('splits dates and amounts into two tables and falls back to the quote when there is no purpose', () => {
+    const model = buildReportModel(
+      report([
+        clause({
+          itemId: 'a',
+          clauseNo: '1',
+          dates: [
+            { itemId: 'd1', clause: '1', text: '12 May 2024', purpose: 'Completion date', timing_type: 'fixed', page: 1, quote: 'completion on 12 May 2024', verified: true },
+            { itemId: 'd2', clause: '1', text: 'the Closing Date', timing_type: 'event_relative', page: 1, quote: 'no purpose stated for this date', verified: true },
+          ],
+          payments: [
+            { itemId: 'p1', clause: '1', amount: 'Rs. 48,000', purpose: 'Price', payer: 'Buyer', payee: 'Supplier', due: 'on delivery', page: 1, quote: 'price of Rs. 48,000', verified: true },
+          ],
+        }),
+      ]),
+    );
+    const da = model.sections.find((s) => s.key === 'datesAmounts') as Extract<(typeof model.sections)[number], { key: 'datesAmounts' }>;
+    expect(da.dates.map((d) => [d.date, d.purpose, d.timing])).toEqual([
+      ['12 May 2024', 'Completion date', 'fixed'],
+      ['the Closing Date', 'no purpose stated for this date', 'relative'],
+    ]);
+    expect(da.amounts[0]).toMatchObject({ amount: 'Rs. 48,000', purpose: 'Price', payerToPayee: 'Buyer to Supplier', due: 'on delivery' });
+  });
+
+  it('shows the risk validation count when a review ran', () => {
+    const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1' })], { riskReview: { reviewed: 12, kept: 9, downgraded: 1, dropped: 2 } }));
+    const risks = model.sections.find((s) => s.key === 'risks') as Extract<(typeof model.sections)[number], { key: 'risks' }>;
+    expect(risks.reviewLine).toBe('12 risks after validation (2 dropped).');
   });
 
   it('sorts risks by priority and labels law references, with missing protections as their own list', () => {
@@ -195,10 +226,27 @@ describe('report model', () => {
     expect(risks.missing[0]).toMatchObject({ clause: 'Whole document', kind: 'missing' });
   });
 
-  it('builds the timeline in date order, unparsed dates after', () => {
-    const d = (text: string, page: number) => ({ text, timing_type: 'fixed' as const, page, quote: `quote ${text}`, verified: true as const, itemId: `d${text}`, clause: '1' });
-    const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1', dates: [d('3 March 2024', 2), d('later', 3), d('12 May 2024', 1)] })]));
-    const tl = model.sections.find((s) => s.key === 'timeline') as Extract<(typeof model.sections)[number], { key: 'timeline' }>;
-    expect(tl.rows.map((r) => r.date)).toEqual(['3 March 2024', '12 May 2024', 'later']);
+  it('shows the risk validation count when a review ran', () => {
+    const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1' })], { riskReview: { reviewed: 12, kept: 9, downgraded: 1, dropped: 2 } }));
+    const risks = model.sections.find((s) => s.key === 'risks') as Extract<(typeof model.sections)[number], { key: 'risks' }>;
+    expect(risks.reviewLine).toBe('12 risks after validation (2 dropped).');
   });
+
+  it('sorts risks by priority and labels law references, with missing protections as their own list', () => {
+    const model = buildReportModel(
+      report(
+        [clause({ itemId: 'a', clauseNo: '1', risks: [risk('r1', 'low', 1, 'q one', '1'), risk('r2', 'high', 1, 'q two', '1')] })],
+        {
+          missingProtections: [
+            { itemId: 'M1', topic: 'insurance', text: 'No cover stated.', severity: 'medium', basis: 'other', suggestion: 'Ask.', laws: ['Act Y'], cites: [], applicability: 'unverified' },
+          ],
+        },
+      ),
+    );
+    const risks = model.sections.find((s) => s.key === 'risks') as Extract<(typeof model.sections)[number], { key: 'risks' }>;
+    expect(risks.risks.map((r) => r.priority)).toEqual(['high', 'low']);
+    expect(risks.risks.every((r) => r.suggestion.length > 0 && r.laws.length > 0)).toBe(true);
+    expect(risks.missing[0]).toMatchObject({ clause: 'Whole document', kind: 'missing' });
+  });
+
 });

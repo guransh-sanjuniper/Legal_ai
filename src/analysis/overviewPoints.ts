@@ -1,4 +1,4 @@
-import { OVERVIEW_POINTS, STATUTORY_POINT, RISK_ALLOCATION_POINT, INCONSISTENCY_POINT, SUMMARY_POINT } from './prompts';
+import { OVERVIEW_POINTS, STATUTORY_POINT, INCONSISTENCY_POINT, SUMMARY_POINT } from './prompts';
 import { keepCitedSentences, type KeptSentence } from './rollup';
 import type { MissingProtection, OverviewPoint, RollupSentence, VerifiedClause } from './types';
 
@@ -79,31 +79,21 @@ export interface OverviewInputs {
   model: ModelPointSentence[];
   statutory: RollupSentence[];
   inconsistencies: RollupSentence[];
-  risks: { itemId: string; clause: string; page: number; text: string }[];
 }
 
 export const EXECUTIVE_FALLBACK_NOTE = 'Assembled from cited sentences above.';
 
-// Assembles the fourteen points. Four points are not left to the model's choice:
-// - Risk Allocation cites every risk; a risk the model did not cite gets its own cited sentence.
+// Assembles the thirteen points. Three are not left to the model's choice:
 // - Statutory Compliance and Internal Inconsistencies are built in code from stored data.
 // - Executive Summary, if the model wrote nothing, is assembled from the first cited sentence of
 //   each other point, and the point is labelled as assembled.
 export function assembleOverviewPoints(input: OverviewInputs): OverviewPoint[] {
   const byPoint = (n: number) => input.model.filter((s) => s.point === n).map((s) => ({ text: s.text, cites: s.cites }));
 
-  const riskSentences = byPoint(RISK_ALLOCATION_POINT);
-  const citedRisks = new Set(riskSentences.flatMap((s) => s.cites));
-  for (const r of input.risks) {
-    if (citedRisks.has(r.itemId)) continue;
-    riskSentences.push({ text: `Clause ${r.clause} (page ${r.page}): ${r.text}`, cites: [r.itemId] });
-  }
-
   const points: OverviewPoint[] = OVERVIEW_POINTS.map((title, i) => {
     const point = i + 1;
     if (point === STATUTORY_POINT) return { point, title, sentences: input.statutory };
     if (point === INCONSISTENCY_POINT) return { point, title, sentences: input.inconsistencies };
-    if (point === RISK_ALLOCATION_POINT) return { point, title, sentences: riskSentences };
     return { point, title, sentences: byPoint(point) };
   });
 

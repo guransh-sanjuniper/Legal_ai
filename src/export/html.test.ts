@@ -18,7 +18,7 @@ describe('HTML export', () => {
 
   it('contains every section in order, numbered correctly, with no Defined Terms', () => {
     const out = html();
-    const order = ['1. Overview', '2. Clause Breakdown', '3. Dates and Amounts', '4. Obligations by Party', '5. Timeline', '6. Risk Register', '7. Internal Inconsistencies', '8. Coverage'];
+    const order = ['1. Overview', '2. Clause Breakdown', '3. Dates and Amounts', '4. Obligations by Party', '5. Risk Register', '6. Internal Inconsistencies', '7. Coverage'];
     let at = -1;
     for (const title of order) {
       const found = out.indexOf(`<h2>${title}</h2>`, at + 1);
@@ -32,7 +32,7 @@ describe('HTML export', () => {
     const out = html(true);
     expect(out.indexOf('<h2>2. Prompt Result</h2>')).toBeGreaterThan(-1);
     expect(out.indexOf('<h2>3. Clause Breakdown</h2>')).toBeGreaterThan(-1);
-    expect(out.indexOf('<h2>9. Coverage</h2>')).toBeGreaterThan(-1);
+    expect(out.indexOf('<h2>8. Coverage</h2>')).toBeGreaterThan(-1);
   });
 
   it('includes the Missing list and the lawyer-review footer', () => {

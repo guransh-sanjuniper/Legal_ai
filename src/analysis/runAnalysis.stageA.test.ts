@@ -46,7 +46,7 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(withPrompt.missingProtections).toHaveLength(1);
   expect(withPrompt.missingProtections![0]).toMatchObject({ topic: 'insurance cover', severity: 'medium', applicability: 'unverified' });
 
-  expect(withPrompt.overviewPoints).toHaveLength(14);
+  expect(withPrompt.overviewPoints).toHaveLength(13);
   const statutory = withPrompt.overviewPoints![STATUTORY_POINT - 1].sentences.map((s) => s.text).join(' ');
   expect(statutory).toMatch(/Indian Contract Act 1872 \(model knowledge, applicability unverified\)/);
   expect(statutory).not.toMatch(/Model tried/);
@@ -57,6 +57,10 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(withPrompt.promptResult!.failedChunks).toEqual([]);
   expect(withPrompt.promptResult!.answers.length).toBeGreaterThan(0);
   for (const a of withPrompt.promptResult!.answers) expect(a).toMatchObject({ verified: true, page: 2 });
+  expect(withPrompt.promptResult!.answer?.length).toBeGreaterThan(0);
+  expect(withPrompt.promptResult!.answer![0].text).toBe('Clause two states the obligation.');
+  expect(withPrompt.riskReview?.reviewed).toBeGreaterThan(0);
+  expect(withPrompt.riskReview?.dropped).toBe(0);
 
   const restored = await restoreReportFromSupabase(sb, docId);
   expect(restored?.runId).toBe(withPrompt.runId);

@@ -201,16 +201,16 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
               {p.sentences.length === 0 ? (
                 <p className="app-muted">{NOT_STATED}</p>
               ) : (
-                <ul className="ana-list">
+                <p className="ana-answer">
                   {p.sentences.map((s, i) => (
-                    <li key={i}>
+                    <span key={i}>
                       {s.text}{' '}
                       {s.citations.map((c, j) => (
                         <Cite key={j} c={c} onCite={onCite} />
-                      ))}
-                    </li>
+                      ))}{' '}
+                    </span>
                   ))}
-                </ul>
+                </p>
               )}
               {p.title === 'Statutory Compliance' && <div className="ana-note">Each law is labelled {LAW_LABEL}.</div>}
             </div>
@@ -221,26 +221,37 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
       return (
         <>
           <p className="app-muted">Prompt: “{section.prompt}”</p>
-          {section.answers.length === 0 ? (
-            <p className="app-muted">No verified answer was found in the document.</p>
+          {section.answer.length === 0 ? (
+            <p className="app-muted">Not found in this document.</p>
           ) : (
-            <ul className="ana-list">
-              {section.answers.map((a, i) => (
-                <li key={i}>
-                  {a.part === 'support' ? (
-                    <>
-                      <span className="ana-note">Supporting quote</span>
-                      <blockquote>“{a.citation.quote}”</blockquote>
-                      <Cite c={a.citation} onCite={onCite} />
-                    </>
-                  ) : (
-                    <>
-                      {a.text} <Cite c={a.citation} onCite={onCite} />
-                    </>
-                  )}
-                </li>
+            <p className="ana-answer">
+              {section.answer.map((a, i) => (
+                <span key={i}>
+                  {a.text}{' '}
+                  {a.citations.map((c, j) => (
+                    <Cite key={j} c={c} onCite={onCite} />
+                  ))}{' '}
+                </span>
               ))}
-            </ul>
+            </p>
+          )}
+          {section.groups.length > 0 && (
+            <>
+              <h4>Supporting quotes</h4>
+              {section.groups.map((g) => (
+                <div key={g.clause} className="ana-point">
+                  <div className="app-muted">Clause {g.clause}</div>
+                  <ul className="ana-quotes">
+                    {g.quotes.map((q, i) => (
+                      <li key={i}>
+                        <blockquote>“{q.quote}”</blockquote>
+                        <Cite c={q.citation} onCite={onCite} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </>
           )}
           <p className="app-muted">
             Chunks answered {section.chunksDone} of {section.chunksTotal}.
@@ -251,31 +262,69 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
     case 'clauses':
       return <ClauseBreakdown clauses={model.clauses} onCite={onCite} stats={model.merge} />;
     case 'datesAmounts':
-      return section.rows.length === 0 ? (
-        <p className="app-muted">No dates or amounts were found in the verified items.</p>
-      ) : (
-        <div className="app-table-wrap">
-          <table className="app-table">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Clause</th>
-                <th>Detail</th>
-                <th>Source</th>
-              </tr>
-            </thead>
-            <tbody>
-              {section.rows.map((r, i) => (
-                <tr key={i}>
-                  <td>{r.kind}</td>
-                  <td>{r.clause}</td>
-                  <td>{r.detail}</td>
-                  <td><Cite c={r.citation} onCite={onCite} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      return (
+        <>
+          <h4>Dates</h4>
+          {section.dates.length === 0 ? (
+            <p className="app-muted">No dates with a stated purpose were found.</p>
+          ) : (
+            <div className="app-table-wrap">
+              <table className="app-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>What it is</th>
+                    <th>Fixed or relative</th>
+                    <th>Clause</th>
+                    <th>Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {section.dates.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.date}</td>
+                      <td>{r.purpose}</td>
+                      <td>{r.timing}</td>
+                      <td>{r.clause}</td>
+                      <td><Cite c={r.citation} onCite={onCite} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <h4>Amounts</h4>
+          {section.amounts.length === 0 ? (
+            <p className="app-muted">No amounts were found.</p>
+          ) : (
+            <div className="app-table-wrap">
+              <table className="app-table">
+                <thead>
+                  <tr>
+                    <th>Amount</th>
+                    <th>What it is for</th>
+                    <th>Payer to payee</th>
+                    <th>When due</th>
+                    <th>Clause</th>
+                    <th>Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {section.amounts.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.amount}</td>
+                      <td>{r.purpose}</td>
+                      <td>{r.payerToPayee}</td>
+                      <td>{r.due}</td>
+                      <td>{r.clause}</td>
+                      <td><Cite c={r.citation} onCite={onCite} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       );
     case 'obligations':
       return section.groups.length === 0 ? (
@@ -294,32 +343,10 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
           </div>
         ))
       );
-    case 'timeline':
-      return section.rows.length === 0 ? (
-        <p className="app-muted">No dates were found in the verified items.</p>
-      ) : (
-        <div className="app-table-wrap">
-          <table className="app-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Event</th>
-              </tr>
-            </thead>
-            <tbody>
-              {section.rows.map((r, i) => (
-                <tr key={i}>
-                  <td>{r.date}</td>
-                  <td>{r.event} <Cite c={r.citation} onCite={onCite} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
     case 'risks':
       return (
         <>
+          {section.reviewLine && <p className="app-muted">{section.reviewLine}</p>}
           <h4>Risks</h4>
           <RiskTable rows={section.risks} onCite={onCite} />
           <h4>Missing clauses and protections</h4>
@@ -388,7 +415,7 @@ export function ReportView({ model, onCite }: { model: ReportModel; onCite: (c: 
       </nav>
 
       {model.sections.map((s) => (
-        <Card key={s.key} id={`sec-${s.key}`} title={`${s.number}. ${s.title}`}>
+        <Card key={s.key} id={`sec-${s.key}`} title={`${s.number}. ${s.title}`} defaultOpen={s.key !== 'clauses'}>
           <SectionBody section={s} onCite={onCite} model={model} />
         </Card>
       ))}

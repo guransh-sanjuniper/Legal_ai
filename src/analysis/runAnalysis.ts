@@ -10,7 +10,7 @@ import { groupForRollup, keepCitedSentences } from './rollup';
 import { buildLedger, type LedgerChunkInput } from './ledger';
 import { dedupeVerifiedClauses } from './dedupe';
 import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
-import { buildClausePrompt, buildOverviewPrompt, OVERVIEW_POINTS, SECTION_PROMPT } from './prompts';
+import { buildClausePrompt, buildOverviewPrompt, buildPromptSynthesisPrompt, OVERVIEW_POINTS, SECTION_PROMPT } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
 import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
@@ -24,6 +24,14 @@ import {
   type ModelPointSentence,
 } from './overviewPoints';
 import { runPromptPass } from './promptPass';
+import {
+  applyVerdicts,
+  duplicateRiskIds,
+  isValidVerdictItem,
+  riskReviewPlans,
+  type RiskReviewItem,
+  type RiskVerdictItem,
+} from './riskReview';
 import type { Task } from '../tasks/types';
 import type {
   AnalysisReport,
@@ -31,6 +39,7 @@ import type {
   DropRecord,
   MissingProtection,
   PromptResult,
+  RiskReviewStats,
   RollupSentence,
   SectionSummary,
   VerifiedClause,
@@ -121,12 +130,14 @@ interface RawObligation {
 }
 interface RawDate {
   text?: unknown;
+  purpose?: unknown;
   timing_type?: unknown;
   page?: unknown;
   quote?: unknown;
 }
 interface RawPayment {
   amount?: unknown;
+  purpose?: unknown;
   payer?: unknown;
   payee?: unknown;
   due?: unknown;
@@ -427,6 +438,27 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       await pauseIfNeeded(r);
     }
     promptResult = pr.result;
+
+    // One synthesis over the verified answers: the final answer in prose, citing them.
+    // Chunk-level answers stay intermediate and feed the supporting quotes.
+    if (promptResult.answers.length > 0) {
+      const answerIds = new Set(promptResult.answers.map((a) => a.itemId));
+      const plan: TaskPlan = {
+        suffix: 'ps',
+        promptVersion: 'prompt-synthesis-v1',
+        prompt: buildPromptSynthesisPrompt(),
+        input: `USER REQUEST: ${request.customPrompt}\n\nVerified answers:\n${JSON.stringify(
+          promptResult.answers.map((a) => ({ id: a.itemId, text: a.text, clause: a.clause, page: a.page, quote: a.quote })),
+        )}`,
+        maxTokens: 1200,
+        validate: (x) => typeof x === 'object' && x !== null && typeof (x as { text?: unknown }).text === 'string',
+      };
+      const synthRun = await executeTasks(ctx, runId, doc, [plan]);
+      addLimits(synthRun);
+      await pauseIfNeeded(synthRun);
+      const kept = synthRun.collected.flatMap((c) => keepCitedSentences(c.items as never[], answerIds).kept);
+      if (kept.length > 0) promptResult.answer = kept.map((k) => ({ text: k.text, cites: k.cites }));
+    }
   }
 
   // 3. Verification (code). Page and clause come from the resolver.
@@ -475,6 +507,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         itemId: `${base}:d${i}`,
         clause: v.item.clause,
         text: str(v.item.text),
+        purpose: str(v.item.purpose).trim(),
         timing_type: ['fixed', 'event_relative', 'none'].includes(str(v.item.timing_type))
           ? (v.item.timing_type as VerifiedDate['timing_type'])
           : 'none',
@@ -486,6 +519,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         itemId: `${base}:p${i}`,
         clause: v.item.clause,
         amount: str(v.item.amount),
+        purpose: str(v.item.purpose).trim(),
         payer: str(v.item.payer),
         payee: str(v.item.payee),
         due: str(v.item.due),
@@ -540,6 +574,49 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     `verified ${verifiedClauses.length} clauses, dropped ${drops.length} unverified items, corrected ${pageCorrected} pages, ` +
       `deduped ${dedupeStats.removed} repeated items`,
   );
+
+  // 3a. Risk validation: a batched review of High and Medium risks, plus duplicate removal.
+  // Low risks are not sent. A failed batch leaves its risks as proposed (fail open).
+  let riskReview: RiskReviewStats | undefined;
+  const reviewable: RiskReviewItem[] = verifiedClauses.flatMap((c) =>
+    c.risks
+      .filter((r) => r.severity !== 'low')
+      .map((r) => ({ id: r.itemId, clause: c.clauseNo, priority: r.severity, issue: r.text, quote: r.quote })),
+  );
+  if (reviewable.length > 0) {
+    const duplicates = duplicateRiskIds(reviewable);
+    const toReview = reviewable.filter((r) => !duplicates.has(r.id));
+    progress(`reviewing ${toReview.length} high and medium risks`);
+    const reviewRun = toReview.length
+      ? await executeTasks(ctx, runId, doc, riskReviewPlans(toReview))
+      : null;
+    if (reviewRun) {
+      addLimits(reviewRun);
+      await pauseIfNeeded(reviewRun);
+    }
+    const verdicts = (reviewRun?.collected.flatMap((c) => c.items) ?? []).filter(
+      isValidVerdictItem,
+    ) as RiskVerdictItem[];
+    const applied = applyVerdicts(verdicts);
+    const droppedIds = new Set<string>([...applied.dropped, ...duplicates]);
+    const verdictDrops = [...applied.dropped].filter((id) => !duplicates.has(id)).length;
+    riskReview = {
+      reviewed: toReview.length,
+      kept: toReview.length - verdictDrops - applied.downgraded.size,
+      downgraded: [...applied.downgraded].filter((id) => !duplicates.has(id)).length,
+      dropped: duplicates.size + verdictDrops,
+    };
+    verifiedClauses = verifiedClauses.map((c) => {
+      const risks = c.risks
+        .filter((r) => !droppedIds.has(r.itemId))
+        .map((r) => (applied.downgraded.has(r.itemId) ? { ...r, severity: 'low' as const } : r));
+      const verifiedItems = c.obligations.length + c.dates.length + c.payments.length + risks.length;
+      return { ...c, risks, verifiedItems };
+    });
+    progress(
+      `${riskReview.reviewed} risks reviewed: ${riskReview.kept} kept, ${riskReview.downgraded} downgraded, ${riskReview.dropped} dropped`,
+    );
+  }
 
   // 3b. Missing protections: model check over clause summaries; each claim needs a whole-document search miss.
   let missingProtections: MissingProtection[] = [];
@@ -703,9 +780,6 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   const statutory = statutorySentences(lawsEngaged(verifiedClauses, missingProtections));
   const findingItems = crossClause.findings.map((f, i) => ({ id: `F${i + 1}`, text: f.text, cites: f.itemIds }));
   const missingItems = missingProtections.map((m) => ({ id: m.itemId, text: `${m.topic}: ${m.text}`, cites: m.cites }));
-  const riskItems = verifiedClauses.flatMap((c) =>
-    c.risks.map((r) => ({ itemId: r.itemId, clause: c.clauseNo, page: r.page, text: r.text })),
-  );
   const inconsistencyFindings = crossClause.findings.filter((f) => f.kind !== 'gap');
   const inconsistencies: RollupSentence[] = inconsistencyFindings.length
     ? inconsistencyFindings.map((f) => ({ text: f.text, cites: f.itemIds }))
@@ -723,7 +797,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       suffix: 'ov',
       promptVersion: 'overview-points-v1',
       prompt: buildOverviewPrompt(request.detailLevel),
-      input: `${defsContext}\n\nItems:\n${JSON.stringify({ sections: sectionSentences, risks: riskItems, findings: findingItems, missing: missingItems })}`,
+      input: `${defsContext}\n\nItems:\n${JSON.stringify({ sections: sectionSentences, findings: findingItems, missing: missingItems })}`,
       maxTokens: Math.max(800, Math.min(3000, (OVERVIEW_POINTS.length - 1) * OVERVIEW_SENTENCES_PER_POINT[request.detailLevel] * OVERVIEW_TOKENS_PER_SENTENCE)),
       validate: (x) => typeof x === 'object' && x !== null,
     };
@@ -732,7 +806,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     await pauseIfNeeded(ovRun);
     for (const c of ovRun.collected) modelSentences.push(...keepPointSentences(c.items, overviewValid).kept);
   }
-  const overviewPoints = assembleOverviewPoints({ model: modelSentences, statutory, inconsistencies, risks: riskItems });
+  const overviewPoints = assembleOverviewPoints({ model: modelSentences, statutory, inconsistencies });
   let overview: RollupSentence[] = overviewPoints.flatMap((p) => p.sentences).filter((s) => s.cites.length > 0);
 
   // 6. Coverage ledger, including skipped clauses.
@@ -916,6 +990,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     chunkClauses: chunks.map((c) => ({ chunkIndex: c.index, clauses: [...new Set(c.clauses)] })),
     overviewPoints,
     missingProtections,
+    riskReview,
     ...(promptResult ? { promptResult } : {}),
   };
 

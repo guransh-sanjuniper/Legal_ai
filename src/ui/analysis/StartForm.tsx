@@ -74,8 +74,9 @@ export function StartForm({
       <div className="ana-estimate">
         {estimate ? (
           <>
-            <strong>Upper-bound estimate:</strong> {estimate.calls} calls ({estimate.clauseCalls} clause, {estimate.otherCalls} missing and
-            overview, {estimate.customCalls} custom prompt), about {money(estimate.costUsd)}.
+            <strong>Upper-bound estimate:</strong> {estimate.calls} calls ({estimate.clauseCalls} clause, {estimate.otherCalls} missing,
+            overview and section, {estimate.reviewCalls} risk validation, {estimate.customCalls} custom prompt
+            {estimate.synthesisCalls ? ` + ${estimate.synthesisCalls} synthesis` : ''}), about {money(estimate.costUsd)}.
             {estimate.customCalls === 0 && <span className="app-muted"> The custom pass is not included because the prompt is empty.</span>}
           </>
         ) : (

@@ -114,10 +114,8 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
       title: 'Prompt Result',
       number: 0,
       prompt: 'Is there a delivery deadline?',
-      answers: [
-        { text: 'Yes, delivery is due within thirty days.', citation: c('2', 2, 'within thirty days of the order'), part: 'answer' },
-        { text: 'Support.', citation: c('2', 2, 'within thirty days of the order'), part: 'support' },
-      ],
+      answer: [{ text: 'Yes, delivery is due within thirty days of the order.', citations: [c('2', 2, 'within thirty days of the order')] }],
+      groups: [{ clause: '2', quotes: [{ quote: 'within thirty days of the order', citation: c('2', 2, 'within thirty days of the order') }] }],
       failed: [],
       chunksDone: 2,
       chunksTotal: 2,
@@ -128,7 +126,17 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
     key: 'datesAmounts',
     title: 'Dates and Amounts',
     number: 0,
-    rows: [{ kind: 'Amount', clause: '1', page: 1, detail: 'Rs. 48,000: Buyer to Supplier, due on delivery', citation: c('1', 1, 'amount quote') }],
+    dates: [{ date: 'thirty days from the order', purpose: 'Delivery deadline', timing: 'relative', clause: '2', citation: c('2', 2, 'thirty days') }],
+    amounts: [
+      {
+        amount: 'Rs. 48,000',
+        purpose: 'Price of the equipment',
+        payerToPayee: 'Buyer to Supplier',
+        due: 'on delivery',
+        clause: '1',
+        citation: c('1', 1, 'amount quote'),
+      },
+    ],
   });
   sections.push({
     key: 'obligations',
@@ -137,16 +145,11 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
     groups: [{ party: 'Supplier', rows: [{ clause: '1', page: 1, text: 'Deliver the equipment.', citation: c('1', 1, 'deliver the equipment') }] }],
   });
   sections.push({
-    key: 'timeline',
-    title: 'Timeline',
-    number: 0,
-    rows: [{ date: '30 days from the order', event: 'Delivery due.', citation: c('2', 2, 'thirty days') }],
-  });
-  sections.push({
     key: 'risks',
     title: 'Risk Register',
     number: 0,
     risks: [risk({ priority: 'medium', clause: '2', pages: 'page 2', issue: 'A late-delivery penalty runs one way only.' })],
+    reviewLine: '1 risks after validation (0 dropped).',
     missing: [
       risk({
         priority: 'medium',

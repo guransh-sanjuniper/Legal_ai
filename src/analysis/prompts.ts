@@ -17,7 +17,6 @@ export const OVERVIEW_POINTS = [
   'Timeline and Milestones',
   'Obligations by Party',
   'Rights and Protections by Party',
-  'Risk Allocation',
   'Termination and Exit',
   'Dispute Resolution, Governing Law, Jurisdiction',
   'Statutory Compliance',
@@ -25,10 +24,9 @@ export const OVERVIEW_POINTS = [
   'Internal Inconsistencies',
   'Executive Summary',
 ] as const;
-export const STATUTORY_POINT = 11;
-export const RISK_ALLOCATION_POINT = 8;
-export const INCONSISTENCY_POINT = 13;
-export const SUMMARY_POINT = 14;
+export const STATUTORY_POINT = 10;
+export const INCONSISTENCY_POINT = 12;
+export const SUMMARY_POINT = 13;
 // Points built in code; the model writes every other point.
 const CODE_BUILT_POINTS = new Set([STATUTORY_POINT, INCONSISTENCY_POINT]);
 
@@ -37,6 +35,9 @@ const RISK_RUBRIC = [
   'Use basis "other" for any other risk; such a risk is Medium or Low, never High.',
   'Medium: a one-sided, unclear or materially incomplete term that the lawyer should negotiate. Low: drafting or administrative points with little exposure.',
   'Routine blanks and simple completion items are not risks. Every risk needs a suggestion: one concrete next step for the lawyer.',
+  'A risk is a term that is one-sided, unusual, unlawful, ambiguous, or financially exposing for a party. Judge it by its effect on a party, not by its wording.',
+  'These are NOT risks: generic disclaimers, forward-looking-statement warnings, "no assurance" boilerplate, selling or jurisdiction restrictions, definitions, and neutral procedures.',
+  'An exclusion does not apply when the wording shifts liability, limits a right, or limits a remedy: those stay risks even when phrased as a disclaimer.',
 ].join('\n');
 
 // Patterns that are material and easy to miss. They are prompts for attention, not a checklist of
@@ -73,8 +74,8 @@ export function buildClausePrompt(opts: {
     'Return ONLY a JSON array, no prose. One item per clause:',
     '{"clause_no":"...","type":"...","summary":"...",',
     ' "obligations":[{"party":"...","text":"...","page":number,"quote":"..."}],',
-    ' "dates":[{"text":"...","timing_type":"fixed"|"event_relative"|"none","page":number,"quote":"..."}],',
-    ' "payments":[{"amount":"...","payer":"...","payee":"...","due":"...","page":number,"quote":"..."}],',
+    ' "dates":[{"text":"...","purpose":"...","timing_type":"fixed"|"event_relative"|"none","page":number,"quote":"..."}],',
+    ' "payments":[{"amount":"...","purpose":"...","payer":"...","payee":"...","due":"...","page":number,"quote":"..."}],',
     ' "risks":[{"text":"...","priority":"high"|"medium"|"low","basis":"void_or_unenforceable"|"illegal"|"statutory_violation"|"major_financial_exposure"|"other","suggestion":"...","laws":["..."],"page":number,"quote":"..."}],',
     ' "missing":["..."],',
     ' "prose":{"detailed_summary":"...","conditions":"...","exceptions":"...","rights":"...","legal_significance":"...","ambiguity":"...","suggested_action":"...","location_mismatch":"..."}}',
@@ -115,10 +116,9 @@ export function buildOverviewPrompt(detail: DetailLevel): string {
     'You write the numbered overview of a legal contract from verified items.',
     UNTRUSTED_NOTICE,
     `Write only for these points: ${modelPoints.join('; ')}.`,
-    `Write at most ${OVERVIEW_SENTENCES_PER_POINT[detail]} sentence(s) per point. A point with nothing in the items gets no sentences.`,
+    `Each point is one short paragraph of ${OVERVIEW_SENTENCES_PER_POINT[detail]} to ${OVERVIEW_SENTENCES_PER_POINT[detail] + 2} sentences, scaled by the detail level. A point with nothing in the items gets no sentences.`,
     'Return ONLY a JSON array: {"point":number,"text":"...","cites":["ITEM_ID",...]}.',
     'Every sentence must cite at least one ITEM_ID from the supplied items. Sentences without a citation are discarded.',
-    'Risk Allocation (point 8) must cite every risk item that allocates a burden or benefit between the parties.',
     'State only what the items support. Do not invent facts, and do not name laws here.',
   ].join('\n');
 }
@@ -172,6 +172,32 @@ export const CUSTOM_PROMPT_FOOTER = [
   'Return ONLY a JSON array, in answer order: {"text":"...","part":"answer"|"support","page":number,"quote":"...","clause_no":"..."}.',
   'Use "answer" for the direct response to the request and "support" for the quotations behind it. Every item still needs a verbatim quote from the excerpt.',
 ].join('\n');
+
+// Validation pass over High and Medium risks. Batched; one verdict per risk id.
+export function buildRiskReviewPrompt(): string {
+  return [
+    'You review proposed risks from a legal contract and decide whether each one is a genuine risk.',
+    UNTRUSTED_NOTICE,
+    'A risk is a term that is one-sided, unusual, unlawful, ambiguous, or financially exposing for a party. Judge it by its effect on a party, not by its wording.',
+    'NOT risks: generic disclaimers, forward-looking-statement warnings, "no assurance" boilerplate, selling or jurisdiction restrictions, definitions, and neutral procedures.',
+    'But a liability shift, a limit on a right, or a limit on a remedy stays a risk even when phrased as a disclaimer.',
+    'Return ONLY a JSON array, one item per input id: {"id":"...","verdict":"keep"|"downgrade"|"drop","reason":"one short sentence"}.',
+    'keep: a genuine risk at its stated level. downgrade: a genuine but minor or overstated risk; it becomes Low. drop: boilerplate or not a risk at all.',
+    'Each input gives the clause, the priority, the issue and the verbatim quote. Judge the quote against the issue. Do not invent ids.',
+  ].join('\n');
+}
+
+// Synthesis of the verified custom-prompt answers into one answer in prose.
+export function buildPromptSynthesisPrompt(): string {
+  return [
+    'You write the final answer to a user request about a legal contract, from verified answers to that request.',
+    UNTRUSTED_NOTICE,
+    'The form and length of the answer follow the request: a yes/no question gets a short answer, a request to list items gets a list, a broad question gets a fuller answer.',
+    'Start with the direct answer, then the supporting detail. Cite the item ids behind every statement.',
+    'If the verified answers do not answer the request, say once that it is not found in the document; do not pad.',
+    'Return ONLY a JSON array of sentences: {"text":"...","cites":["ITEM_ID",...]}. Every sentence must cite at least one item id.',
+  ].join('\n');
+}
 
 export const JUDGE_PROMPT = [
   'You report which of two parties an excerpt of a legal contract favours.',

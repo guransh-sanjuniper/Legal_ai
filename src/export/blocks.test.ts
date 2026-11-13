@@ -35,21 +35,20 @@ describe('export blocks', () => {
     expect(meta.rows.find((r) => r.label === 'Reviewing for')?.value).toBe('Licensee');
   });
 
-  it('numbers sections without Prompt Result as 1 to 8, in screen order', () => {
+  it('numbers sections without Prompt Result as 1 to 7, in screen order', () => {
     const blocks = buildBlocksBlocking(fixtureModel());
     expect(toc(blocks).map((e) => `${e.number}. ${e.title}`)).toEqual([
       '1. Overview',
       '2. Clause Breakdown',
       '3. Dates and Amounts',
       '4. Obligations by Party',
-      '5. Timeline',
-      '6. Risk Register',
-      '7. Internal Inconsistencies',
-      '8. Coverage',
+      '5. Risk Register',
+      '6. Internal Inconsistencies',
+      '7. Coverage',
     ]);
   });
 
-  it('numbers sections with Prompt Result as 1 to 9, and never includes Defined Terms', () => {
+  it('numbers sections with Prompt Result as 1 to 8, and never includes Defined Terms', () => {
     const blocks = buildBlocksBlocking(fixtureModel({ withPrompt: true }));
     expect(toc(blocks).map((e) => `${e.number}. ${e.title}`)).toEqual([
       '1. Overview',
@@ -57,10 +56,9 @@ describe('export blocks', () => {
       '3. Clause Breakdown',
       '4. Dates and Amounts',
       '5. Obligations by Party',
-      '6. Timeline',
-      '7. Risk Register',
-      '8. Internal Inconsistencies',
-      '9. Coverage',
+      '6. Risk Register',
+      '7. Internal Inconsistencies',
+      '8. Coverage',
     ]);
     expect(allText(blocks)).not.toMatch(/Defined Terms/);
   });
@@ -83,6 +81,23 @@ describe('export blocks', () => {
     expect(text).toMatch(/Summary \(model-written\)/);
     expect(text).toMatch(/“verified quote 1” — Clause 1 · p\. 1/);
     expect(text).not.toMatch(/Defined Terms/);
+  });
+
+  it('has separate Dates and Amounts tables with the specified columns', () => {
+    const blocks = buildBlocksBlocking(fixtureModel());
+    const tables = blocks.filter((b): b is Extract<Block, { kind: 'table' }> => b.kind === 'table');
+    const dates = tables.find((t) => t.columns[0] === 'Date');
+    const amounts = tables.find((t) => t.columns[0] === 'Amount');
+    expect(dates?.columns).toEqual(['Date', 'What it is', 'Fixed or relative', 'Clause', 'Source']);
+    expect(amounts?.columns).toEqual(['Amount', 'What it is for', 'Payer to payee', 'When due', 'Clause', 'Source']);
+  });
+
+  it('shows the risk validation count and the synthesized Prompt Result, not per-chunk lines', async () => {
+    const blocks = buildBlocksBlocking(fixtureModel({ withPrompt: true }));
+    const text = allText(blocks);
+    expect(text).toMatch(/risks after validation/);
+    expect(text).toMatch(/Yes, delivery is due within thirty days of the order\./);
+    expect(text).toMatch(/Supporting quotes/);
   });
 
   it('includes the Risk Register and the Missing clauses list', () => {

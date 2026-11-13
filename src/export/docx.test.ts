@@ -37,7 +37,7 @@ const plain = (xml: string) => xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
 describe('DOCX export', () => {
   it('contains every section in order without Prompt Result', async () => {
     const text = plain(await docXml(false));
-    const titles = ['Overview', 'Clause Breakdown', 'Dates and Amounts', 'Obligations by Party', 'Timeline', 'Risk Register', 'Internal Inconsistencies', 'Coverage'];
+    const titles = ['Overview', 'Clause Breakdown', 'Dates and Amounts', 'Obligations by Party', 'Risk Register', 'Internal Inconsistencies', 'Coverage'];
     let at = -1;
     for (const [i, title] of titles.entries()) {
       const found = text.indexOf(`${i + 1}. ${title}`, at + 1);
@@ -50,7 +50,7 @@ describe('DOCX export', () => {
 
   it('adds Prompt Result as section 2 and renumbers the rest', async () => {
     const text = plain(await docXml(true));
-    const order = ['1. Overview', '2. Prompt Result', '3. Clause Breakdown', '4. Dates and Amounts', '9. Coverage'];
+    const order = ['1. Overview', '2. Prompt Result', '3. Clause Breakdown', '4. Dates and Amounts', '8. Coverage'];
     let at = -1;
     for (const title of order) {
       const found = text.indexOf(title, at + 1);
