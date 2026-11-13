@@ -279,3 +279,16 @@
   display: block;
   max-width: 100%;
 }
+
+.ana-export {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+
+.ana-export-error {
+  color: var(--app-danger);
+  font-size: 13px;
+}

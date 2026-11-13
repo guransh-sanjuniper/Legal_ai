@@ -6,6 +6,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 
 ## Stack
 - React + Vite SPA (`src/`), TypeScript
+- `docx` produces the Word export in the browser; no server build step.
 - Browser IndexedDB via `idb` (documents with PDF Blob, pages, chunks, embeddings, tasks, raw_responses, ocr_decisions, run_state)
 - Supabase (local CLI + Docker): Postgres, Auth, Edge Functions. RLS off (throwaway).
 - Hosted Supabase for the app shell: `npm run dev:hosted` reads `.env.hosted`; local `npm run dev` reads `.env.local`. The `ai-proxy` proxy is the same function in both. See `docs/hosted-supabase.md`.
@@ -119,6 +120,11 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Report model (`reportModel.ts`, pure, shared with the exports): sections numbered in code (Prompt Result only when used); Defined Terms absent. Unnumbered entries are placed by their verified quotes, then by their chunk's clause list (`chunkClauses`), else kept as separate rows and counted. Numbered entries with the same clause number merge: longest non-empty text per field, unioned lists, deduplicated items. Merge stats appear in the Clause Breakdown.
 - Prose fields (summary, conditions, rights, etc.) are model-written and cited to clause/page. Quoted text is always verified text. Dates, Amounts and Location mismatch rows appear only when present.
 - Citation click opens the stored PDF page in a right-hand panel; the quote is highlighted by `citationLocate.ts` when it can be found on the page.
+- Export (`src/export/`): `blocks.ts` turns a `ReportModel` into one ordered block list (title, metadata, static TOC, headings, paragraphs, lists, tables, footer). The DOCX (`docx.ts`) and HTML (`html.ts`) writers render only those blocks, so both match the screen exactly and neither invents content. Exports are built from the in-memory model, so a report restored from Supabase exports identically.
+- DOCX: real tables, built-in Heading 1/2/3, static TOC (numbers and titles, no page numbers), footer with "AI-assisted, requires lawyer review" and page numbers, citations as "Clause N · p. X", model-written labels kept, priority as plain text (no shading). Headings keep with the following table.
+- HTML: one self-contained file (inline CSS, no external requests), light and dark by preference, print rules, repeated table headers. The TOC is a list without markers because the numbers are in the text.
+- Export bar on the report view; file name is the document name plus the date. Large reports show clause progress and yield every 20 clauses while blocks are built.
+- `scripts/render-export-check.ts` renders the fixture for a LibreOffice/PDF layout check (bundle with esbuild; not part of the app).
 - Reviewing for (Licensor / Licensee / Neutral, default Neutral) is stored with the run. It frames risk priorities, suggestions and the custom answer only; it never limits what is reported.
 - Risk prompt lists material one-sided patterns (repairs on one party, penalty formulas, entry without notice, asymmetric notice, forfeiture, unilateral escalation, court waivers) and asks for Act names, never section numbers. High guard unchanged.
 - Missing pass: gets the clause list and the document type; prompt lists typical protections for that type. A claim is dropped only when a search hit is a keyword hit (keyword score above zero) with fused score at least 1/110 (`COVER_MIN_FUSED`). A weak vector-only hit never drops a claim. Measured on a two-page contract in `coverGate.test.ts`: fused scores alone cannot separate present from absent topics, keyword hits can. The cross-clause gap check uses the same gate.
@@ -134,6 +140,7 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - `npm run build` type-check + local build (asset copy first)
 - `npm run build:hosted` type-check + hosted build (`--mode hosted`; asset copy first)
 - `node scripts/copy-pdfjs-assets.mjs` copies pdf.js wasm/cmaps/standard fonts into `public/`
+- `npx esbuild scripts/render-export-check.ts --bundle --platform=node --format=esm --define:import.meta.env='{}' --outfile=$HOME/render.mjs && node $HOME/render.mjs out.docx|out.html` renders the export fixture for a layout check
 - `npm test` unit tests (runTask with fake-indexeddb, chunker, page quality, OCR output check, library status)
 - `python3 tests/fixtures/make_fixtures.py` regenerates test PDFs (scanned30.pdf is gitignored)
 - `python3 scripts/plant_facts.py --out tests/fixtures/planted.pdf --golden tests/golden/planted.json` regenerates the planted-fact PDF and golden file (synthetic text only; add `--seed`, `--pages`, `--facts`)
