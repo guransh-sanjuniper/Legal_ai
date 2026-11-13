@@ -52,10 +52,42 @@ export const COVER_MIN_FUSED = 1 / 110;
 export interface CoverageHit {
   fused: number;
   keywordScore?: number;
+  // The matched text of the hit, used to check the topic's own words actually appear.
+  windowText?: string;
+  pageStart?: number;
 }
 
-export function hitCoversTopic(hits: CoverageHit[]): boolean {
-  return hits.some((h) => (h.keywordScore ?? 0) > 0 && h.fused >= COVER_MIN_FUSED);
+// Words that say nothing about the topic itself.
+const GENERIC = new Set(
+  `law laws act acts clause clauses party parties agreement contract document documents term terms provision provisions
+   payment payments amount amounts process mechanics who pays payer and the of to for in on with or a an is are be should
+   shall must any all this that by from as at`.split(/\s+/),
+);
+
+const normaliseWords = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+// Six-character stem, so "refund" matches "refund mechanics" and "indemnity" matches "indemnify".
+const stem = (w: string) => w.slice(0, Math.min(6, w.length));
+
+export function coreTerms(topic: string): string[] {
+  return [...new Set(normaliseWords(topic).split(' ').filter((w) => w && !GENERIC.has(w)))];
+}
+
+// A hit covers the topic only when the matched text contains the topic's own words: the full
+// phrase, or every non-generic core term (compared by stem). A hit that only contains a generic
+// word such as "law" never covers.
+export function hitCoversTopic(hits: CoverageHit[], topic: string): boolean {
+  const terms = coreTerms(topic);
+  const phrase = normaliseWords(topic);
+  return hits.some((h) => {
+    if ((h.keywordScore ?? 0) <= 0 || h.fused < COVER_MIN_FUSED) return false;
+    const text = normaliseWords(h.windowText ?? '');
+    if (!text) return false;
+    if (phrase && text.includes(phrase)) return true;
+    if (terms.length === 0) return false;
+    const words = new Set(text.split(' ').filter(Boolean).map(stem));
+    return terms.every((t) => words.has(stem(t)));
+  });
 }
 
 export interface MissingCheckResult {
@@ -66,6 +98,7 @@ export interface MissingCheckResult {
   coveredInDocument: number;
   unchecked: number;
   proposed: number;
+  drops: MissingDrop[];
 }
 
 export interface MissingDrop {
@@ -88,6 +121,7 @@ export async function keepMissingClaims(
   let coveredInDocument = 0;
   let unchecked = 0;
   let proposed = 0;
+  const drops: MissingDrop[] = [];
   for (const raw of items) {
     if (!isValidMissingItem(raw)) continue;
     const o = raw as Record<string, unknown>;
@@ -109,8 +143,10 @@ export async function keepMissingClaims(
     if (searchFailed) {
       unchecked++;
       hits = null;
-    } else if (hits && hitCoversTopic(hits)) {
+    } else if (hits && hitCoversTopic(hits, topic)) {
       coveredInDocument++;
+      const best = [...hits].sort((a, b) => b.fused - a.fused)[0];
+      drops.push({ topic, page: best?.pageStart ?? 0, fused: best?.fused ?? 0, keywordScore: best?.keywordScore ?? 0 });
       continue;
     }
 
@@ -133,5 +169,5 @@ export async function keepMissingClaims(
     if (hits === null || hits.length === 0) possiblyMissing.push(claim);
     else kept.push(claim);
   }
-  return { kept, possiblyMissing, coveredInDocument, unchecked, proposed };
+  return { kept, possiblyMissing, coveredInDocument, unchecked, proposed, drops };
 }

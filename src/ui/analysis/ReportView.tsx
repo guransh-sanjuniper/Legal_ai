@@ -363,6 +363,18 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
               <RiskTable rows={section.possiblyMissing} onCite={onCite} />
             </>
           )}
+          {section.missingDrops.length > 0 && (
+            <details className="ana-drops">
+              <summary>Dropped by search ({section.missingDrops.length})</summary>
+              <ul className="ana-list">
+                {section.missingDrops.map((d, i) => (
+                  <li key={i}>
+                    {d.topic} — matched on page {d.page || 'unknown'}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           {section.drops.length > 0 && (
             <details className="ana-drops">
               <summary>Validation drops ({section.drops.length})</summary>

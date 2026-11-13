@@ -183,6 +183,10 @@ function sectionBlocks(section: ReportSection, model: ReportModel): Block[] {
         out.push({ kind: 'heading', level: 3, text: 'Possibly missing (not verified by search)' });
         out.push(riskTable(section.possiblyMissing));
       }
+      if (section.missingDrops.length > 0) {
+        out.push({ kind: 'paragraph', text: `Dropped by search (${section.missingDrops.length})`, muted: true });
+        out.push({ kind: 'bullets', items: section.missingDrops.map((d) => `${d.topic} — matched on page ${d.page || 'unknown'}`) });
+      }
       if (section.drops.length > 0) {
         out.push({ kind: 'paragraph', text: `Validation drops (${section.drops.length})`, muted: true });
         out.push({ kind: 'bullets', items: section.drops.map((d) => `Clause ${d.clause}: ${d.issue} — ${d.reason}`) });

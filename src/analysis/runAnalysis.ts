@@ -14,6 +14,7 @@ import { findInconsistencies } from './inconsistencyChecks';
 import { inferAffects, protectsFromDrop } from './riskGuard';
 import { dropGapClaims, fallbackSummary } from './summaryGuard';
 import { normaliseClauseNo } from './reportModel';
+import { selectStatutoryLaws } from './statutory';
 import { blankAffectsTerm, extractDraftingIssues } from './textQuality';
 import {
   buildClausePrompt,
@@ -80,6 +81,7 @@ export interface SearchHitLite {
   pageEnd: number;
   fused: number;
   keywordScore?: number;
+  windowText?: string;
 }
 
 export interface AnalysisOptions {
@@ -133,12 +135,6 @@ export function isValidClauseItem(x: unknown): boolean {
 const arrOf = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
-// Small, generic fallback when the statutory call yields nothing. Names only.
-function docTypeFallbackLaws(docType: string | null): string[] {
-  if (docType === 'lease') return ['Maharashtra Rent Control Act', 'Indian Stamp Act 1899', 'Registration Act 1908'];
-  if (docType === 'agreement' || docType === 'deed' || docType === 'notice') return ['Indian Stamp Act 1899', 'Registration Act 1908'];
-  return ['Indian Stamp Act 1899'];
-}
 
 // Chunk index from a task id such as "<run>:a3" or "<run>:r3/retry0" (-1 when not a chunk task).
 export function taskChunkIndex(taskId: string): number {
@@ -686,6 +682,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   let missingStats: MissingStats = { proposed: 0, kept: 0, droppedCovered: 0, possiblyMissing: 0, passRan: false };
   let missingUnchecked = 0;
   let missingFailed = 0;
+  let missingDrops: { topic: string; page: number; fused: number; keywordScore: number }[] = [];
   if (verifiedClauses.length > 0) {
     const clauseInputs: MissingInputClause[] = verifiedClauses.map((c) => ({
       id: c.itemId,
@@ -719,6 +716,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       possiblyMissing: checked.possiblyMissing.length,
       passRan: true,
     };
+    missingDrops = checked.drops;
     progress(
       `missing protections: ${checked.proposed} proposed, ${checked.kept.length} kept, ${checked.coveredInDocument} dropped by search, ` +
         `${checked.possiblyMissing.length} unverified`,
@@ -845,7 +843,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     try {
       const hits = await opts.docSearch(candidate.label, 5);
       if (!Array.isArray(hits)) throw new Error('document search returned no result list');
-      found = hitCoversTopic(hits);
+      found = hitCoversTopic(hits, candidate.label);
     } catch (e) {
       checked = false;
       log(`document search failed for "${candidate.label}": ${String(e)}`);
@@ -1026,13 +1024,13 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     modelSentences.push(...guarded.kept.map((k) => ({ point: SUMMARY_POINT, text: k.text, cites: k.cites })));
   }
 
-  // Statutory Compliance: Acts the model proposes for this document type, merged with the Acts the
-  // risks already name. Names only, always labelled model knowledge.
+  // Statutory Compliance: Acts engaged by a risk or missing item, plus the Acts central to the
+  // document type. A proposed Act is kept only when it is central; unrelated Acts are omitted.
   let proposedLaws: string[] = [];
   if (verifiedClauses.length > 0) {
     const plan: TaskPlan = {
       suffix: 'laws',
-      promptVersion: 'statutory-laws-v1',
+      promptVersion: 'statutory-laws-v2',
       prompt: buildStatutoryPrompt(),
       input: `Document type: ${doc.docType ?? 'unknown'}\n\nClause summaries:\n${JSON.stringify(
         verifiedClauses.slice(0, 120).map((c) => ({ clause: c.clauseNo, type: c.type, summary: c.summary })),
@@ -1049,15 +1047,16 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       .filter(Boolean)
       .slice(0, 8);
   }
-  if (proposedLaws.length === 0) proposedLaws = docTypeFallbackLaws(doc.docType ?? null);
   const engaged = lawsEngaged(verifiedClauses, missingProtections);
-  const knownLaws = new Set(engaged.map((l) => lawKey(l.name)));
-  const statutory = [
-    ...statutorySentences(engaged),
-    ...proposedLaws
-      .filter((name) => !knownLaws.has(lawKey(name)))
-      .map((name) => ({ text: `${name} (model knowledge, applicability unverified).`, cites: [] as string[] })),
-  ];
+  const statutoryLaws = selectStatutoryLaws({
+    engaged: engaged.map((l) => ({ name: l.name, clauses: l.clauses })),
+    docType: doc.docType ?? null,
+    proposed: proposedLaws,
+  });
+  const engagedByKey = new Map(engaged.map((l) => [lawKey(l.name), l.itemIds]));
+  const statutory = statutorySentences(
+    statutoryLaws.map((l) => ({ name: l.name, clauses: l.clauses, itemIds: engagedByKey.get(lawKey(l.name)) ?? [] })),
+  );
 
   const overviewPoints = assembleOverviewPoints({ model: modelSentences, statutory, notable, inconsistencies });
   let overview: RollupSentence[] = overviewPoints.flatMap((p) => p.sentences).filter((s) => s.cites.length > 0);
@@ -1245,6 +1244,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     missingProtections,
     possiblyMissing,
     missingStats,
+    missingDrops,
     riskReview,
     draftingIssues,
     summaryStats,

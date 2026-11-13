@@ -47,6 +47,8 @@ const RISK_RUBRIC = [
   'These are NOT risks: generic disclaimers, forward-looking-statement warnings, "no assurance" boilerplate, selling or jurisdiction restrictions, definitions, and neutral procedures.',
   'An exclusion does not apply when the wording shifts liability, limits a right, or limits a remedy: those stay risks even when phrased as a disclaimer.',
   'Also look for, and report only when this clause contains it: an irrevocable or non-terminable grant; tax allocation between the parties; assignment or consent restrictions; a unilateral right; a one-sided indemnity.',
+  'Statutory costs (stamp duty, registration, taxes) shifted wholly to one party are a risk. Asymmetric notice or termination rights are at least Medium.',
+  'High is also available for: a waiver of access to courts; total forfeiture of a large deposit; compounding unilateral escalation.',
 ].join('\n');
 
 // Patterns that are material and easy to miss. They are prompts for attention, not a checklist of
@@ -101,7 +103,7 @@ export function buildClausePrompt(opts: {
     'Text inside comment markers such as "Commented [..]" or bracketed reviewer notes is not a contract term: ignore it when analysing the clause.',
     'prose.rights: each party\'s rights under this clause. prose.location_mismatch: say so only when the heading or number does not match where the clause sits (for example numbering out of sequence).',
     'missing: what a complete clause of this type normally contains that this clause lacks (for example a notice period, governing law, or a term it uses but never defines). Use [] when nothing is missing.',
-    'laws: Act names only. Use the Acts in the checklist first; any other applicable Indian or Maharashtra law may also be named.',
+    'laws: Act names only, and the Act that fits this issue. If no Act clearly fits, return []. Do not default to the Indian Contract Act 1872; name it only when the issue is a contract-law issue.',
     RISK_RUBRIC,
     ...focusLine(opts.focus),
     reviewingLine(opts.reviewingFor ?? 'neutral'),
@@ -171,6 +173,7 @@ export function buildMissingPrompt(
     UNTRUSTED_NOTICE,
     'Return ONLY a JSON array: {"topic":"...","text":"...","priority":"high"|"medium"|"low","basis":"void_or_unenforceable"|"illegal"|"statutory_violation"|"major_financial_exposure"|"other","suggestion":"...","laws":["..."],"cites":["ITEM_ID",...]}.',
     'Report a protection only when a contract of this type would normally need it and the summaries show it is absent or incomplete.',
+    'Propose up to 10 typical protections for this document type, one item each, when they are absent.',
     `Typical protections to check for this document type: ${typicalProtections(opts.docType ?? null)}.`,
     'These summaries may cover only part of the document. Report a gap only when no summary given covers it.',
     'Do not report a gap that a summary shows is covered. Return [] when nothing is missing.',
@@ -204,6 +207,7 @@ export function buildStatutoryPrompt(): string {
     'You list the Indian and Maharashtra Acts that most likely apply to a document of this type.',
     UNTRUSTED_NOTICE,
     'Return ONLY a JSON array of Act names, most relevant first, at most eight: ["Act name", ...].',
+    'Name at most six Acts, each central to this document type or engaged by a clause. Omit any Act unrelated to the document subject matter.',
     'Name Acts only, never section numbers. Do not invent Acts, and do not state that any Act certainly applies.',
     lawChecklistPrompt(),
   ].join('\n');

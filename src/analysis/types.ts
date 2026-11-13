@@ -279,6 +279,8 @@ export interface AnalysisReport {
   missingProtections?: MissingProtection[];
   possiblyMissing?: MissingProtection[];
   missingStats?: MissingStats;
+  // Claims dropped because the search matched them, with the hit page.
+  missingDrops?: { topic: string; page: number; fused: number; keywordScore: number }[];
   riskReview?: RiskReviewStats;
   draftingIssues?: DraftingIssues;
   summaryStats?: SummaryStats;

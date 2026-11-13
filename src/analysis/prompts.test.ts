@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildClausePrompt, buildMissingPrompt } from './prompts';
+import { buildClausePrompt, buildMissingPrompt, buildStatutoryPrompt } from './prompts';
 import { normaliseRequest } from './request';
 
 describe('clause prompt', () => {
@@ -38,5 +38,24 @@ describe('request reviewing side', () => {
     expect(normaliseRequest({}).reviewingFor).toBe('neutral');
     expect(normaliseRequest({ reviewingFor: 'licensor' }).reviewingFor).toBe('licensor');
     expect(normaliseRequest({ reviewingFor: 'both' }).reviewingFor).toBe('neutral');
+  });
+
+  it('does not default law references to the Contract Act, and lists the material cost risks', () => {
+    const p = buildClausePrompt({ docType: 'lease', detail: 'standard' });
+    expect(p).toMatch(/Do not default to the Indian Contract Act 1872/);
+    expect(p).toMatch(/returns? \[\]|return \[\]/);
+    expect(p).toMatch(/Statutory costs \(stamp duty, registration, taxes\) shifted wholly to one party/);
+    expect(p).toMatch(/Asymmetric notice or termination rights are at least Medium/);
+    expect(p).toMatch(/waiver of access to courts/);
+  });
+
+  it('asks the missing pass for up to ten protections', () => {
+    expect(buildMissingPrompt({ docType: 'lease' })).toMatch(/up to 10 typical protections/);
+  });
+
+  it('caps statutory compliance at six Acts and omits unrelated ones', () => {
+    const p = buildStatutoryPrompt();
+    expect(p).toMatch(/at most six Acts/);
+    expect(p).toMatch(/Omit any Act unrelated to the document subject matter/);
   });
 });

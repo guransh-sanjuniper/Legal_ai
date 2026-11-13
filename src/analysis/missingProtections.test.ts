@@ -1,12 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { keepMissingClaims, missingPlans, isValidMissingItem } from './missingProtections';
+import { coreTerms, hitCoversTopic, keepMissingClaims, missingPlans, isValidMissingItem } from './missingProtections';
 import { NO_SUGGESTION } from './rubric';
 
 const none = async () => [];
 // A keyword hit: the topic's words occur on a page. Its fused score is at least 1/110.
-const keywordHit = async () => [{ fused: 1 / 61, keywordScore: 2.1 }];
+const keywordHit = async (topic: string) => [{ fused: 1 / 61, keywordScore: 2.1, windowText: `${topic} clause` }];
 // A weak vector-only hit: no keyword match, only the dense list ranked it.
 const vectorOnly = async () => [{ fused: 1 / 61, keywordScore: 0 }];
+
+describe('coverage gate: the topic\'s own words', () => {
+  const hit = (windowText: string) => [{ fused: 1 / 61, keywordScore: 2, windowText }];
+
+  it('accepts the full phrase', () => {
+    expect(hitCoversTopic(hit('Clause 9: this agreement is governed by the laws of India; governing law and jurisdiction lie in Pune.'), 'governing law')).toBe(true);
+  });
+
+  it('does not accept a hit that contains only a generic word', () => {
+    expect(hitCoversTopic(hit('The parties shall comply with the law from time to time.'), 'governing law')).toBe(false);
+    expect(hitCoversTopic(hit('The parties record the governing of the site.'), 'jurisdiction')).toBe(false);
+  });
+
+  it('matches core terms by stem: refund covers refund mechanics, indemnity covers indemnify', () => {
+    expect(hitCoversTopic(hit('The deposit refund will be processed within 30 days.'), 'refund mechanics')).toBe(true);
+    expect(hitCoversTopic(hit('The Supplier shall indemnify the Buyer against claims.'), 'indemnity')).toBe(true);
+  });
+
+  it('keeps only non-generic core terms', () => {
+    expect(coreTerms('who pays duties')).toEqual(['duties']);
+  });
+});
 
 describe('missing protections', () => {
   it('keeps a claim only when the document search finds nothing', async () => {
@@ -15,7 +37,7 @@ describe('missing protections', () => {
       { topic: 'notice period', text: 'No notice period.', priority: 'high', basis: 'illegal', suggestion: 'Add one.', laws: [], cites: [] },
     ];
     const weak = { fused: 1 / 61, keywordScore: 0 };
-    const kept = await keepMissingClaims(items, new Set(['C1:1:1']), async (q) => (q === 'notice period' ? [weak] : [{ fused: 1 / 61, keywordScore: 2 }]));
+    const kept = await keepMissingClaims(items, new Set(['C1:1:1']), async (q) => (q === 'notice period' ? [weak] : keywordHit(q)));
     expect(kept.kept.map((m) => m.topic)).toEqual(['notice period']);
     expect(kept.coveredInDocument).toBe(1);
     expect(kept.kept[0]).toMatchObject({ itemId: 'M1', severity: 'high', applicability: 'unverified' });
@@ -67,7 +89,7 @@ describe('missing protections', () => {
   });
 
   it('treats a keyword hit as coverage, so the claim is dropped', async () => {
-    const r = await keepMissingClaims([{ topic: 'deposit', text: 't', priority: 'low', basis: 'other', suggestion: 's' }], new Set(), keywordHit);
+    const r = await keepMissingClaims([{ topic: 'deposit', text: 't', priority: 'low', basis: 'other', suggestion: 's' }], new Set(), (q) => keywordHit(q));
     expect(r.kept).toEqual([]);
     expect(r.coveredInDocument).toBe(1);
   });

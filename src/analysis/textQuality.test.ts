@@ -50,6 +50,14 @@ describe('drafting issues', () => {
     expect(issues.blankCount).toBe(1);
   });
 
+  it('excludes a party label followed by a name and underscores', () => {
+    const text = ['1. Payment', 'The Buyer shall pay Rs. ____ on completion.', 'Licensor: Ramesh ____'].join('\n');
+    const p = pages([text]);
+    const issues = extractDraftingIssues(p, buildAnchorIndex(p));
+    expect(issues.blankCount).toBe(1);
+    expect(issues.groups.flatMap((g) => g.blanks).some((b) => /Licensor/.test(b))).toBe(false);
+  });
+
   it('excludes party labels, witness and presence lines in any format', () => {
     const text = [
       '1. Payment',

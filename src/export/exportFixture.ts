@@ -154,6 +154,7 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
     missingLine: '1 proposed, 1 kept, 0 dropped by search.',
     possiblyMissing: [],
     drops: [],
+    missingDrops: [],
     missing: [
       risk({
         priority: 'medium',

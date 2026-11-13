@@ -137,6 +137,7 @@ export type ReportSection =
       reviewLine: string | null;
       missingLine: string | null;
       drops: { clause: string; issue: string; reason: string }[];
+      missingDrops: { topic: string; page: number }[];
     })
   | (SectionBase<'inconsistencies'> & { findings: { text: string; citations: Citation[] }[] })
   | (SectionBase<'coverage'> & { lines: string[] });
@@ -590,6 +591,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
     reviewLine,
     missingLine,
     drops: rr?.drops ?? [],
+    missingDrops: (report.missingDrops ?? []).map((d) => ({ topic: d.topic, page: d.page })),
   });
 
   const findings = report.crossClause.findings

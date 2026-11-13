@@ -18,12 +18,14 @@ const SIGNATURE_START =
 // never an ordinary sentence that happens to end in underscores.
 const PARTY_SIGNATURE =
   /^\s*(?:[A-Z]{2,}(?:[ .&()'-]+[A-Z]{2,}){0,5}|[A-Z][a-z]+(?:[ .&()'-]+[A-Z][a-z]+){0,3})\s*[:\-]?\s*_{3,}/;
+// "Licensor: Name ____" and similar: a label, a short name, then the blank.
+const PARTY_NAME_BLANK = /^\s*[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2}\s*:\s*[A-Za-z][A-Za-z .'-]{0,40}_{3,}/;
 const SIGNATURE_WORD = /\b(witness|witnesses|signed|signature|in the presence of)\b/i;
 const BLOCK_END = /^\s*(schedule|annexure|part\s+[A-Z0-9]|article\s+[A-Z0-9])\b/i;
 const OPERATIVE_CLAUSE = /^\s*\d{1,3}(?:\.\d{1,3})*[.)]\s+\S/;
 
 export function isSignatureLine(line: string): boolean {
-  return SIGNATURE_START.test(line) || PARTY_SIGNATURE.test(line) || SIGNATURE_WORD.test(line);
+  return SIGNATURE_START.test(line) || PARTY_SIGNATURE.test(line) || PARTY_NAME_BLANK.test(line) || SIGNATURE_WORD.test(line);
 }
 
 // Lines excluded from the blanks count, per page, in source order.
