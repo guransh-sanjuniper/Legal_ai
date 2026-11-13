@@ -72,6 +72,9 @@ export function scriptedModel(req: CallRequest): string {
         ],
         missing: ['No notice period'],
         prose: { detailed_summary: 'Detailed text.', rights: '' },
+        ...(req.prompt.includes('promptAnswer')
+          ? { promptAnswer: [{ page: Number(n), quote: `The Developer shall perform obligation ${n}.`, clause_no: n }] }
+          : {}),
       })),
     );
   }

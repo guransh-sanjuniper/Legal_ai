@@ -117,6 +117,9 @@ export type ReportSection =
     })
   | (SectionBase<'promptResult'> & {
       prompt: string;
+      // How the answer was produced, and how many sections were read.
+      modeLine: string | null;
+      canScanWhole: boolean;
       // One answer in prose. Sentences cite verified chunk answers.
       answer: { text: string; citations: Citation[] }[];
       // Supporting quotes, grouped by clause.
@@ -482,6 +485,15 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       title: TITLES.promptResult,
       number: 0,
       prompt: pr.prompt,
+      modeLine:
+        pr.mode === 'retrieval'
+          ? `Based on the ${pr.selectedChunks ?? 0} most relevant sections of ${pr.chunksTotal}.`
+          : pr.mode === 'whole'
+            ? `Whole-document scan (${pr.chunksTotal} sections).`
+            : pr.mode === 'inline'
+              ? 'Answered with the clause analysis, with no extra reading pass.'
+              : null,
+      canScanWhole: pr.mode === 'retrieval',
       answer,
       groups: [...grouped.values()],
       failed: pr.failedChunks.map((f) => `pages ${f.pages[0]}–${f.pages[1]}: ${f.message ?? f.failureCode ?? 'not completed'}`),

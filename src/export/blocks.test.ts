@@ -97,6 +97,7 @@ describe('export blocks', () => {
     const text = allText(blocks);
     expect(text).toMatch(/risks after validation/);
     expect(text).toMatch(/Yes, delivery is due within thirty days of the order\./);
+    expect(text).toMatch(/Based on the 2 most relevant sections of 3\./);
     expect(text).toMatch(/Supporting quotes/);
   });
 

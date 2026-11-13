@@ -43,8 +43,9 @@ describe('cost estimate', () => {
     expect(without.synthesisCalls).toBe(0);
     expect(withPrompt.synthesisCalls).toBe(1);
     expect(without.reviewCalls).toBeGreaterThan(0);
-    expect(withPrompt.customCalls).toBe(base.chunkTexts.length);
-    expect(withPrompt.calls).toBe(without.calls + base.chunkTexts.length + withPrompt.synthesisCalls);
+    // Inline prompt: no separate per-chunk pass, only one synthesis call.
+    expect(withPrompt.customCalls).toBe(0);
+    expect(withPrompt.calls).toBe(without.calls + 1);
     expect(withPrompt.costUsd).toBeGreaterThan(without.costUsd);
   });
 

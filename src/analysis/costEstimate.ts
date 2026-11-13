@@ -68,16 +68,16 @@ export function estimateRun(i: EstimateInput): RunEstimate {
   promptTokens += reviewCalls * REVIEW_INPUT_PER_BATCH;
   completionTokens += reviewCalls * REVIEW_OUTPUT_PER_BATCH;
 
+  // The inline prompt rides in the clause call: a short promptAnswer field, no extra calls.
   let customCalls = 0;
   if (i.customPrompt.trim()) {
     const header = `${CUSTOM_PROMPT_HEADER}\nUSER REQUEST: ${i.customPrompt.trim()}\n${CUSTOM_PROMPT_FOOTER}`;
-    const customIn = i.chunkTexts.map((t) => estimateInputTokens(`${header}\n${i.defsContext}\n${t}`));
-    customCalls = i.chunkTexts.length;
-    promptTokens += customIn.reduce((a, b) => a + b, 0);
-    completionTokens += customCalls * Math.min(i.budget, CUSTOM_OUTPUT_CAP);
+    const askTokens = estimateInputTokens(header) - estimateInputTokens(CUSTOM_PROMPT_HEADER + CUSTOM_PROMPT_FOOTER);
+    promptTokens += clauseCalls * Math.max(0, askTokens);
+    completionTokens += clauseCalls * CUSTOM_OUTPUT_CAP;
   }
 
-  const synthesisCalls = customCalls > 0 ? 1 : 0;
+  const synthesisCalls = i.customPrompt.trim() ? 1 : 0;
   if (synthesisCalls) completionTokens += 600;
 
   const calls = clauseCalls + otherCalls + customCalls + reviewCalls + synthesisCalls;

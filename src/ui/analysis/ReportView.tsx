@@ -191,7 +191,17 @@ function RiskTable({ rows, onCite }: { rows: RiskRow[]; onCite: (c: Citation) =>
   );
 }
 
-function SectionBody({ section, onCite, model }: { section: ReportSection; onCite: (c: Citation) => void; model: ReportModel }) {
+function SectionBody({
+  section,
+  onCite,
+  model,
+  onScanWhole,
+}: {
+  section: ReportSection;
+  onCite: (c: Citation) => void;
+  model: ReportModel;
+  onScanWhole?: () => void;
+}) {
   switch (section.key) {
     case 'overview':
       return (
@@ -223,6 +233,12 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
       return (
         <>
           <p className="app-muted">Prompt: “{section.prompt}”</p>
+          {section.modeLine && <p className="app-muted">{section.modeLine}</p>}
+          {section.canScanWhole && onScanWhole && (
+            <button type="button" className="app-link-button" onClick={onScanWhole}>
+              Scan whole document
+            </button>
+          )}
           {section.answer.length === 0 ? (
             <p className="app-muted">Not found in this document.</p>
           ) : (
@@ -417,7 +433,15 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
   }
 }
 
-export function ReportView({ model, onCite }: { model: ReportModel; onCite: (c: Citation) => void }) {
+export function ReportView({
+  model,
+  onCite,
+  onScanWhole,
+}: {
+  model: ReportModel;
+  onCite: (c: Citation) => void;
+  onScanWhole?: () => void;
+}) {
   const t = model.title;
   return (
     <article className="ana-report">
@@ -452,7 +476,7 @@ export function ReportView({ model, onCite }: { model: ReportModel; onCite: (c: 
 
       {model.sections.map((s) => (
         <Card key={s.key} id={`sec-${s.key}`} title={`${s.number}. ${s.title}`} defaultOpen={s.key !== 'clauses'}>
-          <SectionBody section={s} onCite={onCite} model={model} />
+          <SectionBody section={s} onCite={onCite} model={model} onScanWhole={onScanWhole} />
         </Card>
       ))}
 

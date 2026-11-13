@@ -144,6 +144,9 @@ export interface PromptResult {
   answers: PromptAnswer[];
   // Synthesis over the verified answers: the final answer in prose, citing answers.
   answer?: { text: string; cites: string[] }[];
+  // inline: answered inside the clause call; retrieval: selected chunks; whole: every chunk.
+  mode?: 'inline' | 'retrieval' | 'whole';
+  selectedChunks?: number;
   chunksTotal: number;
   chunksDone: number;
   failedChunks: { chunkIndex: number; pages: [number, number]; failureCode: string | null; message: string | null }[];

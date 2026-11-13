@@ -34,13 +34,16 @@ it('retry failed re-runs only the failed tasks, including the custom pass, then 
   const failedFirst = (await db.getAllFromIndex('tasks', 'byRun', first.runId)).filter((t) => t.status === 'failed');
   expect(failedFirst.length).toBeGreaterThan(0);
   expect(first.partial).toBe(true);
-  expect(first.promptResult?.failedChunks.length).toBeGreaterThan(0);
+  // Inline prompt answers ride in the clause call, so a failed clause is the only failed part.
+  expect(first.promptResult?.mode).toBe('inline');
 
-  // Only the first-pass clause and custom tasks are re-planned, so only they can be called again.
-  const expectedReruns = failedFirst.filter((t) => /^(a|c)\d+$/.test(taskSuffix(t.id, first.runId))).length;
+  // Only the first-pass clause tasks are re-planned, so only they can be called again.
+  const expectedReruns = failedFirst.filter((t) => /^a\d+$/.test(taskSuffix(t.id, first.runId))).length;
   expect(expectedReruns).toBeGreaterThan(0);
 
-  const before = new Set((await db.getAllFromIndex('tasks', 'byRun', first.runId)).map((t) => t.id));
+  const beforeTasks = await db.getAllFromIndex('tasks', 'byRun', first.runId);
+  const before = new Set(beforeTasks.map((t) => t.id));
+  const psBefore = beforeTasks.find((t) => t.id.endsWith(':ps'))?.attemptNo ?? 0;
   failing = false;
   calls = 0;
   const second = await runAnalysis({ ...opts, resumeRunId: first.runId, retryFailed: true });
@@ -49,8 +52,11 @@ it('retry failed re-runs only the failed tasks, including the custom pass, then 
   // Retried tasks, plus any pass that could only start once the previously failed page had clauses.
   const after = await db.getAllFromIndex('tasks', 'byRun', first.runId);
   const newDone = after.filter((t) => !before.has(t.id) && t.status === 'done').length;
-  expect(calls).toBe(expectedReruns + newDone);
-  expect((await db.getAllFromIndex('tasks', 'byRun', first.runId)).filter((t) => t.status === 'failed' && /^(a|c)\d+$/.test(taskSuffix(t.id, first.runId)))).toHaveLength(0);
+  // The synthesis is re-run because its input changed; it keeps the same task id.
+  const psAfter = after.find((t) => t.id.endsWith(':ps'))?.attemptNo ?? 0;
+  const resynthesised = psAfter > psBefore ? 1 : 0;
+  expect(calls).toBe(expectedReruns + newDone + resynthesised);
+  expect((await db.getAllFromIndex('tasks', 'byRun', first.runId)).filter((t) => t.status === 'failed' && /^a\d+$/.test(taskSuffix(t.id, first.runId)))).toHaveLength(0);
   expect(second.failedClauses).toEqual([]);
   expect(second.partial).toBe(false);
   expect(second.promptResult?.failedChunks).toEqual([]);

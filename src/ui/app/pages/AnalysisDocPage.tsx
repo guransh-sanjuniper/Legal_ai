@@ -23,6 +23,9 @@ import { RunPanel, type FailedRow, type RunProgress } from '../../analysis/RunPa
 import { ReportView } from '../../analysis/ReportView';
 import { CitationPanel } from '../../analysis/CitationPanel';
 import { ExportBar } from '../../analysis/ExportBar';
+import { PromptBox, type PromptBoxState } from '../../analysis/PromptBox';
+import { promptOnReport } from '../../../analysis/promptOnReport';
+import { PROMPT_RETRIEVAL_CHUNKS } from '../../../analysis/config';
 import { freshToken, functionsEndpoint, readRunRecord, withDocumentLock, writeRunRecord, taskLabel, type RunRecord } from '../../analysis/runtime';
 import '../../analysis/analysis.css';
 
@@ -59,6 +62,8 @@ export function AnalysisDocPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [citation, setCitation] = useState<Citation | null>(null);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
 
   const retrieval = useRef<RetrievalClient | null>(null);
   const planRef = useRef<Plan | null>(null);
@@ -260,6 +265,47 @@ export function AnalysisDocPage() {
     }
   }
 
+  async function runFollowUpPrompt(state: PromptBoxState) {
+    if (!db || !doc || !report || !supabase || !session) return;
+    setPromptBusy(true);
+    setPromptError(null);
+    try {
+      const token = await freshToken();
+      if (!token) throw new Error('Sign in again to run the prompt.');
+      const res = await promptOnReport({
+        db,
+        supabase,
+        accessToken: token,
+        refreshAccessToken: freshToken,
+        userId: session.user.id,
+        ...functionsEndpoint(),
+        docId: doc.id,
+        model: ANALYSIS_MODEL,
+        fallbackModel: FALLBACK_MODEL,
+        reasoning: { effort: 'minimal' },
+        prompt: state.prompt,
+        mode: state.mode,
+        reviewingFor: report.request?.reviewingFor ?? 'neutral',
+        search: async (q, k) => {
+          const r = await retrieval.current!.search(doc.id, q, k);
+          return Array.isArray(r?.results) ? r.results : [];
+        },
+        selectCount: PROMPT_RETRIEVAL_CHUNKS,
+        onProgress: (m) => setStatus(m),
+      });
+      const updated = { ...report, promptResult: res.result };
+      setReport(updated);
+      setModel(buildReportModel(updated));
+      await db.put('analysis_reports', { runId: report.runId, docId: doc.id, report: updated, savedAt: Date.now() });
+      const { error } = await supabase.from('reports').insert({ run_id: res.runId, body: updated, coverage: updated.ledger });
+      if (error) setPromptError(`Saved locally; Supabase save failed: ${error.message}`);
+    } catch (e) {
+      setPromptError(String(e));
+    } finally {
+      setPromptBusy(false);
+    }
+  }
+
   if (doc === undefined) {
     return (
       <>
@@ -351,7 +397,19 @@ export function AnalysisDocPage() {
           {model ? (
             <>
               <ExportBar model={model} documentName={doc.name} />
-              <ReportView model={model} onCite={setCitation} />
+              <PromptBox
+                totalChunks={plan?.chunks.length ?? 0}
+                avgChunkTokens={plan ? Math.round(plan.chunks.reduce((n, c) => n + c.pageMarkedText.length / 4, 0) / Math.max(1, plan.chunks.length)) : 0}
+                retrievalCount={PROMPT_RETRIEVAL_CHUNKS}
+                busy={promptBusy}
+                onRun={(s) => void runFollowUpPrompt(s)}
+              />
+              {promptError && <div className="app-banner app-banner--error">{promptError}</div>}
+              <ReportView
+                model={model}
+                onCite={setCitation}
+                onScanWhole={() => void runFollowUpPrompt({ prompt: report?.promptResult?.prompt ?? '', mode: 'whole' })}
+              />
             </>
           ) : (
             <p className="app-muted">No report yet. Start an analysis above.</p>

@@ -76,7 +76,9 @@ export function buildClausePrompt(opts: {
   detail: DetailLevel;
   focus?: string;
   reviewingFor?: ReviewingFor;
+  customPrompt?: string;
 }): string {
+  const ask = (opts.customPrompt ?? '').trim();
   return [
     'You analyse one or more clauses of a legal contract.',
     UNTRUSTED_NOTICE,
@@ -89,6 +91,7 @@ export function buildClausePrompt(opts: {
     ' "payments":[{"amount":"...","purpose":"...","payer":"...","payee":"...","due":"...","page":number,"quote":"..."}],',
     ' "risks":[{"text":"...","priority":"high"|"medium"|"low","basis":"void_or_unenforceable"|"illegal"|"statutory_violation"|"major_financial_exposure"|"other","suggestion":"...","laws":["..."],"page":number,"quote":"..."}],',
     ' "missing":["..."],',
+    ...(ask ? [' "promptAnswer":[{"page":number,"quote":"...","clause_no":"..."}],'] : []),,
     ' "prose":{"detailed_summary":"...","conditions":"...","exceptions":"...","rights":"...","legal_significance":"...","ambiguity":"...","suggested_action":"...","location_mismatch":"..."}}',
     'Quotes: copy one contiguous span character for character from the text under the cited [page N] marker.',
     'Never use ellipses (...), square brackets, paraphrases or joined fragments; a quote with "..." is rejected.',
@@ -103,6 +106,12 @@ export function buildClausePrompt(opts: {
     'Text inside comment markers such as "Commented [..]" or bracketed reviewer notes is not a contract term: ignore it when analysing the clause.',
     'prose.rights: each party\'s rights under this clause. prose.location_mismatch: say so only when the heading or number does not match where the clause sits (for example numbering out of sequence).',
     'missing: what a complete clause of this type normally contains that this clause lacks (for example a notice period, governing law, or a term it uses but never defines). Use [] when nothing is missing.',
+    ...(ask
+      ? [
+          `The user request is: ${ask}`,
+          'promptAnswer: up to 5 short verbatim quotes from this clause that are relevant to the request, each with its page and clause number. Use [] when nothing here is relevant. No commentary and no long text; this field must stay short.',
+        ]
+      : []),
     'laws: Act names only, and the Act that fits this issue. If no Act clearly fits, return []. Do not default to the Indian Contract Act 1872; name it only when the issue is a contract-law issue.',
     RISK_RUBRIC,
     ...focusLine(opts.focus),
@@ -191,7 +200,7 @@ export function buildMissingPrompt(
 // Common protections by document type. Wording only; the model decides what this document lacks.
 function typicalProtections(docType: DocType | null): string {
   const general =
-    'governing law and forum, a named dispute-resolution route, stamp duty amount and who pays it, registration, refund and deposit mechanics, an indemnity, liability limits, notices and addresses for service, force majeure, assignment and subletting, and an execution and attestation block';
+    'governing law and forum, a named dispute-resolution route, stamp duty amount and who pays it, registration, refund and deposit mechanics, an indemnity, liability limits, notices and addresses for service, force majeure, and assignment and subletting';
   const extra: Partial<Record<DocType, string>> = {
     lease: 'a rent escalation mechanism, maintenance allocation, a security-deposit refund period, entry and inspection notice, renewal and lock-in terms, and a schedule of the premises and fixtures',
     agreement: 'payment milestones, a cure period before termination, delivery or performance standards, and acceptance criteria',

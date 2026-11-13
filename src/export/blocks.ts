@@ -100,6 +100,7 @@ function sectionBlocks(section: ReportSection, model: ReportModel): Block[] {
 
     case 'promptResult': {
       out.push({ kind: 'paragraph', text: `Prompt: “${section.prompt}”`, muted: true });
+      if (section.modeLine) out.push({ kind: 'paragraph', text: section.modeLine, muted: true });
       if (section.answer.length === 0) {
         out.push({ kind: 'paragraph', text: 'Not found in this document.', muted: true });
       } else {

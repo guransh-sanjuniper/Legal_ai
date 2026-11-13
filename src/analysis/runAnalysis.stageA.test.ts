@@ -67,7 +67,15 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(withPrompt.promptResult).toBeDefined();
   expect(withPrompt.promptResult!.failedChunks).toEqual([]);
   expect(withPrompt.promptResult!.answers.length).toBeGreaterThan(0);
-  for (const a of withPrompt.promptResult!.answers) expect(a).toMatchObject({ verified: true, page: 2 });
+  for (const a of withPrompt.promptResult!.answers) {
+    expect(a.verified).toBe(true);
+    expect(a.page).toBeGreaterThanOrEqual(1);
+    expect(a.page).toBeLessThanOrEqual(4);
+  }
+  expect(withPrompt.promptResult!.mode).toBe('inline');
+  // No separate per-chunk prompt pass: those tasks have a "c" suffix.
+  const promptTasks = (await db.getAllFromIndex('tasks', 'byRun', withPrompt.runId)).filter((t) => /:(?:c|cx)\d+/.test(t.id));
+  expect(promptTasks).toHaveLength(0);
   expect(withPrompt.promptResult!.answer?.length).toBeGreaterThan(0);
   expect(withPrompt.promptResult!.answer![0].text).toBe('Clause two states the obligation.');
   expect(withPrompt.riskReview?.reviewed).toBeGreaterThan(0);
@@ -86,6 +94,9 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
 
   const general = await runAnalysis({ ...opts, request: { customPrompt: '   ' } });
   expect(general.promptResult).toBeUndefined();
-  expect(general.clauses.map((c) => c.clauseNo)).toEqual(withPrompt.clauses.map((c) => c.clauseNo));
+  // The general sections and items must be identical with and without a prompt.
+  // This holds for the scripted model; a real model can differ slightly.
+  expect(JSON.stringify(general.clauses)).toEqual(JSON.stringify(withPrompt.clauses));
+  expect(JSON.stringify(general.overviewPoints)).toEqual(JSON.stringify(withPrompt.overviewPoints));
   expect(general.overviewPoints!.map((p) => p.sentences.length)).toEqual(withPrompt.overviewPoints!.map((p) => p.sentences.length));
 }, 180_000);

@@ -22,7 +22,6 @@ import {
   buildOverviewFocusPrompt,
   buildStatutoryPrompt,
   buildOverviewPrompt,
-  buildPromptSynthesisPrompt,
   DISPUTE_POINT,
   EXIT_POINT,
   OVERVIEW_POINTS,
@@ -49,7 +48,8 @@ import {
   statutorySentences,
   type ModelPointSentence,
 } from './overviewPoints';
-import { runPromptPass } from './promptPass';
+import { synthesiseAnswers } from './promptPass';
+import { normalizeQuote } from './verify';
 import {
   applyVerdicts,
   duplicateRiskIds,
@@ -172,6 +172,11 @@ interface RawPayment {
   page?: unknown;
   quote?: unknown;
 }
+interface RawPromptAnswer {
+  page?: unknown;
+  quote?: unknown;
+  clause_no?: unknown;
+}
 interface RawRisk {
   text?: unknown;
   priority?: unknown;
@@ -243,6 +248,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     detail: request.detailLevel,
     focus: request.focus,
     reviewingFor: request.reviewingFor,
+    customPrompt: request.customPrompt || undefined,
   });
   const pages = await loadPageMap(db, docId);
   const index = buildAnchorIndex(pages);
@@ -446,52 +452,11 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   });
   const partialNow = failedClauseTasks.length > 0 || stillMissing.size > 0;
 
-  // 2c. Custom prompt: a separate pass over every analysis chunk. It never changes the general analysis.
-  let promptResult: PromptResult | undefined;
-  if (request.customPrompt) {
-    progress(`running custom prompt over ${chunks.length} chunks`);
-    const pr = await runPromptPass({
-      ctx,
-      runId,
-      doc,
-      chunks,
-      index,
-      defsContext,
-      request: request.customPrompt,
-      reviewingFor: request.reviewingFor,
-      maxTokens: Math.min(budget, 1200),
-    });
-    for (const r of pr.runs) {
-      addLimits(r);
-      await pauseIfNeeded(r);
-    }
-    promptResult = pr.result;
-
-    // One synthesis over the verified answers: the final answer in prose, citing them.
-    // Chunk-level answers stay intermediate and feed the supporting quotes.
-    if (promptResult.answers.length > 0) {
-      const answerIds = new Set(promptResult.answers.map((a) => a.itemId));
-      const plan: TaskPlan = {
-        suffix: 'ps',
-        promptVersion: 'prompt-synthesis-v1',
-        prompt: buildPromptSynthesisPrompt(),
-        input: `USER REQUEST: ${request.customPrompt}\n\nVerified answers:\n${JSON.stringify(
-          promptResult.answers.map((a) => ({ id: a.itemId, text: a.text, clause: a.clause, page: a.page, quote: a.quote })),
-        )}`,
-        maxTokens: 1200,
-        validate: (x) => typeof x === 'object' && x !== null && typeof (x as { text?: unknown }).text === 'string',
-      };
-      const synthRun = await executeTasks(ctx, runId, doc, [plan]);
-      addLimits(synthRun);
-      await pauseIfNeeded(synthRun);
-      const kept = synthRun.collected.flatMap((c) => keepCitedSentences(c.items as never[], answerIds).kept);
-      if (kept.length > 0) promptResult.answer = kept.map((k) => ({ text: k.text, cites: k.cites }));
-    }
-  }
-
+  // 2c. The custom prompt is answered inside the clause call (promptAnswer), with no extra pass.
   // 3. Verification (code). Page and clause come from the resolver.
   let verifiedClauses: VerifiedClause[] = [];
   const drops: DropRecord[] = [];
+  const promptLocated: import('./verify').Located<RawPromptAnswer>[] = [];
   let pageCorrected = 0;
 
   for (const chunk of chunks) {
@@ -521,6 +486,11 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       const allVerified = [...obligations.verified, ...dates.verified, ...payments.verified, ...risks.verified];
       const codeClause = allVerified.length ? topClause(allVerified[0].item.clause) : rawTop;
       const base = `C${chunk.index}:${seenClauses.size}:${codeClause || rawClause}`;
+
+      if (request.customPrompt) {
+        const pa = verifyQuotedItems<RawPromptAnswer>('promptAnswer', arrOf<RawPromptAnswer>(item.promptAnswer), index, range);
+        for (const v of pa.verified) promptLocated.push(v);
+      }
 
       const vObligations: VerifiedObligation[] = obligations.verified.map((v, i) => ({
         itemId: `${base}:ob${i}`,
@@ -602,6 +572,51 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     `verified ${verifiedClauses.length} clauses, dropped ${drops.length} unverified items, corrected ${pageCorrected} pages, ` +
       `deduped ${dedupeStats.removed} repeated items`,
   );
+
+  // 2d. Inline custom prompt: verified promptAnswer quotes from the clause calls, then one
+  // synthesis. There is no separate per-chunk prompt pass.
+  let promptResult: PromptResult | undefined;
+  if (request.customPrompt) {
+    // Retry: the synthesis input changed when clause tasks were re-run, so run it again.
+    if (opts.retryFailed) {
+      const ps = await db.get('tasks', `${runId}:ps`);
+      if (ps) {
+        await db.put('tasks', { ...ps, status: 'queued', failureCode: null, failureMessage: null, nextAt: 0, updatedAt: Date.now() });
+      }
+    }
+    const seenQuote = new Set<string>();
+    const answers = promptLocated
+      .filter((v) => {
+        const key = `${v.item.page}|${normalizeQuote(v.item.quote)}`;
+        if (seenQuote.has(key)) return false;
+        seenQuote.add(key);
+        return true;
+      })
+      .map((v, i) => ({
+        itemId: `PQ${i + 1}`,
+        text: v.item.quote.trim(),
+        clause: v.item.clause,
+        page: v.item.page,
+        quote: v.item.quote,
+        verified: true as const,
+        part: 'support' as const,
+      }));
+    progress(`custom prompt: ${answers.length} verified quote(s) from the clause calls`);
+    const synth = await synthesiseAnswers({ ctx, runId, doc, prompt: request.customPrompt, answers });
+    for (const r of synth.runs) {
+      addLimits(r);
+      await pauseIfNeeded(r);
+    }
+    promptResult = {
+      prompt: request.customPrompt,
+      answers,
+      answer: synth.answer,
+      mode: 'inline',
+      chunksTotal: chunks.length,
+      chunksDone: chunks.length,
+      failedChunks: [],
+    };
+  }
 
   // 3a. Risk validation: a batched review of High and Medium risks, plus duplicate removal.
   // Low risks are not sent. A failed batch leaves its risks as proposed (fail open).

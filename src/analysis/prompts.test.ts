@@ -58,4 +58,17 @@ describe('request reviewing side', () => {
     expect(p).toMatch(/at most six Acts/);
     expect(p).toMatch(/Omit any Act unrelated to the document subject matter/);
   });
+
+  it('asks for short promptAnswer quotes only when a prompt is set, and caps them at five', () => {
+    const without = buildClausePrompt({ docType: 'lease', detail: 'standard' });
+    expect(without).not.toMatch(/promptAnswer/);
+    const withPrompt = buildClausePrompt({ docType: 'lease', detail: 'standard', customPrompt: 'Which clauses state the fee?' });
+    expect(withPrompt).toMatch(/"promptAnswer"/);
+    expect(withPrompt).toMatch(/up to 5 short verbatim quotes/);
+    expect(withPrompt).toMatch(/The user request is: Which clauses state the fee\?/);
+  });
+
+  it('does not ask for an execution and attestation block in the missing pass', () => {
+    expect(buildMissingPrompt({ docType: 'lease' })).not.toMatch(/attestation/);
+  });
 });

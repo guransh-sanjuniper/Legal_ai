@@ -2,10 +2,11 @@ import type { DocumentRecord } from '../runner/db';
 import type { Task } from '../tasks/types';
 import type { AnchorIndex } from './anchors';
 import type { AnalysisChunk } from './analysisChunks';
-import { CUSTOM_PROMPT_FOOTER, CUSTOM_PROMPT_HEADER } from './prompts';
+import { buildPromptSynthesisPrompt, CUSTOM_PROMPT_FOOTER, CUSTOM_PROMPT_HEADER } from './prompts';
 import { reviewingLine } from './request';
 import type { ReviewingFor } from './types';
 import { executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
+import { keepCitedSentences } from './rollup';
 import { normalizeQuote, verifyQuotedItems, type Located } from './verify';
 import type { PromptAnswer, PromptResult } from './types';
 
@@ -138,4 +139,31 @@ export async function runPromptPass(
     },
     runs: retry ? [first, retry] : [first],
   };
+}
+
+// One synthesis over verified quotes/answers: the final answer in prose, citing their ids.
+// Used by the inline (clause-call) mode and the post-report modes.
+export async function synthesiseAnswers(args: {
+  ctx: ExecuteContext;
+  runId: string;
+  doc: DocumentRecord;
+  prompt: string;
+  answers: PromptAnswer[];
+  maxTokens?: number;
+}): Promise<{ answer: { text: string; cites: string[] }[]; runs: ExecuteResult[] }> {
+  if (args.answers.length === 0) return { answer: [], runs: [] };
+  const ids = new Set(args.answers.map((a) => a.itemId));
+  const plan: TaskPlan = {
+    suffix: 'ps',
+    promptVersion: 'prompt-synthesis-v2',
+    prompt: buildPromptSynthesisPrompt(),
+    input: `USER REQUEST: ${args.prompt}\n\nVerified answers:\n${JSON.stringify(
+      args.answers.map((a) => ({ id: a.itemId, text: a.text, clause: a.clause, page: a.page, quote: a.quote })),
+    )}`,
+    maxTokens: args.maxTokens ?? 1200,
+    validate: (x) => typeof x === 'object' && x !== null && typeof (x as { text?: unknown }).text === 'string',
+  };
+  const run = await executeTasks(args.ctx, args.runId, args.doc, [plan]);
+  const kept = run.collected.flatMap((c) => keepCitedSentences(c.items as never[], ids).kept);
+  return { answer: kept.map((k) => ({ text: k.text, cites: k.cites })), runs: [run] };
 }
