@@ -3,7 +3,10 @@ import { keepMissingClaims, missingPlans, isValidMissingItem } from './missingPr
 import { NO_SUGGESTION } from './rubric';
 
 const none = async () => [];
-const found = async () => [{ fused: 0.4 }];
+// A keyword hit: the topic's words occur on a page. Its fused score is at least 1/110.
+const keywordHit = async () => [{ fused: 1 / 61, keywordScore: 2.1 }];
+// A weak vector-only hit: no keyword match, only the dense list ranked it.
+const vectorOnly = async () => [{ fused: 1 / 61, keywordScore: 0 }];
 
 describe('missing protections', () => {
   it('keeps a claim only when the document search finds nothing', async () => {
@@ -11,7 +14,7 @@ describe('missing protections', () => {
       { topic: 'governing law', text: 'No governing law clause.', priority: 'medium', basis: 'other', suggestion: 'Add one.', laws: ['Indian Contract Act 1872'], cites: ['C1:1:1'] },
       { topic: 'notice period', text: 'No notice period.', priority: 'high', basis: 'illegal', suggestion: 'Add one.', laws: [], cites: [] },
     ];
-    const kept = await keepMissingClaims(items, new Set(['C1:1:1']), async (q) => (q === 'notice period' ? [] : [{ fused: 0.4 }]));
+    const kept = await keepMissingClaims(items, new Set(['C1:1:1']), async (q) => (q === 'notice period' ? [] : [{ fused: 1 / 61, keywordScore: 2 }]));
     expect(kept.kept.map((m) => m.topic)).toEqual(['notice period']);
     expect(kept.coveredInDocument).toBe(1);
     expect(kept.kept[0]).toMatchObject({ itemId: 'M1', severity: 'high', applicability: 'unverified' });
@@ -49,10 +52,16 @@ describe('missing protections', () => {
     expect(r.kept).toHaveLength(1);
   });
 
-  it('keeps a search hit as coverage, not as a gap', async () => {
-    const r = await keepMissingClaims([{ topic: 'stamp duty', text: 't', priority: 'low', basis: 'other', suggestion: 's' }], new Set(), found);
+  it('treats a keyword hit as coverage, so the claim is dropped', async () => {
+    const r = await keepMissingClaims([{ topic: 'deposit', text: 't', priority: 'low', basis: 'other', suggestion: 's' }], new Set(), keywordHit);
     expect(r.kept).toEqual([]);
     expect(r.coveredInDocument).toBe(1);
+  });
+
+  it('does not let a weak vector-only hit drop a genuinely missing claim', async () => {
+    const r = await keepMissingClaims([{ topic: 'governing law', text: 't', priority: 'medium', basis: 'other', suggestion: 's' }], new Set(), vectorOnly);
+    expect(r.kept.map((m) => m.topic)).toEqual(['governing law']);
+    expect(r.coveredInDocument).toBe(0);
   });
 
   it('splits clauses into small task groups with the focus in the prompt', () => {

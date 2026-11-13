@@ -15,7 +15,7 @@ import { computeMetrics, createRun, executeTasks, type ExecuteContext, type Exec
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
 import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
 import { NO_SUGGESTION, guardPriority, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf } from './rubric';
-import { isValidMissingItem, keepMissingClaims, missingPlans, type MissingInputClause } from './missingProtections';
+import { hitCoversTopic, isValidMissingItem, keepMissingClaims, missingPlans, type MissingInputClause } from './missingProtections';
 import {
   assembleOverviewPoints,
   keepPointSentences,
@@ -52,6 +52,7 @@ export interface SearchHitLite {
   pageStart: number;
   pageEnd: number;
   fused: number;
+  keywordScore?: number;
 }
 
 export interface AnalysisOptions {
@@ -198,7 +199,12 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   const doc: DocumentRecord | undefined = await db.get('documents', docId);
   if (!doc || doc.status !== 'ready' || !doc.prepFingerprint) throw new Error('document is not ready');
   const request = normaliseRequest(opts.request);
-  const clausePrompt = buildClausePrompt({ docType: doc.docType ?? null, detail: request.detailLevel, focus: request.focus });
+  const clausePrompt = buildClausePrompt({
+    docType: doc.docType ?? null,
+    detail: request.detailLevel,
+    focus: request.focus,
+    reviewingFor: request.reviewingFor,
+  });
   const pages = await loadPageMap(db, docId);
   const index = buildAnchorIndex(pages);
   const chunks = buildAnalysisChunks(pages);
@@ -413,6 +419,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       index,
       defsContext,
       request: request.customPrompt,
+      reviewingFor: request.reviewingFor,
       maxTokens: Math.min(budget, 1200),
     });
     for (const r of pr.runs) {
@@ -546,7 +553,12 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       summary: c.summary,
     }));
     progress(`checking missing protections (${clauseInputs.length} clauses)`);
-    const missingRun = await executeTasks(ctx, runId, doc, missingPlans(clauseInputs, defsContext, request.focus));
+    const missingRun = await executeTasks(
+      ctx,
+      runId,
+      doc,
+      missingPlans(clauseInputs, defsContext, request.focus, doc.docType ?? null, request.reviewingFor),
+    );
     addLimits(missingRun);
     await pauseIfNeeded(missingRun);
     missingFailed = missingRun.tasks.filter((t) => t.status === 'failed').length;
@@ -654,7 +666,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     try {
       const hits = await opts.docSearch(candidate.label, 5);
       if (!Array.isArray(hits)) throw new Error('document search returned no result list');
-      found = hits.some((h) => h.fused > 0);
+      found = hitCoversTopic(hits);
     } catch (e) {
       checked = false;
       log(`document search failed for "${candidate.label}": ${String(e)}`);
@@ -691,6 +703,13 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
   const statutory = statutorySentences(lawsEngaged(verifiedClauses, missingProtections));
   const findingItems = crossClause.findings.map((f, i) => ({ id: `F${i + 1}`, text: f.text, cites: f.itemIds }));
   const missingItems = missingProtections.map((m) => ({ id: m.itemId, text: `${m.topic}: ${m.text}`, cites: m.cites }));
+  const riskItems = verifiedClauses.flatMap((c) =>
+    c.risks.map((r) => ({ itemId: r.itemId, clause: c.clauseNo, page: r.page, text: r.text })),
+  );
+  const inconsistencyFindings = crossClause.findings.filter((f) => f.kind !== 'gap');
+  const inconsistencies: RollupSentence[] = inconsistencyFindings.length
+    ? inconsistencyFindings.map((f) => ({ text: f.text, cites: f.itemIds }))
+    : [{ text: 'No inconsistency was found by the checks.', cites: [] }];
   const overviewValid = new Set<string>([
     ...verifiedClauses.flatMap((c) => [c.itemId, ...c.risks.map((r) => r.itemId)]),
     ...sectionSentences.flatMap((s) => [s.id, ...s.cites]),
@@ -704,7 +723,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       suffix: 'ov',
       promptVersion: 'overview-points-v1',
       prompt: buildOverviewPrompt(request.detailLevel),
-      input: `${defsContext}\n\nItems:\n${JSON.stringify({ sections: sectionSentences, findings: findingItems, missing: missingItems })}`,
+      input: `${defsContext}\n\nItems:\n${JSON.stringify({ sections: sectionSentences, risks: riskItems, findings: findingItems, missing: missingItems })}`,
       maxTokens: Math.max(800, Math.min(3000, (OVERVIEW_POINTS.length - 1) * OVERVIEW_SENTENCES_PER_POINT[request.detailLevel] * OVERVIEW_TOKENS_PER_SENTENCE)),
       validate: (x) => typeof x === 'object' && x !== null,
     };
@@ -713,7 +732,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     await pauseIfNeeded(ovRun);
     for (const c of ovRun.collected) modelSentences.push(...keepPointSentences(c.items, overviewValid).kept);
   }
-  const overviewPoints = assembleOverviewPoints(modelSentences, statutory);
+  const overviewPoints = assembleOverviewPoints({ model: modelSentences, statutory, inconsistencies, risks: riskItems });
   let overview: RollupSentence[] = overviewPoints.flatMap((p) => p.sentences).filter((s) => s.cites.length > 0);
 
   // 6. Coverage ledger, including skipped clauses.

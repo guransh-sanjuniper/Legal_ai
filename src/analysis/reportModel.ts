@@ -5,6 +5,7 @@ import type {
   AnalysisReport,
   ClauseProse,
   MissingProtection,
+  OverviewPoint,
   VerifiedClause,
   VerifiedDate,
   VerifiedObligation,
@@ -45,8 +46,6 @@ export interface ClauseView {
   topPriority: RiskPriority | null;
   riskCount: number;
   rows: ClauseRowView[];
-  // null for reports saved before the Missing column existed.
-  missing: string[] | null;
   // How many stored entries were combined into this row.
   sourceEntries: number;
 }
@@ -99,10 +98,12 @@ interface SectionBase<K extends SectionKey> {
 }
 
 export type ReportSection =
-  | (SectionBase<'overview'> & { points: { title: string; sentences: { text: string; citations: Citation[] }[] }[] })
+  | (SectionBase<'overview'> & {
+      points: { title: string; note?: string; sentences: { text: string; citations: Citation[] }[] }[];
+    })
   | (SectionBase<'promptResult'> & {
       prompt: string;
-      answers: { text: string; citation: Citation }[];
+      answers: { text: string; citation: Citation; part: 'answer' | 'support' }[];
       failed: string[];
       chunksDone: number;
       chunksTotal: number;
@@ -120,7 +121,7 @@ export type ReportSection =
   | (SectionBase<'coverage'> & { lines: string[] });
 
 export interface ReportModel {
-  title: { matter: string; document: string; reviewDate: string; detailLevel: string; focus: string };
+  title: { matter: string; document: string; reviewDate: string; detailLevel: string; focus: string; reviewingFor: string };
   banner: string[];
   toc: { number: number; title: string; key: SectionKey }[];
   sections: ReportSection[];
@@ -152,6 +153,32 @@ export function normaliseClauseNo(s: string): string {
 }
 
 // A clause number contains a digit. Type labels ("risks", "obligations") and "#n" placeholders do not.
+// Labels from the model can contain underscores ("payment_terms"); show them as words.
+export function cleanLabel(s: string): string {
+  return s.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Natural order for clause numbers: 2 before 10, and 3.2 before 3.10.
+export function compareClauseNo(a: string, b: string): number {
+  const parts = (s: string) => normaliseClauseNo(s).match(/\d+|\D+/g) ?? [];
+  const pa = parts(a);
+  const pb = parts(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i];
+    const y = pb[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (/^\d/.test(x) && /^\d/.test(y)) {
+      const d = Number(x) - Number(y);
+      if (d !== 0) return d;
+    } else {
+      const c = x.localeCompare(y);
+      if (c !== 0) return c;
+    }
+  }
+  return 0;
+}
+
 export function hasOwnNumber(s: string | null | undefined): boolean {
   return typeof s === 'string' && /\d/.test(s) && !s.trim().startsWith('#');
 }
@@ -310,52 +337,51 @@ function clauseView(m: MergedClause): ClauseView {
     ...c.payments.map((p) => cite(p.page, p.quote, c.clauseNo)),
     ...risks.map((r) => cite(r.page, r.quote, c.clauseNo)),
   ];
-  const text = (label: string, value: string | null | undefined, conditional = false): ClauseRowView => ({
+  const text = (label: string, value: string | null | undefined): ClauseRowView => ({
     label,
     text: value && value.trim() ? value.trim() : null,
     items: [],
     citations: [],
     modelWritten: true,
-    conditional,
+    conditional: false,
   });
-  const list = (label: string, items: string[], citations: Citation[], opts: { modelWritten?: boolean; conditional?: boolean } = {}): ClauseRowView => ({
+  const list = (label: string, items: string[], citations: Citation[], modelWritten = false): ClauseRowView => ({
     label,
     text: null,
     items,
     citations,
-    modelWritten: opts.modelWritten ?? false,
-    conditional: opts.conditional ?? false,
+    modelWritten,
+    conditional: false,
   });
 
-  const rows: ClauseRowView[] = [
+  // Summary is always shown. Other rows are shown only when they have content.
+  const candidates: ClauseRowView[] = [
     text('Summary', c.summary),
     text('Detailed summary', prose?.detailed_summary),
     text('Conditions & triggers', prose?.conditions),
-    text('Exceptions & carve-outs', prose?.exceptions),
     text('Rights', prose?.rights),
     list('Obligations', c.obligations.map((o) => `${o.party || 'Party not named'}: ${o.text}`), c.obligations.map((o) => cite(o.page, o.quote, c.clauseNo))),
-    list('Dates', c.dates.map(dateLabel), c.dates.map((d) => cite(d.page, d.quote, c.clauseNo)), { conditional: true }),
-    list('Amounts', c.payments.map(paymentLabel), c.payments.map((p) => cite(p.page, p.quote, c.clauseNo)), { conditional: true }),
+    list('Dates', c.dates.map(dateLabel), c.dates.map((d) => cite(d.page, d.quote, c.clauseNo))),
+    list('Amounts', c.payments.map(paymentLabel), c.payments.map((p) => cite(p.page, p.quote, c.clauseNo))),
     text('Legal significance', prose?.legal_significance),
     text('Ambiguity / drafting issues', prose?.ambiguity),
-    list('Law references', laws, [], { modelWritten: true }),
-    text('Risk note', top?.text),
+    list('Law references', laws, [], true),
     text('Suggested action', prose?.suggested_action || (top ? top.suggestion || NO_SUGGESTION : null)),
     list('Quoted text', [], quotes),
-    text('Location mismatch', prose?.location_mismatch, true),
+    text('Location mismatch', prose?.location_mismatch),
   ];
+  const rows = candidates.filter((r) => r.label === 'Summary' || r.text !== null || r.items.length > 0 || r.citations.length > 0);
 
   return {
     key: c.itemId,
     clauseNo: c.clauseNo,
     unplaced: m.unplaced,
-    type: c.type,
+    type: cleanLabel(c.type),
     pageStart: c.pageStart,
     pageEnd: c.pageEnd,
     topPriority: risks.length ? risks[0].severity : null,
     riskCount: risks.length,
-    rows: rows.filter((r) => !r.conditional || r.text !== null || r.items.length > 0),
-    missing: c.missing === undefined ? null : c.missing,
+    rows,
     sourceEntries: m.sources,
   };
 }
@@ -368,7 +394,15 @@ function pageLabel(start: number, end: number): string {
 
 export function buildReportModel(report: AnalysisReport): ReportModel {
   const { rows, stats } = mergeClauses(report);
-  const clauses = rows.map(clauseView);
+  // Numbered clauses in numeric order; entries that could not be placed follow them.
+  const clauses = rows
+    .map(clauseView)
+    .sort(
+      (a, b) =>
+        Number(!hasOwnNumber(a.clauseNo)) - Number(!hasOwnNumber(b.clauseNo)) ||
+        compareClauseNo(a.clauseNo, b.clauseNo) ||
+        a.pageStart - b.pageStart,
+    );
   const all = rows.map((r) => r.clause);
 
   // Every stored citation id resolves to a quote and page. Missing protections cite clauses by item id.
@@ -390,13 +424,14 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
   const sections: ReportSection[] = [];
 
   // Overview: fourteen points. Older reports without points show the points with no sentences.
-  const points = report.overviewPoints;
+  const points: OverviewPoint[] | undefined = report.overviewPoints;
   sections.push({
     key: 'overview',
     title: TITLES.overview,
     number: 0,
-    points: (points ?? OVERVIEW_POINTS.map((title, i) => ({ point: i + 1, title, sentences: [] }))).map((p) => ({
+    points: (points ?? OVERVIEW_POINTS.map((title, i): OverviewPoint => ({ point: i + 1, title, sentences: [] }))).map((p) => ({
       title: p.title,
+      note: p.note,
       sentences: p.sentences.map((s) => ({ text: s.text, citations: resolve(s.cites) })),
     })),
   });
@@ -408,7 +443,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       title: TITLES.promptResult,
       number: 0,
       prompt: pr.prompt,
-      answers: pr.answers.map((a) => ({ text: a.text, citation: cite(a.page, a.quote, a.clause) })),
+      answers: pr.answers.map((a) => ({ text: a.text, citation: cite(a.page, a.quote, a.clause), part: a.part ?? 'answer' })),
       failed: pr.failedChunks.map((f) => `pages ${f.pages[0]}–${f.pages[1]}: ${f.message ?? f.failureCode ?? 'not completed'}`),
       chunksDone: pr.chunksDone,
       chunksTotal: pr.chunksTotal,
@@ -500,8 +535,13 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
   // TODO: remove before final product (coverage is a testing aid).
   const totals = report.ledger.totals;
   const cov = report.coverage;
+  // Structure-free runs have no clause list, so their coverage is measured by chunks and pages only.
+  const clauseLine =
+    cov?.mode !== 'structure-free' && totals.clausesDetected > 0
+      ? `Clauses detected ${totals.clausesDetected}; analysed ${totals.clausesAnalysed}; not analysed ${totals.clausesSkipped}.`
+      : '';
   const lines = [
-    `Clauses detected ${totals.clausesDetected}; analysed ${totals.clausesAnalysed}; not analysed ${totals.clausesSkipped}.`,
+    clauseLine,
     cov?.totalChunks !== undefined
       ? `Chunks analysed ${cov.analysedChunks ?? 0} of ${cov.totalChunks}; pages covered ${cov.pagesCovered ?? 0} of ${cov.totalPages ?? 0}.`
       : '',
@@ -518,6 +558,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       reviewDate: new Date(report.createdAt).toLocaleDateString('en-GB'),
       detailLevel: r?.detailLevel ?? 'standard',
       focus: r?.focus || '—',
+      reviewingFor: r?.reviewingFor ?? 'neutral',
     },
     banner: report.partial || report.unreliable ? report.notices.filter((n) => /partial|unreliable|not analysed|could not be checked|incomplete/i.test(n)) : [],
     toc: numbered.map((s) => ({ number: s.number, title: s.title, key: s.key })),

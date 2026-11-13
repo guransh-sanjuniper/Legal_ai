@@ -1,9 +1,10 @@
-import type { DetailLevel } from '../../analysis/types';
+import type { DetailLevel, ReviewingFor } from '../../analysis/types';
 import type { RunEstimate } from '../../analysis/costEstimate';
 
 export interface StartFormValues {
   matter: string;
   detailLevel: DetailLevel;
+  reviewingFor: ReviewingFor;
   focus: string;
   customPrompt: string;
 }
@@ -46,6 +47,14 @@ export function StartForm({
           <option value="brief">Brief</option>
           <option value="standard">Standard</option>
           <option value="detailed">Detailed</option>
+        </select>
+      </label>
+      <label className="app-field">
+        <span>Reviewing for</span>
+        <select value={values.reviewingFor} onChange={(e) => set('reviewingFor', e.target.value as ReviewingFor)}>
+          <option value="neutral">Neutral</option>
+          <option value="licensor">Licensor</option>
+          <option value="licensee">Licensee</option>
         </select>
       </label>
       <label className="app-field">

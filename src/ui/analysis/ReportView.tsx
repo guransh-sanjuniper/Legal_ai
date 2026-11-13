@@ -46,8 +46,6 @@ function PriorityChip({ level }: { level: string }) {
 }
 
 function ClauseTable({ clause, onCite }: { clause: ClauseView; onCite: (c: Citation) => void }) {
-  const missing =
-    clause.missing === null ? 'Not checked (older report)' : clause.missing.length === 0 ? 'None' : clause.missing.join('; ');
   const risk = clause.topPriority ? `${cap(clause.topPriority)} · ${plural(clause.riskCount, 'risk')}` : 'None identified';
 
   const fixed: [string, ReactNode][] = [
@@ -101,7 +99,7 @@ function ClauseTable({ clause, onCite }: { clause: ClauseView; onCite: (c: Citat
   return (
     <table className="app-table ana-clause-table">
       <tbody>
-        {[...fixed, ...rows, ['Missing', missing]].map(([label, value]) => (
+        {[...fixed, ...rows].map(([label, value]) => (
           <tr key={label}>
             <th scope="row">{label}</th>
             <td>{value}</td>
@@ -199,6 +197,7 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
           {section.points.map((p) => (
             <div key={p.title} className="ana-point">
               <h4>{p.title}</h4>
+              {p.note && <div className="ana-note">{p.note}</div>}
               {p.sentences.length === 0 ? (
                 <p className="app-muted">{NOT_STATED}</p>
               ) : (
@@ -228,8 +227,17 @@ function SectionBody({ section, onCite, model }: { section: ReportSection; onCit
             <ul className="ana-list">
               {section.answers.map((a, i) => (
                 <li key={i}>
-                  {a.text} <Cite c={a.citation} onCite={onCite} />
-                  <blockquote>“{a.citation.quote}”</blockquote>
+                  {a.part === 'support' ? (
+                    <>
+                      <span className="ana-note">Supporting quote</span>
+                      <blockquote>“{a.citation.quote}”</blockquote>
+                      <Cite c={a.citation} onCite={onCite} />
+                    </>
+                  ) : (
+                    <>
+                      {a.text} <Cite c={a.citation} onCite={onCite} />
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
@@ -358,6 +366,7 @@ export function ReportView({ model, onCite }: { model: ReportModel; onCite: (c: 
           <dt>Review date</dt><dd>{t.reviewDate}</dd>
           <dt>Detail level</dt><dd>{t.detailLevel}</dd>
           <dt>Focus</dt><dd>{t.focus}</dd>
+          <dt>Reviewing for</dt><dd>{t.reviewingFor}</dd>
         </dl>
       </header>
 

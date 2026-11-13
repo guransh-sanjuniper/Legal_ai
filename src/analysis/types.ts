@@ -37,6 +37,10 @@ export interface LawPassageRef {
 
 export type DetailLevel = 'brief' | 'standard' | 'detailed';
 
+// Whose side the lawyer is reviewing for. It frames risk priorities and suggestions; it never
+// limits what is reported.
+export type ReviewingFor = 'licensor' | 'licensee' | 'neutral';
+
 export type RiskBasis =
   | 'void_or_unenforceable'
   | 'illegal'
@@ -49,6 +53,7 @@ export interface AnalysisRequest {
   detailLevel: DetailLevel;
   focus: string;
   customPrompt: string;
+  reviewingFor: ReviewingFor;
 }
 
 // `severity` holds the priority (high/medium/low). The report shows it as "Priority".
@@ -112,6 +117,8 @@ export interface OverviewPoint {
   point: number;
   title: string;
   sentences: RollupSentence[];
+  // Set when the point is assembled rather than written by the model.
+  note?: string;
 }
 
 export interface PromptAnswer {
@@ -121,6 +128,8 @@ export interface PromptAnswer {
   page: number;
   quote: string;
   verified: true;
+  // The direct answer to the prompt, or a supporting quote. Answers come first.
+  part?: 'answer' | 'support';
 }
 
 export interface PromptResult {

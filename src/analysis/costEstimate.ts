@@ -42,7 +42,7 @@ export function estimateRun(i: EstimateInput): RunEstimate {
   // Missing-protections groups and the overview: both read the clause summaries.
   const groups = i.clauseCount > 0 ? Math.ceil(i.clauseCount / CLAUSES_PER_MISSING_GROUP) : 0;
   const summaryTokens = Math.ceil(i.summaryChars / 4);
-  const missingPromptTokens = estimateInputTokens(buildMissingPrompt(i.focus));
+  const missingPromptTokens = estimateInputTokens(buildMissingPrompt({ focus: i.focus }));
   const defsTokens = estimateInputTokens(i.defsContext);
   promptTokens += groups * (missingPromptTokens + defsTokens) + summaryTokens;
   completionTokens += groups * MISSING_OUTPUT_CAP;

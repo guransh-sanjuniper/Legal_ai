@@ -119,6 +119,13 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Report model (`reportModel.ts`, pure, shared with the exports): sections numbered in code (Prompt Result only when used); Defined Terms absent. Unnumbered entries are placed by their verified quotes, then by their chunk's clause list (`chunkClauses`), else kept as separate rows and counted. Numbered entries with the same clause number merge: longest non-empty text per field, unioned lists, deduplicated items. Merge stats appear in the Clause Breakdown.
 - Prose fields (summary, conditions, rights, etc.) are model-written and cited to clause/page. Quoted text is always verified text. Dates, Amounts and Location mismatch rows appear only when present.
 - Citation click opens the stored PDF page in a right-hand panel; the quote is highlighted by `citationLocate.ts` when it can be found on the page.
+- Reviewing for (Licensor / Licensee / Neutral, default Neutral) is stored with the run. It frames risk priorities, suggestions and the custom answer only; it never limits what is reported.
+- Risk prompt lists material one-sided patterns (repairs on one party, penalty formulas, entry without notice, asymmetric notice, forfeiture, unilateral escalation, court waivers) and asks for Act names, never section numbers. High guard unchanged.
+- Missing pass: gets the clause list and the document type; prompt lists typical protections for that type. A claim is dropped only when a search hit is a keyword hit (keyword score above zero) with fused score at least 1/110 (`COVER_MIN_FUSED`). A weak vector-only hit never drops a claim. Measured on a two-page contract in `coverGate.test.ts`: fused scores alone cannot separate present from absent topics, keyword hits can. The cross-clause gap check uses the same gate.
+- Prompt Result: the form and length come from the user's request only. Direct answers come first, supporting quotes after; each is verified.
+- Overview: point 8 cites every risk (uncited risks get their own cited sentence); point 13 is built in code from non-gap findings; point 14 falls back to the first cited sentence of each other point and is labelled "Assembled from cited sentences above."
+- Clause table rows: Summary always; others only when they have content. No Missing row (the missing protections are in the Risk Register). Clauses sort by clause number, numerically; underscores in labels are shown as spaces.
+- Coverage: no clause count in structure-free runs or when zero; chunk and page coverage only.
 - Tests use the hosted Supabase project (`testSupport.ts` helpers); `runAnalysis.retry.test.ts` covers retry.
 
 ## Commands

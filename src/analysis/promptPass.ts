@@ -3,6 +3,8 @@ import type { Task } from '../tasks/types';
 import type { AnchorIndex } from './anchors';
 import type { AnalysisChunk } from './analysisChunks';
 import { CUSTOM_PROMPT_FOOTER, CUSTOM_PROMPT_HEADER } from './prompts';
+import { reviewingLine } from './request';
+import type { ReviewingFor } from './types';
 import { executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { normalizeQuote, verifyQuotedItems, type Located } from './verify';
 import type { PromptAnswer, PromptResult } from './types';
@@ -12,6 +14,7 @@ export interface RawAnswer {
   quote?: unknown;
   page?: unknown;
   clause_no?: unknown;
+  part?: unknown;
 }
 
 export function isValidAnswerItem(x: unknown): boolean {
@@ -20,30 +23,29 @@ export function isValidAnswerItem(x: unknown): boolean {
   return typeof o.text === 'string' && typeof o.quote === 'string' && typeof o.page === 'number';
 }
 
-export function promptPrompt(request: string): string {
-  return [CUSTOM_PROMPT_HEADER, `USER REQUEST: ${request}`, CUSTOM_PROMPT_FOOTER].join('\n');
+export function promptPrompt(request: string, reviewingFor: ReviewingFor = 'neutral'): string {
+  return [CUSTOM_PROMPT_HEADER, reviewingLine(reviewingFor), `USER REQUEST: ${request}`, CUSTOM_PROMPT_FOOTER]
+    .filter(Boolean)
+    .join('\n');
 }
 
 // Merges verified answers from every chunk. The same page and quote from overlapping chunks is kept once.
+// Direct answers come before supporting quotes; within each group the document order is kept.
 export function mergeAnswers(located: Located<RawAnswer>[]): PromptAnswer[] {
   const seen = new Set<string>();
-  const out: PromptAnswer[] = [];
+  const direct: PromptAnswer[] = [];
+  const support: PromptAnswer[] = [];
   for (const v of located) {
     const text = typeof v.item.text === 'string' ? v.item.text.trim() : '';
     if (!text) continue;
     const key = `${v.item.page}|${normalizeQuote(v.item.quote)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({
-      itemId: `P${out.length + 1}`,
-      text,
-      clause: v.item.clause,
-      page: v.item.page,
-      quote: v.item.quote,
-      verified: true,
-    });
+    const part: 'answer' | 'support' = v.item.part === 'support' ? 'support' : 'answer';
+    const answer = { itemId: '', text, clause: v.item.clause, page: v.item.page, quote: v.item.quote, verified: true as const, part };
+    (part === 'answer' ? direct : support).push(answer);
   }
-  return out;
+  return [...direct, ...support].map((a, i) => ({ ...a, itemId: `P${i + 1}` }));
 }
 
 const chunkIndexOf = (taskId: string): number | null => {
@@ -60,6 +62,7 @@ export interface PromptPassArgs {
   index: AnchorIndex;
   defsContext: string;
   request: string;
+  reviewingFor?: ReviewingFor;
   maxTokens: number;
 }
 
@@ -69,7 +72,7 @@ export async function runPromptPass(
   args: PromptPassArgs,
 ): Promise<{ result: PromptResult; runs: ExecuteResult[] }> {
   const { ctx, runId, doc, chunks, index, defsContext, request, maxTokens } = args;
-  const prompt = promptPrompt(request);
+  const prompt = promptPrompt(request, args.reviewingFor);
   const plan = (chunk: AnalysisChunk, suffix: string, delayMs?: number): TaskPlan => ({
     suffix,
     promptVersion: 'custom-prompt-v1',

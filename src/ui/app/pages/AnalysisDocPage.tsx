@@ -33,7 +33,7 @@ interface Plan {
   budget: number;
 }
 
-const DEFAULT_FORM: StartFormValues = { matter: '', detailLevel: 'standard', focus: '', customPrompt: '' };
+const DEFAULT_FORM: StartFormValues = { matter: '', detailLevel: 'standard', reviewingFor: 'neutral', focus: '', customPrompt: '' };
 // Stored section summaries are estimated at this many characters per clause (upper bound).
 const SUMMARY_CHARS_PER_CLAUSE = 300;
 
@@ -119,7 +119,7 @@ export function AnalysisDocPage() {
   const estimate: RunEstimate | null = useMemo(() => {
     if (!plan) return null;
     return estimateRun({
-      clausePrompt: buildClausePrompt({ docType: plan.docType, detail: form.detailLevel, focus: form.focus }),
+      clausePrompt: buildClausePrompt({ docType: plan.docType, detail: form.detailLevel, focus: form.focus, reviewingFor: form.reviewingFor }),
       defsContext: plan.defsContext,
       chunkTexts: plan.chunks.map((c) => c.pageMarkedText),
       clauseCount: plan.clauseCount,

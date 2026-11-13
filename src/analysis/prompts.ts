@@ -1,6 +1,6 @@
 import type { DocType } from './docType';
-import type { DetailLevel } from './types';
-import { DETAILED_SUMMARY_SENTENCES, PROSE_SENTENCES, OVERVIEW_SENTENCES_PER_POINT } from './request';
+import type { DetailLevel, ReviewingFor } from './types';
+import { DETAILED_SUMMARY_SENTENCES, PROSE_SENTENCES, OVERVIEW_SENTENCES_PER_POINT, reviewingLine } from './request';
 import { lawChecklistPrompt } from './lawChecklist';
 
 export const UNTRUSTED_NOTICE =
@@ -26,6 +26,11 @@ export const OVERVIEW_POINTS = [
   'Executive Summary',
 ] as const;
 export const STATUTORY_POINT = 11;
+export const RISK_ALLOCATION_POINT = 8;
+export const INCONSISTENCY_POINT = 13;
+export const SUMMARY_POINT = 14;
+// Points built in code; the model writes every other point.
+const CODE_BUILT_POINTS = new Set([STATUTORY_POINT, INCONSISTENCY_POINT]);
 
 const RISK_RUBRIC = [
   'Risk priority rubric. High is rare: use it only for a term that is likely void, illegal or unenforceable, a statutory violation, or major financial exposure. Then set basis to that category.',
@@ -34,11 +39,32 @@ const RISK_RUBRIC = [
   'Routine blanks and simple completion items are not risks. Every risk needs a suggestion: one concrete next step for the lawyer.',
 ].join('\n');
 
+// Patterns that are material and easy to miss. They are prompts for attention, not a checklist of
+// findings: report one only when this clause actually contains it.
+const RISK_PATTERNS = [
+  'Look for these material one-sided patterns and report each one this clause actually contains:',
+  '- repairs or structural works placed in full on one party, with no limit and no cap;',
+  '- a penalty, damages or interest formula (per day, per month, or a multiple), including one that is disproportionate;',
+  '- entry, inspection or possession taken without notice, or without consent;',
+  '- notice periods that are asymmetric between the parties, or a very short cure period on one side;',
+  '- forfeiture or a non-refundable deposit or advance, especially when the trigger is broad ("any reason");',
+  '- unilateral fee, rent or charge escalation with no notice and no cap;',
+  '- waiver of courts, appeal, limitation, or the right to challenge a decision;',
+  '- indemnity or liability that runs one way only, or an unlimited liability;',
+  '- unilateral termination, revocation or discretion without a stated standard.',
+  'For each such term, name the law it engages by Act name (for example the Indian Contract Act 1872, a State Rent Control Act, the Transfer of Property Act 1882, RERA, the Registration Act 1908 or the Indian Stamp Act 1899). Name Acts only; never state a section number as certain.',
+].join('\n');
+
 function focusLine(focus: string | undefined): string[] {
   return focus ? [`FOCUS FOR RISKS ONLY (steers which risks you look for; it does not change the other fields): ${focus}`] : [];
 }
 
-export function buildClausePrompt(opts: { docType: DocType | null; detail: DetailLevel; focus?: string }): string {
+export function buildClausePrompt(opts: {
+  docType: DocType | null;
+  detail: DetailLevel;
+  focus?: string;
+  reviewingFor?: ReviewingFor;
+}): string {
   return [
     'You analyse one or more clauses of a legal contract.',
     UNTRUSTED_NOTICE,
@@ -57,6 +83,7 @@ export function buildClausePrompt(opts: { docType: DocType | null; detail: Detai
     'The page must be the number of the [page N] marker immediately above the quoted text. Quotes must be under 200 characters.',
     'Payments: include every amount that one party pays to another, such as instalments, deposits, fees, rent and escalations. One item per distinct amount and due period; for a table, add one item per row that states an amount.',
     'Risks: include one-sided terms, missing protections, penalties and contradictions. Use an empty array only when the clause has no genuine risk.',
+    RISK_PATTERNS,
     'Use timing_type fixed for a calendar date, event_relative for a deadline measured from an event, none when there is no timing.',
     'summary: one sentence. prose.detailed_summary: at most ' +
       `${DETAILED_SUMMARY_SENTENCES[opts.detail]} sentences. Every other prose field: at most ${PROSE_SENTENCES[opts.detail]} sentence(s).`,
@@ -66,6 +93,7 @@ export function buildClausePrompt(opts: { docType: DocType | null; detail: Detai
     'laws: Act names only. Use the Acts in the checklist first; any other applicable Indian or Maharashtra law may also be named.',
     RISK_RUBRIC,
     ...focusLine(opts.focus),
+    reviewingLine(opts.reviewingFor ?? 'neutral'),
     lawChecklistPrompt(),
     checklistFor(opts.docType),
   ]
@@ -82,9 +110,7 @@ export const SECTION_PROMPT = [
 ].join('\n');
 
 export function buildOverviewPrompt(detail: DetailLevel): string {
-  const modelPoints = OVERVIEW_POINTS.map((title, i) => `${i + 1} ${title}`).filter(
-    (_, i) => i + 1 !== STATUTORY_POINT,
-  );
+  const modelPoints = OVERVIEW_POINTS.map((title, i) => `${i + 1} ${title}`).filter((_, i) => !CODE_BUILT_POINTS.has(i + 1));
   return [
     'You write the numbered overview of a legal contract from verified items.',
     UNTRUSTED_NOTICE,
@@ -92,33 +118,59 @@ export function buildOverviewPrompt(detail: DetailLevel): string {
     `Write at most ${OVERVIEW_SENTENCES_PER_POINT[detail]} sentence(s) per point. A point with nothing in the items gets no sentences.`,
     'Return ONLY a JSON array: {"point":number,"text":"...","cites":["ITEM_ID",...]}.',
     'Every sentence must cite at least one ITEM_ID from the supplied items. Sentences without a citation are discarded.',
+    'Risk Allocation (point 8) must cite every risk item that allocates a burden or benefit between the parties.',
     'State only what the items support. Do not invent facts, and do not name laws here.',
   ].join('\n');
 }
 
-export function buildMissingPrompt(focus?: string): string {
+export function buildMissingPrompt(
+  opts: { focus?: string; docType?: DocType | null; checklistOfClauses?: string[]; reviewingFor?: ReviewingFor } = {},
+): string {
+  const inDoc = opts.checklistOfClauses?.length
+    ? `Clause numbers present in this document: ${opts.checklistOfClauses.join(', ')}. These are the only clauses that exist; anything a protection needs but this list does not cover is missing.`
+    : '';
   return [
-    'You check a legal contract for missing protections, using verified clause summaries and a checklist of Acts.',
+    'You check a legal contract for missing protections, using verified clause summaries and the list of clauses the document has.',
     UNTRUSTED_NOTICE,
     'Return ONLY a JSON array: {"topic":"...","text":"...","priority":"high"|"medium"|"low","basis":"void_or_unenforceable"|"illegal"|"statutory_violation"|"major_financial_exposure"|"other","suggestion":"...","laws":["..."],"cites":["ITEM_ID",...]}.',
     'Report a protection only when a contract of this type would normally need it and the summaries show it is absent or incomplete.',
+    `Typical protections to check for this document type: ${typicalProtections(opts.docType ?? null)}.`,
     'These summaries may cover only part of the document. Report a gap only when no summary given covers it.',
     'Do not report a gap that a summary shows is covered. Return [] when nothing is missing.',
     'cites: the ITEM_IDs of the clauses the gap affects; [] when no clause is affected. laws: Act names only, never section numbers.',
+    inDoc,
     RISK_RUBRIC,
-    ...focusLine(focus),
+    ...focusLine(opts.focus),
+    reviewingLine(opts.reviewingFor ?? 'neutral'),
     lawChecklistPrompt(),
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+// Common protections by document type. Wording only; the model decides what this document lacks.
+function typicalProtections(docType: DocType | null): string {
+  const general =
+    'governing law and forum, a named dispute-resolution route, stamp duty amount and who pays it, registration, refund and deposit mechanics, an indemnity, liability limits, notices and addresses for service, force majeure, assignment and subletting, and an execution and attestation block';
+  const extra: Partial<Record<DocType, string>> = {
+    lease: 'a rent escalation mechanism, maintenance allocation, a security-deposit refund period, entry and inspection notice, renewal and lock-in terms, and a schedule of the premises and fixtures',
+    agreement: 'payment milestones, a cure period before termination, delivery or performance standards, and acceptance criteria',
+    deed: 'the property description and title, encumbrances, possession and mutation, and warranties of title',
+    notice: 'the obligation and period relied on, the remedy demanded, and the consequence of non-compliance',
+  };
+  return [general, extra[docType ?? 'other']].filter(Boolean).join('; ');
 }
 
 export const CUSTOM_PROMPT_HEADER = [
   'Answer the user request using only this excerpt of a legal contract.',
   UNTRUSTED_NOTICE,
+  'The form and length of the answer are set by the request itself. A yes/no question gets a short answer; a request to list items gets a list; a broad question gets a fuller answer. Do not pad, do not add sections the request did not ask for.',
+  'Answer first, then support it: the first items are the direct answer, the remaining items are the quotes that support it.',
 ].join('\n');
 
 export const CUSTOM_PROMPT_FOOTER = [
-  'Return ONLY a JSON array: {"text":"...","page":number,"quote":"...","clause_no":"..."}.',
-  'Every statement must be supported by a verbatim quote from the excerpt.',
+  'Return ONLY a JSON array, in answer order: {"text":"...","part":"answer"|"support","page":number,"quote":"...","clause_no":"..."}.',
+  'Use "answer" for the direct response to the request and "support" for the quotations behind it. Every item still needs a verbatim quote from the excerpt.',
 ].join('\n');
 
 export const JUDGE_PROMPT = [

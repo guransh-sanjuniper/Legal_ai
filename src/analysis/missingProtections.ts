@@ -2,7 +2,8 @@ import { NO_SUGGESTION, normaliseLaws, guardPriority, riskBasisOf } from './rubr
 import { buildMissingPrompt } from './prompts';
 import { groupForRollup } from './rollup';
 import type { TaskPlan } from './execute';
-import type { MissingProtection } from './types';
+import type { DocType } from './docType';
+import type { MissingProtection, ReviewingFor } from './types';
 
 export interface MissingInputClause {
   id: string;
@@ -18,15 +19,43 @@ export function isValidMissingItem(x: unknown): boolean {
 }
 
 // One task per group of clause summaries, so a long document stays within the input limit.
-export function missingPlans(clauses: MissingInputClause[], defsContext: string, focus: string): TaskPlan[] {
+export function missingPlans(
+  clauses: MissingInputClause[],
+  defsContext: string,
+  focus: string,
+  docType: DocType | null = null,
+  reviewingFor: ReviewingFor = 'neutral',
+): TaskPlan[] {
+  const present = [...new Set(clauses.map((c) => c.clause).filter(Boolean))];
   return groupForRollup(clauses).map((group, i) => ({
     suffix: `m${i}`,
-    promptVersion: 'missing-protections-v1',
-    prompt: buildMissingPrompt(focus || undefined),
+    promptVersion: 'missing-protections-v2',
+    prompt: buildMissingPrompt({ focus: focus || undefined, docType, checklistOfClauses: present, reviewingFor }),
     input: `${defsContext}\n\nClause summaries:\n${JSON.stringify(group)}`,
     maxTokens: 1500,
     validate: isValidMissingItem,
   }));
+}
+
+// Coverage gate for a missing-protection claim.
+//
+// Measured on a two-page contract (see coverGate.test.ts): reciprocal-rank fusion scores span
+// roughly 0.009 to 0.033, and the dense vector list returns every window, so an absent topic still
+// gets about 1/61 from a vector rank-1. A fused cutoff therefore cannot separate an absent topic
+// from a present one. The keyword list only returns windows that match the topic's words: it is
+// empty for "governing law" and "stamp duty" on that contract, and non-empty for "deposit" and
+// "notice". So a hit counts as coverage only when it came from the keyword list, and its fused
+// score is at least COVER_MIN_FUSED, the RRF floor for a keyword hit at the end of the 50-item
+// keyword list (1 / (60 + 50) = 1/110). A weak vector-only hit never covers a claim.
+export const COVER_MIN_FUSED = 1 / 110;
+
+export interface CoverageHit {
+  fused: number;
+  keywordScore?: number;
+}
+
+export function hitCoversTopic(hits: CoverageHit[]): boolean {
+  return hits.some((h) => (h.keywordScore ?? 0) > 0 && h.fused >= COVER_MIN_FUSED);
 }
 
 export interface MissingCheckResult {
@@ -40,7 +69,7 @@ export interface MissingCheckResult {
 export async function keepMissingClaims(
   items: unknown[],
   validClauseIds: Set<string>,
-  search: (query: string, k: number) => Promise<{ fused: number }[]>,
+  search: (query: string, k: number) => Promise<CoverageHit[]>,
 ): Promise<MissingCheckResult> {
   const kept: MissingProtection[] = [];
   const seenTopics = new Set<string>();
@@ -55,7 +84,7 @@ export async function keepMissingClaims(
     if (!topic || !text || seenTopics.has(key)) continue;
     seenTopics.add(key);
 
-    let hits: { fused: number }[];
+    let hits: CoverageHit[];
     try {
       hits = await search(topic, 5);
     } catch {
@@ -66,7 +95,7 @@ export async function keepMissingClaims(
       unchecked++;
       continue;
     }
-    if (hits.some((h) => h.fused > 0)) {
+    if (hitCoversTopic(hits)) {
       coveredInDocument++;
       continue;
     }

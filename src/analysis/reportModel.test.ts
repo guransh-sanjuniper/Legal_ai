@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildReportModel, longestOf, mergeClauses, placeEntry, NOT_STATED } from './reportModel';
+import { buildReportModel, compareClauseNo, longestOf, mergeClauses, placeEntry, NOT_STATED } from './reportModel';
 import type { AnalysisReport, VerifiedClause, VerifiedRisk } from './types';
 
 const risk = (id: string, severity: 'high' | 'medium' | 'low', page: number, quote: string, clause: string): VerifiedRisk => ({
@@ -106,21 +106,76 @@ describe('report model', () => {
     expect(model.toc.map((t) => t.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
-  it('shows Missing as None when complete and not checked for older reports', () => {
-    const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1', missing: [] }), clause({ itemId: 'b', clauseNo: '2' })]));
-    expect(model.clauses.find((c) => c.clauseNo === '1')?.missing).toEqual([]);
-    expect(model.clauses.find((c) => c.clauseNo === '2')?.missing).toBeNull();
-  });
-
-  it('leaves out conditional rows that are empty, and keeps the others with their label', () => {
+  it('keeps the clause table to the rows that have content, with Summary always present', () => {
     const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1', summary: 'Sum.' })]));
     const labels = model.clauses[0].rows.map((r) => r.label);
-    expect(labels).toContain('Summary');
-    expect(labels).toContain('Quoted text');
-    expect(labels).not.toContain('Dates');
-    expect(labels).not.toContain('Amounts');
-    expect(labels).not.toContain('Location mismatch');
+    expect(labels).toEqual(['Summary']);
+    expect(labels).not.toContain('Missing');
+    expect(labels).not.toContain('Exceptions & carve-outs');
+    expect(labels).not.toContain('Risk note');
     expect(NOT_STATED).toMatch(/Not stated/);
+  });
+
+  it('shows Law references and Quoted text only when they have content', () => {
+    const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1', summary: 'Sum.', risks: [risk('r1', 'low', 1, 'a quote here', '1')] })]));
+    const labels = model.clauses[0].rows.map((r) => r.label);
+    expect(labels).toEqual(expect.arrayContaining(['Summary', 'Law references', 'Quoted text', 'Suggested action']));
+  });
+
+  it('sorts clauses by clause number, numerically, with unplaced entries last', () => {
+    const model = buildReportModel(
+      report([
+        clause({ itemId: 'a', clauseNo: '10', pageStart: 1 }),
+        clause({ itemId: 'b', clauseNo: '2', pageStart: 5 }),
+        clause({ itemId: 'c', clauseNo: '3.10', pageStart: 2 }),
+        clause({ itemId: 'd', clauseNo: '3.2', pageStart: 3 }),
+        clause({ itemId: 'e', clauseNo: 'risks', chunkIndex: 9, pageStart: 0 }),
+      ]),
+    );
+    expect(model.clauses.map((c) => c.clauseNo)).toEqual(['2', '3.2', '3.10', '10', 'risks']);
+  });
+
+  it('cleans underscores from type labels', () => {
+    const model = buildReportModel(report([clause({ itemId: 'a', clauseNo: '1', type: 'payment_terms' })]));
+    expect(model.clauses[0].type).toBe('payment terms');
+  });
+
+  it('compares clause numbers naturally', () => {
+    expect(compareClauseNo('2', '10')).toBeLessThan(0);
+    expect(compareClauseNo('3.2', '3.10')).toBeLessThan(0);
+    expect(compareClauseNo('4', '4')).toBe(0);
+  });
+
+  it('never prints a zero clause count, and in structure-free runs shows chunk coverage only', () => {
+    const zero = buildReportModel(report([], { coverage: { mode: 'structure' } as never }));
+    expect(zero.sections.find((s) => s.key === 'coverage')).toMatchObject({ lines: expect.not.arrayContaining([expect.stringMatching(/Clauses detected 0/)]) });
+    const free = buildReportModel(
+      report([clause({ itemId: 'a', clauseNo: '1' })], {
+        coverage: { mode: 'structure-free', totalChunks: 3, analysedChunks: 3, totalPages: 2, pagesCovered: 2 } as never,
+      }),
+    );
+    const lines = (free.sections.find((s) => s.key === 'coverage') as { lines: string[] }).lines;
+    expect(lines.some((l) => /Clauses detected/.test(l))).toBe(false);
+    expect(lines[0]).toMatch(/Chunks analysed 3 of 3/);
+  });
+
+  it('keeps the answer and support labels on Prompt Result answers', () => {
+    const model = buildReportModel(
+      report([clause({ itemId: 'a', clauseNo: '1' })], {
+        promptResult: {
+          prompt: 'Is there a notice period?',
+          answers: [
+            { itemId: 'P1', text: 'Yes, 60 days.', clause: '3', page: 2, quote: 'sixty days written notice', verified: true, part: 'answer' },
+            { itemId: 'P2', text: 'support', clause: '3', page: 2, quote: 'sixty days written notice', verified: true, part: 'support' },
+          ],
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.answers.map((a) => a.part)).toEqual(['answer', 'support']);
   });
 
   it('sorts risks by priority and labels law references, with missing protections as their own list', () => {
