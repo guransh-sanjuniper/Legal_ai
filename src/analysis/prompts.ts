@@ -25,19 +25,28 @@ export const OVERVIEW_POINTS = [
   'Executive Summary',
 ] as const;
 export const STATUTORY_POINT = 10;
+export const NOTABLE_POINT = 11;
 export const INCONSISTENCY_POINT = 12;
 export const SUMMARY_POINT = 13;
-// Points built in code; the model writes every other point.
-const CODE_BUILT_POINTS = new Set([STATUTORY_POINT, INCONSISTENCY_POINT]);
+export const EXIT_POINT = 8;
+export const DISPUTE_POINT = 9;
+// Points built in code.
+const CODE_BUILT_POINTS = new Set([STATUTORY_POINT, NOTABLE_POINT, INCONSISTENCY_POINT]);
+// Points written from focused evidence, or last by the summary call.
+const FOCUS_POINTS = new Set([EXIT_POINT, DISPUTE_POINT]);
+const SUMMARY_ONLY = new Set([SUMMARY_POINT]);
+const MAIN_POINTS_EXCLUDED = new Set([...CODE_BUILT_POINTS, ...FOCUS_POINTS, ...SUMMARY_ONLY]);
 
 const RISK_RUBRIC = [
   'Risk priority rubric. High is rare: use it only for a term that is likely void, illegal or unenforceable, a statutory violation, or major financial exposure. Then set basis to that category.',
   'Use basis "other" for any other risk; such a risk is Medium or Low, never High.',
   'Medium: a one-sided, unclear or materially incomplete term that the lawyer should negotiate. Low: drafting or administrative points with little exposure.',
-  'Routine blanks and simple completion items are not risks. Every risk needs a suggestion: one concrete next step for the lawyer.',
+  'Routine blanks and simple completion items are not risks. Neutral obligations with no exposure are not risks either.',
+  'Every risk needs a suggestion that states the concrete change: what to add, remove or alter. "Negotiate a cap" is not a suggestion; "Add a cap of X on the penalty" is.',
   'A risk is a term that is one-sided, unusual, unlawful, ambiguous, or financially exposing for a party. Judge it by its effect on a party, not by its wording.',
   'These are NOT risks: generic disclaimers, forward-looking-statement warnings, "no assurance" boilerplate, selling or jurisdiction restrictions, definitions, and neutral procedures.',
   'An exclusion does not apply when the wording shifts liability, limits a right, or limits a remedy: those stay risks even when phrased as a disclaimer.',
+  'Also look for, and report only when this clause contains it: an irrevocable or non-terminable grant; tax allocation between the parties; assignment or consent restrictions; a unilateral right; a one-sided indemnity.',
 ].join('\n');
 
 // Patterns that are material and easy to miss. They are prompts for attention, not a checklist of
@@ -89,6 +98,7 @@ export function buildClausePrompt(opts: {
     'summary: one sentence. prose.detailed_summary: at most ' +
       `${DETAILED_SUMMARY_SENTENCES[opts.detail]} sentences. Every other prose field: at most ${PROSE_SENTENCES[opts.detail]} sentence(s).`,
     'Prose is written by you from this clause only. Use "" for a prose field that does not apply.',
+    'Text inside comment markers such as "Commented [..]" or bracketed reviewer notes is not a contract term: ignore it when analysing the clause.',
     'prose.rights: each party\'s rights under this clause. prose.location_mismatch: say so only when the heading or number does not match where the clause sits (for example numbering out of sequence).',
     'missing: what a complete clause of this type normally contains that this clause lacks (for example a notice period, governing law, or a term it uses but never defines). Use [] when nothing is missing.',
     'laws: Act names only. Use the Acts in the checklist first; any other applicable Indian or Maharashtra law may also be named.',
@@ -111,7 +121,7 @@ export const SECTION_PROMPT = [
 ].join('\n');
 
 export function buildOverviewPrompt(detail: DetailLevel): string {
-  const modelPoints = OVERVIEW_POINTS.map((title, i) => `${i + 1} ${title}`).filter((_, i) => !CODE_BUILT_POINTS.has(i + 1));
+  const modelPoints = OVERVIEW_POINTS.map((title, i) => `${i + 1} ${title}`).filter((_, i) => !MAIN_POINTS_EXCLUDED.has(i + 1));
   return [
     'You write the numbered overview of a legal contract from verified items.',
     UNTRUSTED_NOTICE,
@@ -120,6 +130,32 @@ export function buildOverviewPrompt(detail: DetailLevel): string {
     'Return ONLY a JSON array: {"point":number,"text":"...","cites":["ITEM_ID",...]}.',
     'Every sentence must cite at least one ITEM_ID from the supplied items. Sentences without a citation are discarded.',
     'State only what the items support. Do not invent facts, and do not name laws here.',
+  ].join('\n');
+}
+
+// Writes specific overview points from evidence retrieved for those topics. Used for the points
+// that section summaries rarely cover, so they are not left empty when the material exists.
+export function buildOverviewFocusPrompt(detail: DetailLevel, pointTitles: string[]): string {
+  return [
+    'You write specific points of a legal contract overview from evidence retrieved for those topics.',
+    UNTRUSTED_NOTICE,
+    `Write only for these points: ${pointTitles.join('; ')}.`,
+    `Each point is one short paragraph of ${OVERVIEW_SENTENCES_PER_POINT[detail]} to ${OVERVIEW_SENTENCES_PER_POINT[detail] + 2} sentences.`,
+    'Return ONLY a JSON array: {"point":number,"text":"...","cites":["ITEM_ID",...]}.',
+    'Every sentence must cite at least one ITEM_ID from the supplied items. A point with nothing in the evidence gets no sentences.',
+    'State only what the evidence supports. Do not invent facts, and do not name laws here.',
+  ].join('\n');
+}
+
+// Executive Summary: only the other points, the risks and the verified missing list.
+export function buildExecutiveSummaryPrompt(): string {
+  return [
+    'You write the Executive Summary of a legal contract report.',
+    UNTRUSTED_NOTICE,
+    'Use only the supplied overview points, risk lines and verified missing list. Do not add facts.',
+    'State that something is absent only when it appears in the supplied missing list. Otherwise describe what the document provides.',
+    'Return ONLY a JSON array of sentences: {"text":"...","cites":["ITEM_ID",...]}. A sentence about a gap must cite the corresponding missing item id.',
+    'Write a short paragraph. Do not repeat the points one by one.',
   ].join('\n');
 }
 

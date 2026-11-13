@@ -100,6 +100,14 @@ describe('export blocks', () => {
     expect(text).toMatch(/Supporting quotes/);
   });
 
+  it('puts an Affects column in the risk tables', () => {
+    const blocks = buildBlocksBlocking(fixtureModel());
+    const tables = blocks.filter((b): b is Extract<Block, { kind: 'table' }> => b.kind === 'table');
+    const risk = tables.find((t) => t.columns.includes('Level'));
+    expect(risk?.columns).toEqual(['#', 'Level', 'Clause and page', 'Affects', 'Issue', 'Law references', 'Suggested next steps']);
+    expect(risk?.rows[0][3]).toBe('Supplier');
+  });
+
   it('includes the Risk Register and the Missing clauses list', () => {
     const text = allText(buildBlocksBlocking(fixtureModel()));
     expect(text).toMatch(/Missing clauses and protections/);

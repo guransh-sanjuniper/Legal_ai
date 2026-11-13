@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NO_SUGGESTION, guardPriority, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf, sortByPriority } from './rubric';
+import { NO_SUGGESTION, guardPriority, lawKey, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf, sortByPriority } from './rubric';
 import { normaliseRequest } from './request';
 import { LAW_CHECKLIST, lawChecklistPrompt } from './lawChecklist';
 
@@ -39,6 +39,15 @@ describe('field normalisation', () => {
   it('keeps missing entries as text, deduped', () => {
     expect(normaliseMissing(['No notice period', 'no notice period', '  '])).toEqual(['No notice period']);
     expect(normaliseMissing(undefined)).toEqual([]);
+  });
+
+  it('counts the same Act once with or without a year', () => {
+    expect(lawKey('Indian Contract Act 1872')).toBe(lawKey('Indian Contract Act'));
+    expect(lawKey('Maharashtra Rent Control Act, 1999')).toBe(lawKey('Maharashtra Rent Control Act'));
+    expect(normaliseLaws(['Indian Contract Act 1872', 'Indian Contract Act', 'Transfer of Property Act 1882'])).toEqual([
+      'Indian Contract Act 1872',
+      'Transfer of Property Act 1882',
+    ]);
   });
 
   it('fills every prose key, empty when absent', () => {

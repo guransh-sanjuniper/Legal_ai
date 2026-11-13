@@ -65,6 +65,8 @@ export interface MergeStats {
 export interface RiskRow {
   priority: RiskPriority;
   clause: string;
+  // Which party the term affects. Neutral reviewing leaves it as the document states it.
+  affects: string;
   pages: string;
   issue: string;
   laws: string[];
@@ -534,6 +536,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
         laws: r.laws ?? [],
         suggestion: r.suggestion || NO_SUGGESTION,
         kind: 'risk',
+        affects: r.affects?.trim() || 'Not identified',
         citation: cite(r.page, r.quote, c.clauseNo),
       });
     }
@@ -548,6 +551,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       laws: m.laws,
       suggestion: m.suggestion || NO_SUGGESTION,
       kind: 'missing',
+      affects: 'Both parties',
       citation: affected[0] ?? null,
     };
   });

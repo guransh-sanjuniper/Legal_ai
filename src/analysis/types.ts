@@ -69,6 +69,8 @@ export interface VerifiedRisk extends VerifiedItemBase {
   basis?: RiskBasis;
   suggestion?: string;
   laws?: string[];
+  // Which party the term affects. Framed by the reviewing side, never limited by it.
+  affects?: string;
   // Older saved reports used law-library passages. New reports leave this empty.
   lawPassages?: LawPassageRef[];
   applicability: 'unverified';
@@ -147,6 +149,20 @@ export interface PromptResult {
   failedChunks: { chunkIndex: number; pages: [number, number]; failureCode: string | null; message: string | null }[];
 }
 
+// Unfilled blanks and reviewer comments found in the source text by code, grouped by clause.
+export interface DraftingIssueGroup {
+  clause: string;
+  page: number;
+  blanks: string[];
+  comments: string[];
+}
+
+export interface DraftingIssues {
+  blankCount: number;
+  commentCount: number;
+  groups: DraftingIssueGroup[];
+}
+
 // Result of the validation pass over High and Medium risks.
 export interface RiskReviewStats {
   reviewed: number;
@@ -176,7 +192,7 @@ export interface SectionSummary {
 }
 
 export interface CrossClauseResult {
-  findings: { kind: string; text: string; itemIds: string[]; severity: string }[];
+  findings: { kind: string; text: string; itemIds: string[]; severity: string; reason?: string }[];
   payments: { payer: string; payee: string; count: number; amounts: string[]; numericTotal: number | null }[];
 }
 
@@ -244,6 +260,7 @@ export interface AnalysisReport {
   overviewPoints?: OverviewPoint[];
   missingProtections?: MissingProtection[];
   riskReview?: RiskReviewStats;
+  draftingIssues?: DraftingIssues;
   promptResult?: PromptResult;
   judgement?: JudgementSnapshot;
   partial?: boolean;

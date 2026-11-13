@@ -36,10 +36,17 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(risks.length).toBeGreaterThan(0);
   for (const r of risks) {
     expect(r.severity).toBe('medium');
-    expect(r.suggestion).toBe('Negotiate mutual terms.');
-    expect(r.laws).toEqual(['Indian Contract Act 1872']);
+    expect(r.suggestion?.length ?? 0).toBeGreaterThan(0);
     expect(r.lawPassages).toBeUndefined();
   }
+  const modelRisks = risks.filter((r) => !/left blank/.test(r.text));
+  for (const r of modelRisks) {
+    expect(r.suggestion).toBe('Negotiate mutual terms.');
+    expect(r.laws).toEqual(['Indian Contract Act 1872']);
+  }
+  const blankRisk = risks.find((r) => /left blank/.test(r.text));
+  expect(blankRisk).toMatchObject({ severity: 'medium' });
+  expect(blankRisk!.suggestion).toMatch(/Fill the blank/);
   expect(withPrompt.clauses[0].missing).toEqual(['No notice period']);
   expect(withPrompt.clauses[0].prose?.detailed_summary).toBe('Detailed text.');
 
@@ -61,6 +68,13 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(withPrompt.promptResult!.answer![0].text).toBe('Clause two states the obligation.');
   expect(withPrompt.riskReview?.reviewed).toBeGreaterThan(0);
   expect(withPrompt.riskReview?.dropped).toBe(0);
+
+  // Points 8 and 9 are written from focused evidence; point 11 lists the blanks; the summary is cited.
+  expect(withPrompt.overviewPoints![7].sentences.length).toBeGreaterThan(0);
+  expect(withPrompt.overviewPoints![8].sentences.length).toBeGreaterThan(0);
+  expect(withPrompt.overviewPoints![10].sentences[0]?.text).toMatch(/Unfilled blanks \(1\)/);
+  expect(withPrompt.draftingIssues?.blankCount).toBe(1);
+  expect(withPrompt.overviewPoints![12].sentences.length).toBeGreaterThan(0);
 
   const restored = await restoreReportFromSupabase(sb, docId);
   expect(restored?.runId).toBe(withPrompt.runId);

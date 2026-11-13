@@ -27,6 +27,16 @@ export function guardPriority(priority: unknown, basis: unknown): RiskPriority {
 // Shown when the model gave no suggestion, so the gap is visible rather than hidden.
 export const NO_SUGGESTION = 'No suggestion was generated. The lawyer should decide the next step.';
 
+// Same Act with or without a year is one law: lower-case, no years, no punctuation.
+export function lawKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\b(1[89]|20)\d{2}\b/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function normaliseLaws(x: unknown, max = 8): string[] {
   if (!Array.isArray(x)) return [];
   const seen = new Set<string>();
@@ -34,7 +44,7 @@ export function normaliseLaws(x: unknown, max = 8): string[] {
   for (const v of x) {
     if (typeof v !== 'string') continue;
     const name = v.replace(/\s+/g, ' ').trim();
-    const key = name.toLowerCase();
+    const key = lawKey(name);
     if (!name || seen.has(key)) continue;
     seen.add(key);
     out.push(name);

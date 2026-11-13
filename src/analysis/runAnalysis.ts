@@ -9,8 +9,22 @@ import { extractAmounts, uncapturedAmounts } from './amounts';
 import { groupForRollup, keepCitedSentences } from './rollup';
 import { buildLedger, type LedgerChunkInput } from './ledger';
 import { dedupeVerifiedClauses } from './dedupe';
-import { findContradictions, missingTopicCandidates, paymentTotals } from './crossClause';
-import { buildClausePrompt, buildOverviewPrompt, buildPromptSynthesisPrompt, OVERVIEW_POINTS, SECTION_PROMPT } from './prompts';
+import { missingTopicCandidates, paymentTotals, type CrossFinding } from './crossClause';
+import { findInconsistencies } from './inconsistencyChecks';
+import { normaliseClauseNo } from './reportModel';
+import { blankAffectsTerm, extractDraftingIssues } from './textQuality';
+import {
+  buildClausePrompt,
+  buildExecutiveSummaryPrompt,
+  buildOverviewFocusPrompt,
+  buildOverviewPrompt,
+  buildPromptSynthesisPrompt,
+  DISPUTE_POINT,
+  EXIT_POINT,
+  OVERVIEW_POINTS,
+  SECTION_PROMPT,
+  SUMMARY_POINT,
+} from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
 import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
 import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
@@ -649,6 +663,39 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     missingUnchecked = checked.unchecked;
   }
 
+  // 3c. Placeholders and reviewer comments, found by code. A blank that touches money, time or a
+  // party adds one Medium risk to its clause. Comment text is never analysed as a term.
+  const draftingIssues = extractDraftingIssues(pages, index);
+  if (draftingIssues.blankCount > 0) {
+    const groupsByClause = new Map<string, typeof draftingIssues.groups>();
+    for (const g of draftingIssues.groups) {
+      if (g.blanks.length === 0) continue;
+      const key = normaliseClauseNo(g.clause);
+      groupsByClause.set(key, [...(groupsByClause.get(key) ?? []), g]);
+    }
+    verifiedClauses = verifiedClauses.map((c) => {
+      const groups = groupsByClause.get(normaliseClauseNo(c.clauseNo)) ?? [];
+      const lines = groups.flatMap((g) => g.blanks.filter(blankAffectsTerm).map((line) => ({ line, page: g.page })));
+      if (lines.length === 0) return c;
+      const added: VerifiedRisk[] = lines.slice(0, 3).map((entry, i) => ({
+        itemId: `${c.itemId}:blank${i}`,
+        clause: c.clauseNo,
+        text: 'An operative term is left blank, so the obligation is incomplete.',
+        severity: 'medium',
+        basis: 'other',
+        suggestion: 'Fill the blank with the agreed term, or delete the reference before execution.',
+        laws: [],
+        affects: '',
+        page: entry.page,
+        quote: entry.line,
+        verified: true,
+        applicability: 'unverified',
+      }));
+      const risks = [...c.risks, ...added];
+      return { ...c, risks, verifiedItems: c.obligations.length + c.dates.length + c.payments.length + risks.length };
+    });
+  }
+
   // 4. Roll-up as dependent tasks.
   const rollupItems = verifiedClauses.map((c) => ({
     id: c.itemId,
@@ -727,15 +774,8 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     s.sentences.map((sentence, j) => ({ id: `S${s.section}-${j + 1}`, text: sentence.text, cites: sentence.cites })),
   );
   // 5. Cross-clause pass + whole-document search before any "missing" claim.
-  const structure = verifiedClauses.map((c) => ({
-    clause: c.clauseNo,
-    itemId: c.itemId,
-    summary: c.summary,
-    type: c.type,
-    dates: c.dates.map((d) => ({ text: d.text, timing_type: d.timing_type, itemId: d.itemId })),
-    payments: c.payments.map((p) => ({ due: p.due, amount: p.amount, itemId: p.itemId })),
-  }));
-  const contradictions = findContradictions(structure);
+  // Every inconsistency needs two verified quotes, a shared subject and a shared party.
+  const contradictions: CrossFinding[] = findInconsistencies(verifiedClauses);
   const gaps: CrossClauseResult['findings'] = [];
   for (const candidate of missingTopicCandidates(verifiedClauses.map((c) => ({ summary: c.summary, type: c.type })))) {
     let found = false;
@@ -776,14 +816,35 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     ),
   };
 
-  // 5b. Overview: 14 numbered points. Point 11 is built in code from the laws named; the rest are model-written.
+  // 5b. Overview: thirteen numbered points. Statutory Compliance, Notable Drafting Issues and
+  // Internal Inconsistencies are built in code. Termination and dispute points are written from
+  // focused evidence, and the Executive Summary only from the other points, risks and missing list.
   const statutory = statutorySentences(lawsEngaged(verifiedClauses, missingProtections));
   const findingItems = crossClause.findings.map((f, i) => ({ id: `F${i + 1}`, text: f.text, cites: f.itemIds }));
   const missingItems = missingProtections.map((m) => ({ id: m.itemId, text: `${m.topic}: ${m.text}`, cites: m.cites }));
   const inconsistencyFindings = crossClause.findings.filter((f) => f.kind !== 'gap');
   const inconsistencies: RollupSentence[] = inconsistencyFindings.length
-    ? inconsistencyFindings.map((f) => ({ text: f.text, cites: f.itemIds }))
+    ? inconsistencyFindings.map((f) => ({ text: f.reason ? `${f.text} ${f.reason}` : f.text, cites: f.itemIds }))
     : [{ text: 'No inconsistency was found by the checks.', cites: [] }];
+
+  // Notable Drafting Issues: counts and clause groups from the code extraction; empty when none.
+  const notable: RollupSentence[] = [];
+  const clip = (s: string, n = 140) => (s.length > n ? `${s.slice(0, n).trimEnd()}…` : s);
+  if (draftingIssues.blankCount > 0) {
+    notable.push({ text: `Unfilled blanks (${draftingIssues.blankCount}).`, cites: [] });
+    for (const g of draftingIssues.groups) {
+      if (g.blanks.length === 0) continue;
+      notable.push({ text: `Clause ${g.clause}, page ${g.page}: ${g.blanks.map((b) => `“${clip(b)}”`).join('; ')}`, cites: [] });
+    }
+  }
+  if (draftingIssues.commentCount > 0) {
+    notable.push({ text: `Reviewer comments in text (${draftingIssues.commentCount}).`, cites: [] });
+    for (const g of draftingIssues.groups) {
+      if (g.comments.length === 0) continue;
+      notable.push({ text: `Clause ${g.clause}, page ${g.page}: ${g.comments.map((b) => `“${clip(b)}”`).join('; ')}`, cites: [] });
+    }
+  }
+
   const overviewValid = new Set<string>([
     ...verifiedClauses.flatMap((c) => [c.itemId, ...c.risks.map((r) => r.itemId)]),
     ...sectionSentences.flatMap((s) => [s.id, ...s.cites]),
@@ -798,7 +859,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       promptVersion: 'overview-points-v1',
       prompt: buildOverviewPrompt(request.detailLevel),
       input: `${defsContext}\n\nItems:\n${JSON.stringify({ sections: sectionSentences, findings: findingItems, missing: missingItems })}`,
-      maxTokens: Math.max(800, Math.min(3000, (OVERVIEW_POINTS.length - 1) * OVERVIEW_SENTENCES_PER_POINT[request.detailLevel] * OVERVIEW_TOKENS_PER_SENTENCE)),
+      maxTokens: Math.max(800, Math.min(3000, 8 * OVERVIEW_SENTENCES_PER_POINT[request.detailLevel] * OVERVIEW_TOKENS_PER_SENTENCE)),
       validate: (x) => typeof x === 'object' && x !== null,
     };
     const ovRun = await executeTasks(ctx, runId, doc, [overviewPlan]);
@@ -806,7 +867,103 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     await pauseIfNeeded(ovRun);
     for (const c of ovRun.collected) modelSentences.push(...keepPointSentences(c.items, overviewValid).kept);
   }
-  const overviewPoints = assembleOverviewPoints({ model: modelSentences, statutory, inconsistencies });
+
+  // Termination/exit and dispute/forum points: retrieve the clauses about those topics, then write
+  // only those points from them. This keeps them filled when section summaries do not cover them.
+  const focusTopics = [
+    { point: EXIT_POINT, queries: ['termination', 'notice period', 'expiry renewal'], pattern: /terminat|expiry|expire|cancel|revok|renew|notice/i },
+    {
+      point: DISPUTE_POINT,
+      queries: ['dispute resolution', 'arbitration', 'governing law jurisdiction'],
+      pattern: /disput|arbitrat|jurisdiction|governing law|courts?\b/i,
+    },
+  ];
+  const focusClauses = new Map<string, { id: string; clause: string; summary: string; risks: { id: string; text: string }[] }>();
+  for (const topic of focusTopics) {
+    for (const q of topic.queries) {
+      try {
+        const hits = await opts.docSearch(q, 6);
+        for (const hit of hits) {
+          for (const c of verifiedClauses) {
+            if (c.pageEnd < hit.pageStart || c.pageStart > hit.pageEnd) continue;
+            focusClauses.set(c.itemId, {
+              id: c.itemId,
+              clause: c.clauseNo,
+              summary: c.summary,
+              risks: c.risks.map((r) => ({ id: r.itemId, text: r.text })),
+            });
+          }
+        }
+      } catch (e) {
+        log(`document search failed for "${q}": ${String(e)}`);
+      }
+    }
+    // Fallback when search returns nothing: clauses whose own page text mentions the topic.
+    for (const c of verifiedClauses) {
+      if (focusClauses.has(c.itemId)) continue;
+      if (!topic.pattern.test(pageInput(pages, c.pageStart, c.pageEnd))) continue;
+      focusClauses.set(c.itemId, {
+        id: c.itemId,
+        clause: c.clauseNo,
+        summary: c.summary,
+        risks: c.risks.map((r) => ({ id: r.itemId, text: r.text })),
+      });
+    }
+  }
+  if (focusClauses.size > 0) {
+    const evidence = [...focusClauses.values()];
+    const focusValid = new Set(evidence.flatMap((c) => [c.id, ...c.risks.map((r) => r.id)]));
+    progress('writing termination and dispute points');
+    const plan: TaskPlan = {
+      suffix: 'ovf',
+      promptVersion: 'overview-focus-v1',
+      prompt: buildOverviewFocusPrompt(
+        request.detailLevel,
+        focusTopics.map((t) => `${t.point} ${OVERVIEW_POINTS[t.point - 1]}`),
+      ),
+      input: `${defsContext}\n\nItems:\n${JSON.stringify({ points: focusTopics.map((t) => ({ point: t.point, title: OVERVIEW_POINTS[t.point - 1] })), clauses: evidence })}`,
+      maxTokens: 1400,
+      validate: (x) => typeof x === 'object' && x !== null,
+    };
+    const focusRun = await executeTasks(ctx, runId, doc, [plan]);
+    addLimits(focusRun);
+    await pauseIfNeeded(focusRun);
+    for (const c of focusRun.collected) modelSentences.push(...keepPointSentences(c.items, focusValid).kept);
+  }
+
+  // Executive Summary: only the other points, the risks and the verified missing list.
+  const pointItems = OVERVIEW_POINTS.slice(0, SUMMARY_POINT - 1)
+    .map((title, i) => ({ id: `PT${i + 1}`, point: i + 1, title, text: '' }))
+    .map((p) => {
+      const sentences = modelSentences.filter((s) => s.point === p.point);
+      return { ...p, text: sentences.map((s) => s.text).join(' ') };
+    })
+    .filter((p) => p.text);
+  if (pointItems.length > 0) {
+    progress('writing executive summary');
+    const riskLines = verifiedClauses.flatMap((c) =>
+      c.risks.filter((r) => r.severity !== 'low').map((r) => ({ id: r.itemId, text: `Clause ${c.clauseNo}: ${r.text}` })),
+    );
+    const plan: TaskPlan = {
+      suffix: 'es',
+      promptVersion: 'executive-summary-v1',
+      prompt: buildExecutiveSummaryPrompt(),
+      input: `${defsContext}\n\nItems:\n${JSON.stringify({ points: pointItems, risks: riskLines, missing: missingItems })}`,
+      maxTokens: 1200,
+      validate: (x) => typeof x === 'object' && x !== null,
+    };
+    const run = await executeTasks(ctx, runId, doc, [plan]);
+    addLimits(run);
+    await pauseIfNeeded(run);
+    const valid = new Set<string>([...pointItems.map((p) => p.id), ...riskLines.map((r) => r.id), ...missingItems.map((m) => m.id)]);
+    const kept = run.collected.flatMap((c) => keepPointSentences(c.items, valid).kept);
+    // A gap may be stated only when the verified missing list has an entry for it.
+    const claimsGap = /\b(no|not|none|absent|missing|without|lacks?|fails? to)\b[^.]{0,60}\b(clause|provision|term|protection|governing law|forum|dispute|exit|notice|indemn)/i;
+    const summary = missingProtections.length > 0 ? kept : kept.filter((k) => !claimsGap.test(k.text));
+    modelSentences.push(...summary.map((k) => ({ point: SUMMARY_POINT, text: k.text, cites: k.cites })));
+  }
+
+  const overviewPoints = assembleOverviewPoints({ model: modelSentences, statutory, notable, inconsistencies });
   let overview: RollupSentence[] = overviewPoints.flatMap((p) => p.sentences).filter((s) => s.cites.length > 0);
 
   // 6. Coverage ledger, including skipped clauses.
@@ -991,6 +1148,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     overviewPoints,
     missingProtections,
     riskReview,
+    draftingIssues,
     ...(promptResult ? { promptResult } : {}),
   };
 

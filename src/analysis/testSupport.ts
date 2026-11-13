@@ -20,7 +20,10 @@ export async function signIn(): Promise<{ sb: SupabaseClient; token: string; use
 export async function seedDocument(db: HarnessDBHandle, docId: string, prepFingerprint: string): Promise<void> {
   const pages = Array.from({ length: 4 }, (_, i) => ({
     pageNo: i + 1,
-    text: `${i + 1}. Obligation ${i + 1}\nThe Developer shall perform obligation ${i + 1}. ${'Additional text. '.repeat(220)}`,
+    text: `${i + 1}. Obligation ${i + 1}\nThe Developer shall perform obligation ${i + 1}. ${'Additional text. '.repeat(220)}${
+      i === 1 ? '\nThe fee is Rs. ____ per month.' : ''
+    }${i === 0 ? '\nEither party may terminate this agreement on notice. Disputes shall be referred to arbitration.' : ''
+    }`,
   }));
   const now = Date.now();
   const doc: DocumentRecord = {
@@ -80,6 +83,22 @@ export function scriptedModel(req: CallRequest): string {
     const answers = JSON.parse(req.input.slice(req.input.indexOf('Verified answers:\n') + 18));
     const first = answers[0];
     return JSON.stringify([{ text: 'Clause two states the obligation.', cites: first ? [first.id] : [] }]);
+  }
+  if (req.prompt.includes('specific points of a legal contract overview')) {
+    const items = JSON.parse(req.input.slice(req.input.indexOf('Items:\n') + 7));
+    const first = items.clauses[0];
+    return JSON.stringify(
+      (items.points as { point: number }[]).map((p) => ({
+        point: p.point,
+        text: p.point === 8 ? 'Either party may end the agreement on notice.' : 'Disputes are referred to arbitration.',
+        cites: first ? [first.id] : [],
+      })),
+    );
+  }
+  if (req.prompt.includes('Executive Summary of a legal contract report')) {
+    const items = JSON.parse(req.input.slice(req.input.indexOf('Items:\n') + 7));
+    const first = items.points[0];
+    return JSON.stringify([{ text: 'The document records the agreed obligations and their risks.', cites: first ? [first.id] : [] }]);
   }
   if (req.prompt.includes('numbered overview')) {
     const cite = itemsFromInput().sections[0]?.cites?.[0];

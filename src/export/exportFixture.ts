@@ -24,8 +24,9 @@ const risk = (over: Partial<RiskRow> & { priority: RiskRow['priority'] }): RiskR
   pages: 'page 1',
   issue: 'Issue text.',
   laws: ['Indian Contract Act 1872'],
-  suggestion: 'Raise it in negotiation.',
+  suggestion: 'Add a mutual cap on the penalty.',
   kind: 'risk',
+  affects: 'Supplier',
   citation: c('1', 1, 'a quote'),
   ...over,
 });

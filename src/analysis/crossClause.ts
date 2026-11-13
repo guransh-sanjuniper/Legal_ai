@@ -13,6 +13,8 @@ export interface CrossFinding {
   text: string;
   itemIds: string[];
   severity: 'high' | 'medium' | 'low';
+  // One line explaining why the two items conflict.
+  reason?: string;
 }
 
 export interface PaymentTotal {

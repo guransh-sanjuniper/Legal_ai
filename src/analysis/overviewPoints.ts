@@ -1,4 +1,4 @@
-import { OVERVIEW_POINTS, STATUTORY_POINT, INCONSISTENCY_POINT, SUMMARY_POINT } from './prompts';
+import { OVERVIEW_POINTS, STATUTORY_POINT, NOTABLE_POINT, INCONSISTENCY_POINT, SUMMARY_POINT } from './prompts';
 import { keepCitedSentences, type KeptSentence } from './rollup';
 import type { MissingProtection, OverviewPoint, RollupSentence, VerifiedClause } from './types';
 
@@ -78,13 +78,14 @@ export function keepPointSentences(
 export interface OverviewInputs {
   model: ModelPointSentence[];
   statutory: RollupSentence[];
+  notable: RollupSentence[];
   inconsistencies: RollupSentence[];
 }
 
 export const EXECUTIVE_FALLBACK_NOTE = 'Assembled from cited sentences above.';
 
-// Assembles the thirteen points. Three are not left to the model's choice:
-// - Statutory Compliance and Internal Inconsistencies are built in code from stored data.
+// Assembles the thirteen points. Four are not left to the model's choice:
+// - Statutory Compliance, Notable Drafting Issues and Internal Inconsistencies are built in code.
 // - Executive Summary, if the model wrote nothing, is assembled from the first cited sentence of
 //   each other point, and the point is labelled as assembled.
 export function assembleOverviewPoints(input: OverviewInputs): OverviewPoint[] {
@@ -93,6 +94,7 @@ export function assembleOverviewPoints(input: OverviewInputs): OverviewPoint[] {
   const points: OverviewPoint[] = OVERVIEW_POINTS.map((title, i) => {
     const point = i + 1;
     if (point === STATUTORY_POINT) return { point, title, sentences: input.statutory };
+    if (point === NOTABLE_POINT) return { point, title, sentences: input.notable };
     if (point === INCONSISTENCY_POINT) return { point, title, sentences: input.inconsistencies };
     return { point, title, sentences: byPoint(point) };
   });

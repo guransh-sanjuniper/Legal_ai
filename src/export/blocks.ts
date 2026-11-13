@@ -62,11 +62,12 @@ function clauseTable(clause: ClauseView): Block {
 function riskTable(rows: RiskRow[]): Block {
   return {
     kind: 'table',
-    columns: ['#', 'Level', 'Clause and page', 'Issue', 'Law references', 'Suggested next steps'],
+    columns: ['#', 'Level', 'Clause and page', 'Affects', 'Issue', 'Law references', 'Suggested next steps'],
     rows: rows.map((r, i) => [
       String(i + 1),
       cap(r.priority),
       `${r.clause}${r.pages ? ` · ${r.pages}` : ''}`,
+      r.affects,
       r.issue,
       r.laws.length ? `${r.laws.join('; ')}\n(${LAW_LABEL})` : 'None named',
       r.suggestion,

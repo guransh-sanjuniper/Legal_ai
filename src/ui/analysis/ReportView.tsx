@@ -149,6 +149,7 @@ function RiskTable({ rows, onCite }: { rows: RiskRow[]; onCite: (c: Citation) =>
             <th>#</th>
             <th>Level</th>
             <th>Clause and page</th>
+            <th>Affects</th>
             <th>Issue</th>
             <th>Law references</th>
             <th>Suggested next steps</th>
@@ -165,6 +166,7 @@ function RiskTable({ rows, onCite }: { rows: RiskRow[]; onCite: (c: Citation) =>
                 <div>Clause {r.clause}</div>
                 {r.citation ? <Cite c={r.citation} onCite={onCite} /> : <span className="app-muted">{r.pages || 'Whole document'}</span>}
               </td>
+              <td>{r.affects}</td>
               <td>{r.issue}</td>
               <td>
                 {r.laws.length ? (

@@ -44,14 +44,14 @@ describe('overview points', () => {
     const laws = lawsEngaged(clauses, []);
     expect(laws[0].name).toBe('Act A');
     expect(laws[0].itemIds).toHaveLength(3);
-    const points = assembleOverviewPoints({ model: [], statutory: statutorySentences(laws), inconsistencies: [] });
+    const points = assembleOverviewPoints({ model: [], statutory: statutorySentences(laws), inconsistencies: [], notable: [] });
     const statutory = points[STATUTORY_POINT - 1];
     expect(statutory.sentences.map((s) => s.text).join(' ')).toMatch(/model knowledge, applicability unverified/);
     expect(statutory.sentences.some((s) => /page/i.test(s.text))).toBe(false);
   });
 
   it('says so when no law was named', () => {
-    const points = assembleOverviewPoints({ model: [], statutory: statutorySentences([]), inconsistencies: [] });
+    const points = assembleOverviewPoints({ model: [], statutory: statutorySentences([]), inconsistencies: [], notable: [] });
     expect(points[STATUTORY_POINT - 1].sentences[0].cites).toEqual([]);
   });
 
@@ -88,7 +88,7 @@ describe('overview points', () => {
   });
 
   it('gives every point an entry, empty when the model wrote nothing', () => {
-    const points = assembleOverviewPoints({ model: [{ point: 1, text: 'a', cites: ['C1'] }], statutory: [], inconsistencies: [] });
+    const points = assembleOverviewPoints({ model: [{ point: 1, text: 'a', cites: ['C1'] }], statutory: [], inconsistencies: [], notable: [] });
     expect(points).toHaveLength(13);
     expect(points[1].sentences).toEqual([]);
   });
@@ -98,6 +98,7 @@ describe('overview points', () => {
       model: [{ point: 13, text: 'model wrote this', cites: ['C1'] }],
       statutory: [],
       inconsistencies: [{ text: 'Dates disagree.', cites: ['C1'] }],
+      notable: [],
     });
     expect(points[11].sentences).toEqual([{ text: 'Dates disagree.', cites: ['C1'] }]);
   });
@@ -110,6 +111,7 @@ describe('overview points', () => {
       ],
       statutory: [],
       inconsistencies: [],
+      notable: [],
     });
     const summary = points[12];
     expect(summary.sentences.map((s) => s.text)).toEqual(['It is a licence.', 'Fee is set.']);
@@ -139,11 +141,24 @@ describe('prompt builders', () => {
     expect(p).toMatch(/ACTS TO CONSIDER FIRST/);
   });
 
-  it('keeps point 11 out of the model overview prompt', () => {
+  it('keeps the code-built and focused points out of the main overview prompt', () => {
     const p = buildOverviewPrompt('standard');
-    expect(p).not.toMatch(/11 Statutory Compliance/);
+    expect(p).not.toMatch(/10 Statutory Compliance/);
+    expect(p).not.toMatch(/11 Notable Drafting Issues/);
     expect(p).not.toMatch(/12 Internal Inconsistencies/);
-    expect(p).toMatch(/9 Dispute Resolution/);
+    expect(p).not.toMatch(/8 Termination and Exit/);
+    expect(p).not.toMatch(/9 Dispute Resolution/);
+    expect(p).toMatch(/7 Rights and Protections/);
+  });
+
+  it('puts Notable Drafting Issues in point 11 from the code-built list', () => {
+    const points = assembleOverviewPoints({
+      model: [],
+      statutory: [],
+      inconsistencies: [],
+      notable: [{ text: 'Unfilled blanks (2).', cites: [] }],
+    });
+    expect(points[10].sentences).toEqual([{ text: 'Unfilled blanks (2).', cites: [] }]);
   });
 
   it('puts the focus in the missing-protections prompt', () => {
