@@ -124,6 +124,11 @@ export async function promptOnReport(opts: PromptOnReportOptions): Promise<Promp
     maxTokens: 1200,
   });
   const synth = await synthesiseAnswers({ ctx, runId, doc, prompt: opts.prompt, answers: pass.result.answers });
+  const failedCodes = [
+    ...new Set(
+      [...pass.runs, ...synth.runs].flatMap((r) => r.tasks).filter((t) => t.status === 'failed').map((t) => t.failureCode ?? 'failed'),
+    ),
+  ];
   const metrics = await computeMetrics(opts.db, await opts.db.getAllFromIndex('tasks', 'byRun', runId));
   await opts.supabase.from('runs').update({ status: 'complete', updated_at: new Date().toISOString() }).eq('id', runId);
 
@@ -137,6 +142,9 @@ export async function promptOnReport(opts: PromptOnReportOptions): Promise<Promp
       chunksTotal: chunks.length,
       chunksDone: selected.length,
       failedChunks: pass.result.failedChunks,
+      ...(failedCodes.length
+        ? { error: `Answer generation failed (${failedCodes.join(', ')}). The verified quotes are listed below.` }
+        : {}),
     },
     runId,
     metrics,

@@ -179,6 +179,25 @@ describe('report model', () => {
     expect(pr.groups).toEqual([{ clause: '3', quotes: [{ quote: 'sixty days written notice', citation: expect.objectContaining({ page: 2 }) }] }]);
   });
 
+  it('shows the synthesis failure message instead of claiming nothing was found', () => {
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'Who may terminate?',
+          answers: [{ itemId: 'P1', text: 'q', clause: '7', page: 1, quote: 'notice', verified: true }],
+          answer: [],
+          error: 'Answer generation failed (bad_json). The verified quotes are listed below.',
+          chunksTotal: 2,
+          chunksDone: 2,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.error).toMatch(/Answer generation failed \(bad_json\)/);
+    expect(pr.answer).toEqual([]);
+  });
+
   it('splits dates and amounts into two tables and falls back to the quote when there is no purpose', () => {
     const model = buildReportModel(
       report([

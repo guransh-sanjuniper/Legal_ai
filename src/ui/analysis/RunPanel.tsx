@@ -14,6 +14,8 @@ export interface FailedRow {
   code: string;
   message: string;
   attempts: number;
+  // First part of the stored raw response, for diagnosing bad_json and similar failures.
+  snippet?: string;
 }
 
 const money = (usd: number) => `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
@@ -105,7 +107,10 @@ export function RunPanel({
                   <td>{r.label}</td>
                   <td>{r.pages}</td>
                   <td>{r.code}</td>
-                  <td>{r.message}</td>
+                  <td>
+                    {r.message}
+                    {r.snippet && <div className="ana-raw">{r.snippet}</div>}
+                  </td>
                   <td>{r.attempts}</td>
                 </tr>
               ))}

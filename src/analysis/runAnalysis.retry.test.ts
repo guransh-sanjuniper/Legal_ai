@@ -41,9 +41,17 @@ it('retry failed re-runs only the failed tasks, including the custom pass, then 
   const expectedReruns = failedFirst.filter((t) => /^a\d+$/.test(taskSuffix(t.id, first.runId))).length;
   expect(expectedReruns).toBeGreaterThan(0);
 
+  // Simulate tasks stored with older prompts: retry must refresh them from the current template,
+  // including a failed summary pass.
   const beforeTasks = await db.getAllFromIndex('tasks', 'byRun', first.runId);
+  const oldPs = beforeTasks.find((t) => t.id.endsWith(':ps'));
+  if (oldPs) await db.put('tasks', { ...oldPs, prompt: 'OLD PROMPT', promptVersion: 'old' });
+  const oldEs = beforeTasks.find((t) => t.id.endsWith(':es'));
+  if (oldEs) {
+    await db.put('tasks', { ...oldEs, status: 'failed', failureCode: 'bad_json', prompt: 'OLD PROMPT', promptVersion: 'old' });
+  }
   const before = new Set(beforeTasks.map((t) => t.id));
-  const psBefore = beforeTasks.find((t) => t.id.endsWith(':ps'))?.attemptNo ?? 0;
+  const attemptsBefore = new Map(beforeTasks.map((t) => [t.id, t.attemptNo]));
   failing = false;
   calls = 0;
   const second = await runAnalysis({ ...opts, resumeRunId: first.runId, retryFailed: true });
@@ -52,14 +60,22 @@ it('retry failed re-runs only the failed tasks, including the custom pass, then 
   // Retried tasks, plus any pass that could only start once the previously failed page had clauses.
   const after = await db.getAllFromIndex('tasks', 'byRun', first.runId);
   const newDone = after.filter((t) => !before.has(t.id) && t.status === 'done').length;
-  // The synthesis is re-run because its input changed; it keeps the same task id.
-  const psAfter = after.find((t) => t.id.endsWith(':ps'))?.attemptNo ?? 0;
-  const resynthesised = psAfter > psBefore ? 1 : 0;
-  expect(calls).toBe(expectedReruns + newDone + resynthesised);
+  const reran = after.filter((t) => before.has(t.id) && t.attemptNo > (attemptsBefore.get(t.id) ?? 0)).length;
+  expect(calls).toBe(reran + newDone);
   expect((await db.getAllFromIndex('tasks', 'byRun', first.runId)).filter((t) => t.status === 'failed' && /^a\d+$/.test(taskSuffix(t.id, first.runId)))).toHaveLength(0);
   expect(second.failedClauses).toEqual([]);
   expect(second.partial).toBe(false);
   expect(second.promptResult?.failedChunks).toEqual([]);
   expect(second.promptResult?.answers.length).toBeGreaterThan(0);
+  const afterTasks = await db.getAllFromIndex('tasks', 'byRun', first.runId);
+  const psAfterTask = afterTasks.find((t) => t.id.endsWith(':ps'));
+  expect(psAfterTask?.prompt).toMatch(/entire reply is one JSON array/);
+  expect(psAfterTask?.promptVersion).toBe('prompt-synthesis-v2');
+  const esAfterTask = afterTasks.find((t) => t.id.endsWith(':es'));
+  if (esAfterTask) {
+    expect(esAfterTask.prompt).toMatch(/entire reply is one JSON array/);
+    expect(esAfterTask.promptVersion).toBe('executive-summary-v1');
+    expect(esAfterTask.status).not.toBe('failed');
+  }
   expect(second.clauses.some((c) => c.pageStart === 1)).toBe(true);
 }, 180_000);

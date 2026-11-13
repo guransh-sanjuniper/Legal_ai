@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { HarnessDBHandle, DocumentRecord } from '../runner/db';
 import { rawKey } from '../runner/db';
 import { makeTask } from '../tasks/make';
+import { taskFingerprint } from '../tasks/fingerprint';
 import { parseItems } from '../tasks/parse';
 import { runTask } from '../runner/runTask';
 import { makeCallModel } from '../runner/callModel';
@@ -136,13 +137,34 @@ export async function executeTasks(
   const now = Date.now();
   if (ctx.rerunFailed) {
     // Only the passes in this call are reset; a failed task of another pass is left alone.
-    const planned = new Set(plans.map((p) => p.suffix));
+    // The stored prompt is replaced by the current template, so a retry after a prompt fix uses it.
+    const planBySuffix = new Map(plans.map((p) => [p.suffix, p]));
     for (const t of await ctx.db.getAllFromIndex('tasks', 'byRun', runId)) {
       if (t.status !== 'failed') continue;
       const suffix = t.id.slice(runId.length + 1).split('/')[0];
-      if (!planned.has(suffix)) continue;
-      await ctx.db.put('tasks', { ...t, status: 'queued', failureCode: null, failureMessage: null, nextAt: now, updatedAt: now });
-      ctx.onLog?.(`retry: ${t.id.slice(-14)} re-queued`);
+      const plan = planBySuffix.get(suffix);
+      if (!plan) continue;
+      const fingerprint = await taskFingerprint({
+        docHash: t.docHash,
+        prepFingerprint: t.prepFingerprint,
+        promptVersion: plan.promptVersion,
+        prompt: plan.prompt,
+        input: plan.input,
+      });
+      await ctx.db.put('tasks', {
+        ...t,
+        status: 'queued',
+        promptVersion: plan.promptVersion,
+        prompt: plan.prompt,
+        input: plan.input,
+        maxTokens: plan.maxTokens,
+        fingerprint,
+        failureCode: null,
+        failureMessage: null,
+        nextAt: now,
+        updatedAt: now,
+      });
+      ctx.onLog?.(`retry: ${t.id.slice(-14)} re-queued with the current prompt`);
     }
   }
   for (const plan of plans) {

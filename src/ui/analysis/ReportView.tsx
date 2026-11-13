@@ -240,7 +240,7 @@ function SectionBody({
             </button>
           )}
           {section.answer.length === 0 ? (
-            <p className="app-muted">Not found in this document.</p>
+            section.error ? <p className="app-banner app-banner--error">{section.error}</p> : <p className="app-muted">Not found in this document.</p>
           ) : (
             <p className="ana-answer">
               {section.answer.map((a, i) => (

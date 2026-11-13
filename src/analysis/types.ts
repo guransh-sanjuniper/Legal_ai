@@ -150,6 +150,8 @@ export interface PromptResult {
   chunksTotal: number;
   chunksDone: number;
   failedChunks: { chunkIndex: number; pages: [number, number]; failureCode: string | null; message: string | null }[];
+  // Set when the write-up call failed; the verified quotes are still available.
+  error?: string;
 }
 
 // Unfilled blanks and reviewer comments found in the source text by code, grouped by clause.

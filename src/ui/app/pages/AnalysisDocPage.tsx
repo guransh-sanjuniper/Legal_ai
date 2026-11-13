@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { openHarnessDb, type DocumentRecord, type HarnessDBHandle } from '../../../runner/db';
+import { openHarnessDb, rawKey, type DocumentRecord, type HarnessDBHandle } from '../../../runner/db';
 import { libraryStatusFrom, stageLabel, statusLabel, statusTone } from '../../library/docStatus';
 import { isPrepared, readPreparationState, type PreparationState } from '../../library/preparationState';
 import { EmptyCard, PageHeader } from './Placeholder';
@@ -155,6 +155,11 @@ export function AnalysisDocPage() {
       const chunk = ['a', 'r', 'x', 'c', 'cx'].includes(kind)
         ? planRef.current?.chunks.find((c) => c.index === taskChunkIndex(t.id))
         : undefined;
+      let snippet: string | undefined;
+      if (t.attemptId) {
+        const raw = await db.get('raw_responses', rawKey(t.id, t.attemptId));
+        if (raw?.text) snippet = raw.text.replace(/\s+/g, ' ').slice(0, 300);
+      }
       rows.push({
         id: t.id,
         label: taskLabel(t.id),
@@ -162,6 +167,7 @@ export function AnalysisDocPage() {
         code: t.failureCode ?? 'unknown',
         message: t.failureMessage ?? '',
         attempts: t.attemptNo,
+        snippet,
       });
     }
     setFailedRows(rows);

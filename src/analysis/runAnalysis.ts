@@ -19,6 +19,7 @@ import { blankAffectsTerm, extractDraftingIssues } from './textQuality';
 import {
   buildClausePrompt,
   buildExecutiveSummaryPrompt,
+  buildPromptSynthesisPrompt,
   buildOverviewFocusPrompt,
   buildStatutoryPrompt,
   buildOverviewPrompt,
@@ -582,7 +583,16 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     if (opts.retryFailed) {
       const ps = await db.get('tasks', `${runId}:ps`);
       if (ps) {
-        await db.put('tasks', { ...ps, status: 'queued', failureCode: null, failureMessage: null, nextAt: 0, updatedAt: Date.now() });
+        await db.put('tasks', {
+          ...ps,
+          status: 'queued',
+          prompt: buildPromptSynthesisPrompt(),
+          promptVersion: 'prompt-synthesis-v2',
+          failureCode: null,
+          failureMessage: null,
+          nextAt: 0,
+          updatedAt: Date.now(),
+        });
       }
     }
     const seenQuote = new Set<string>();
@@ -608,6 +618,7 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       addLimits(r);
       await pauseIfNeeded(r);
     }
+    const failedCodes = [...new Set(synth.runs.flatMap((r) => r.tasks).filter((t) => t.status === 'failed').map((t) => t.failureCode ?? 'failed'))];
     promptResult = {
       prompt: request.customPrompt,
       answers,
@@ -616,6 +627,9 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       chunksTotal: chunks.length,
       chunksDone: chunks.length,
       failedChunks: [],
+      ...(failedCodes.length
+        ? { error: `Answer generation failed (${failedCodes.join(', ')}). The verified quotes are listed below.` }
+        : {}),
     };
   }
 

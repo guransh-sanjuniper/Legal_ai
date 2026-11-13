@@ -120,6 +120,8 @@ export type ReportSection =
       // How the answer was produced, and how many sections were read.
       modeLine: string | null;
       canScanWhole: boolean;
+      // Set when the write-up call failed; the quotes are still shown.
+      error: string | null;
       // One answer in prose. Sentences cite verified chunk answers.
       answer: { text: string; citations: Citation[] }[];
       // Supporting quotes, grouped by clause.
@@ -501,6 +503,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
               ? 'Answered with the clause analysis, with no extra reading pass.'
               : null,
       canScanWhole: pr.mode === 'retrieval',
+      error: pr.error ?? null,
       answer,
       groups: [...grouped.values()],
       failed: pr.failedChunks.map((f) => `pages ${f.pages[0]}–${f.pages[1]}: ${f.message ?? f.failureCode ?? 'not completed'}`),

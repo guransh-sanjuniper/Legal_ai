@@ -117,6 +117,7 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
       prompt: 'Is there a delivery deadline?',
       modeLine: 'Based on the 2 most relevant sections of 3.',
       canScanWhole: true,
+      error: null,
       answer: [{ text: 'Yes, delivery is due within thirty days of the order.', citations: [c('2', 2, 'within thirty days of the order')] }],
       groups: [{ clause: '2', quotes: [{ quote: 'within thirty days of the order', citation: c('2', 2, 'within thirty days of the order') }] }],
       failed: [],

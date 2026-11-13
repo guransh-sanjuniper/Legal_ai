@@ -292,3 +292,12 @@
   color: var(--app-danger);
   font-size: 13px;
 }
+
+.ana-raw {
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--app-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

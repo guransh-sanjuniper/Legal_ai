@@ -166,8 +166,10 @@ export function buildExecutiveSummaryPrompt(): string {
     UNTRUSTED_NOTICE,
     'Use only the supplied overview points, risk lines and verified missing list. Do not add facts.',
     'State that something is absent only when it appears in the supplied missing list. Otherwise describe what the document provides.',
-    'Return ONLY a JSON array of sentences: {"text":"...","cites":["ITEM_ID",...]}. A sentence about a gap must cite the corresponding missing item id.',
-    'Write a short paragraph. Do not repeat the points one by one.',
+    'Your entire reply is one JSON array. No text before or after it, and no markdown fences.',
+    'Every element is an object, never a bare string: {"text":"...","cites":["ITEM_ID"]}.',
+    'Put the summary in the text fields; joined, they should read as one short paragraph. A sentence about a gap must cite the corresponding missing item id.',
+    'Example reply: [{"text":"The agreement is a licence for the stated premises.","cites":["PT3"]}]',
   ].join('\n');
 }
 
@@ -256,8 +258,11 @@ export function buildPromptSynthesisPrompt(): string {
     UNTRUSTED_NOTICE,
     'The form and length of the answer follow the request: a yes/no question gets a short answer, a request to list items gets a list, a broad question gets a fuller answer.',
     'Start with the direct answer, then the supporting detail. Cite the item ids behind every statement.',
-    'If the verified answers do not answer the request, say once that it is not found in the document; do not pad.',
-    'Return ONLY a JSON array of sentences: {"text":"...","cites":["ITEM_ID",...]}. Every sentence must cite at least one item id.',
+    'If the verified answers do not answer the request, use one element whose text says it is not found in the document, with an empty cites list; do not pad.',
+    'Your entire reply is one JSON array. No text before or after it, and no markdown fences.',
+    'Every element is an object, never a bare string: {"text":"...","cites":["ITEM_ID"]}.',
+    'Put the answer in the text fields. Keep it short and in the form the request asks for.',
+    'Example reply: [{"text":"Either party may terminate on 60 days notice.","cites":["P1"]}]',
   ].join('\n');
 }
 

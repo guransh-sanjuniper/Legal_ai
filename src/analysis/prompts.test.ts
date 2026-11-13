@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildClausePrompt, buildMissingPrompt, buildStatutoryPrompt } from './prompts';
+import { buildClausePrompt, buildExecutiveSummaryPrompt, buildMissingPrompt, buildPromptSynthesisPrompt, buildStatutoryPrompt } from './prompts';
 import { normaliseRequest } from './request';
 
 describe('clause prompt', () => {
@@ -70,5 +70,14 @@ describe('request reviewing side', () => {
 
   it('does not ask for an execution and attestation block in the missing pass', () => {
     expect(buildMissingPrompt({ docType: 'lease' })).not.toMatch(/attestation/);
+  });
+
+  it('demands one JSON array with example objects for the synthesis and summary', () => {
+    for (const p of [buildPromptSynthesisPrompt(), buildExecutiveSummaryPrompt()]) {
+      expect(p).toMatch(/entire reply is one JSON array/);
+      expect(p).toMatch(/never a bare string/);
+      expect(p).toMatch(/Example reply: \[\{"text"/);
+      expect(p).not.toMatch(/Write a short paragraph\./);
+    }
   });
 });
