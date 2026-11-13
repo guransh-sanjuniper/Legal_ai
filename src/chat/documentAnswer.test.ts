@@ -63,6 +63,12 @@ describe('promptResultContent', () => {
     expect(out.citations).toEqual([]);
   });
 
+  it('puts the scan note in the stored answer text', () => {
+    const r = result({ answers: [ans('P1', 1, '1', 'q')], answer: [{ text: 'Yes.', cites: ['P1'] }] });
+    const out = promptResultContent(r, { searchFellBack: false, scanNote: 'Scanned 2 of 5 sections; 3 had no match for your terms (deposit).' });
+    expect(out.content).toBe('Yes.\n\nScanned 2 of 5 sections; 3 had no match for your terms (deposit).');
+  });
+
   it('notes a search that matched nothing, and sections that failed', () => {
     const r = result({
       answers: [ans('P1', 1, '1', 'q')],

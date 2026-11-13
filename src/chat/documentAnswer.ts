@@ -35,6 +35,8 @@ const citeOf = (a: PromptAnswer): Citation => ({ page: a.page, clause: a.clause,
 export interface PromptTextOptions {
   // True when search failed or matched nothing, so the prompt pass read the first sections instead.
   searchFellBack: boolean;
+  // Whole-document scans only: what was scanned and why the rest was not.
+  scanNote?: string;
 }
 
 // The written answer from a prompt pass (retrieval or whole). Sentences cite verified answer ids;
@@ -42,6 +44,7 @@ export interface PromptTextOptions {
 // sources and the stored error says so.
 export function promptResultContent(result: PromptResult, opts: PromptTextOptions): { content: string; citations: Citation[] } {
   const notes: string[] = [];
+  if (opts.scanNote) notes.push(opts.scanNote);
   if (opts.searchFellBack) {
     notes.push('Search did not find matching sections for this question, so the first sections of the document were read instead.');
   }

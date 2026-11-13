@@ -35,6 +35,8 @@ export interface PromptOnReportOptions {
   reviewingFor?: ReviewingFor;
   search: (query: string, k: number) => Promise<PromptSearchHit[]>;
   selectCount?: number;
+  // Whole mode only: read these chunk indexes instead of every chunk. Unset reads every chunk.
+  chunkIndexes?: number[];
   onProgress?: (msg: string) => void;
   onLog?: (line: string) => void;
   callModel?: (req: import('../tasks/types').CallRequest) => Promise<import('../tasks/types').CallResult>;
@@ -46,6 +48,13 @@ export interface PromptOnReportResult {
   metrics: AnalysisMetrics;
   selectedChunks: number;
   totalChunks: number;
+}
+
+// Whole mode reads every chunk unless an index subset is given (the chat pre-filter). Order is kept.
+export function wholeChunks(chunks: AnalysisChunk[], indexes?: number[]): AnalysisChunk[] {
+  if (!indexes) return chunks;
+  const wanted = new Set(indexes);
+  return chunks.filter((c) => wanted.has(c.index));
 }
 
 // Chunks that a search hit touches, scored by the hit's fused score.
@@ -75,8 +84,9 @@ export async function promptOnReport(opts: PromptOnReportOptions): Promise<Promp
 
   let selected: AnalysisChunk[];
   if (opts.mode === 'whole') {
-    selected = chunks;
-    progress(`whole-document scan over ${chunks.length} chunks`);
+    selected = wholeChunks(chunks, opts.chunkIndexes);
+    if (selected.length === 0) throw new Error('no chunks to read');
+    progress(`whole-document scan over ${selected.length} chunks`);
   } else {
     const want = Math.max(1, opts.selectCount ?? PROMPT_RETRIEVAL_CHUNKS);
     let ranked: { index: number; score: number }[] = [];

@@ -58,6 +58,11 @@ export function contentTokens(text: string): string[] {
   return [...new Set(words)];
 }
 
+// The words of a question that name something in a document: stop and generic words removed.
+export function significantTerms(question: string): string[] {
+  return contentTokens(question).filter((t) => !GENERIC.has(t));
+}
+
 interface Candidate extends SavedRow {
   // Text the question is matched against. Not shown.
   match: string;

@@ -10,6 +10,7 @@ import { promptPrompt } from '../analysis/promptPass';
 import { buildReportModel, type Citation, type ReportModel } from '../analysis/reportModel';
 import type { AnalysisReport } from '../analysis/types';
 import { routeQuestion } from './route';
+import { selectChunksForQuestion, scanNote, type ScanSelection } from './scanFilter';
 import { savedCitations, savedContent, promptResultContent } from './documentAnswer';
 import { estimatePass, type PassEstimate } from './estimate';
 import type { ChatMode } from './store';
@@ -53,9 +54,14 @@ export async function loadDocumentContext(
 }
 
 // Pre-send estimates. Retrieval reads at most PROMPT_RETRIEVAL_CHUNKS sections, so its estimate
-// uses the largest sections (an upper bound). The whole scan reads every section.
-export function estimatesFor(ctx: DocumentContext): { retrieval: PassEstimate; whole: PassEstimate } {
+// uses the largest sections (an upper bound). The whole scan reads the sections the question's
+// terms select (every section when it has none), so the question is needed for that estimate.
+export function estimatesFor(
+  ctx: DocumentContext,
+  question = '',
+): { retrieval: PassEstimate; whole: PassEstimate; scan: ScanSelection } {
   const promptText = promptPrompt(' ', ctx.report?.request?.reviewingFor ?? 'neutral');
+  const scan = selectChunksForQuestion(ctx.chunks, question);
   const sectionTexts = ctx.chunks.map((c) => c.pageMarkedText);
   const largest = [...sectionTexts].sort((a, b) => b.length - a.length).slice(0, PROMPT_RETRIEVAL_CHUNKS);
   const m = ctx.report?.metrics;
@@ -67,7 +73,8 @@ export function estimatesFor(ctx: DocumentContext): { retrieval: PassEstimate; w
   };
   return {
     retrieval: estimatePass({ ...base, sectionTexts: largest }),
-    whole: estimatePass({ ...base, sectionTexts }),
+    whole: estimatePass({ ...base, sectionTexts: scan.chunks.map((c) => c.pageMarkedText) }),
+    scan,
   };
 }
 
@@ -108,6 +115,9 @@ export async function answerFromDocument(
 
   const mode = route.mode;
   let searchFellBack = false;
+  // Whole scans read only the sections that share a term with the question. Retrieval passes no
+  // subset, so promptOnReport reads its own selection as before.
+  const scan = mode === 'whole' ? selectChunksForQuestion(ctx.chunks, question) : null;
   deps.onStatus(mode === 'whole' ? 'Scanning the whole document…' : 'Searching the document…');
   const res = await promptOnReport({
     db: deps.db,
@@ -135,6 +145,7 @@ export async function answerFromDocument(
       }
     },
     selectCount: PROMPT_RETRIEVAL_CHUNKS,
+    chunkIndexes: scan ? scan.chunks.map((c) => c.index) : undefined,
     onProgress: deps.onStatus,
   });
 
@@ -142,6 +153,6 @@ export async function answerFromDocument(
   // leaves the run untagged; the answer is still shown.
   await deps.supabase.from('runs').update({ source: 'chat' }).eq('id', res.runId);
 
-  const text = promptResultContent(res.result, { searchFellBack });
+  const text = promptResultContent(res.result, { searchFellBack, scanNote: scan ? scanNote(scan) : undefined });
   return { content: text.content, mode, citations: text.citations, runId: res.runId };
 }

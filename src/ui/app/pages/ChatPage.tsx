@@ -25,6 +25,7 @@ import { buildRequestMessages, generalHistory, titleFrom } from '../../../chat/t
 import { answerFromDocument, estimatesFor, loadDocumentContext, type DocumentContext } from '../../../chat/documentTurn';
 import { citationLabel, MODE_LABEL } from '../../../chat/documentAnswer';
 import { describePass } from '../../../chat/estimate';
+import { scanNote } from '../../../chat/scanFilter';
 import { openHarnessDb, type HarnessDBHandle } from '../../../runner/db';
 import { isPrepared } from '../../library/preparationState';
 import { RetrievalClient } from '../../../retrieval/client';
@@ -162,7 +163,8 @@ export function ChatPage() {
     };
   }, [docId, db]);
 
-  const estimates = useMemo(() => (docCtx ? estimatesFor(docCtx) : null), [docCtx]);
+  // The whole-scan estimate depends on the draft: the sections it reads come from its terms.
+  const estimates = useMemo(() => (docCtx ? estimatesFor(docCtx, draft) : null), [docCtx, draft]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -378,7 +380,9 @@ export function ChatPage() {
   const hint = (() => {
     if (!docId) return null;
     if (!docReady || !estimates) return 'Loading document…';
-    if (scanWhole) return `${describePass('Whole-document scan', estimates.whole)} Starts when you press Send.`;
+    if (scanWhole) {
+      return `${describePass('Whole-document scan', estimates.whole)} ${scanNote(estimates.scan)} Starts when you press Send.`;
+    }
     const label = docCtx?.report
       ? 'If the saved report does not answer it, retrieval (up to 12 sections)'
       : 'Retrieval (up to 12 sections; no saved report)';
