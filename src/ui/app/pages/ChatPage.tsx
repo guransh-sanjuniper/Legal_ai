@@ -23,7 +23,8 @@ import {
 } from '../../../chat/store';
 import { buildRequestMessages, generalHistory, titleFrom } from '../../../chat/thread';
 import { answerFromDocument, estimatesFor, loadDocumentContext, type DocumentContext } from '../../../chat/documentTurn';
-import { citationLabel, MODE_LABEL } from '../../../chat/documentAnswer';
+import { citationLabel, chatSources, MODE_LABEL } from '../../../chat/documentAnswer';
+import { moreSourcesLabel } from '../../../analysis/supportingSources';
 import { describePass } from '../../../chat/estimate';
 import { scanNote } from '../../../chat/scanFilter';
 import { formatMessageTime } from '../../../chat/format';
@@ -575,7 +576,7 @@ function Bubble({
       </div>
     );
   }
-  const citations = message.citations ?? [];
+  const sources = chatSources(message.citations ?? []);
   return (
     <div className="app-chat-msg app-chat-msg--assistant">
       {message.mode && message.documentName && (
@@ -585,10 +586,10 @@ function Bubble({
       )}
       <Markdown text={message.content} />
       {note && <p className="app-chat-note">{note}</p>}
-      {citations.length > 0 && message.documentId && (
+      {sources.shown.length > 0 && message.documentId && (
         <div className="app-chat-sources">
           <span className="app-muted">Sources</span>
-          {citations.map((c, i) => (
+          {sources.shown.map((c, i) => (
             <button
               key={`${c.page}|${c.clause}|${i}`}
               type="button"
@@ -598,6 +599,7 @@ function Bubble({
               {citationLabel(c)}
             </button>
           ))}
+          {sources.more > 0 && <span className="app-muted">{moreSourcesLabel(sources.more)}</span>}
         </div>
       )}
       <MessageMeta message={message} />

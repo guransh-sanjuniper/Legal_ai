@@ -179,6 +179,57 @@ describe('report model', () => {
     expect(pr.groups).toEqual([{ clause: '3', quotes: [{ quote: 'sixty days written notice', citation: expect.objectContaining({ page: 2 }) }] }]);
   });
 
+  it('caps the supporting quotes and counts the ones not shown', () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({
+      itemId: `P${i + 1}`,
+      text: `text ${i + 1}`,
+      clause: '3',
+      page: i + 2,
+      quote: `quote ${i + 1}`,
+      verified: true as const,
+      part: 'support' as const,
+    }));
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'What is this document about?',
+          answers: many,
+          // The prose leads with the last answer, so that quote is shown first.
+          answer: [{ text: 'It is a lease.', cites: ['P6'] }],
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    const shown = pr.groups.flatMap((g) => g.quotes);
+    expect(shown).toHaveLength(4);
+    expect(shown[0].quote).toBe('quote 6');
+    expect(pr.sourcesMore).toBe(2);
+  });
+
+  it('shows every supporting quote when there are fewer than the cap', () => {
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'What is the deposit?',
+          answers: [
+            { itemId: 'P1', text: 'a', clause: '4', page: 2, quote: 'deposit one', verified: true, part: 'answer' },
+            { itemId: 'P2', text: 'b', clause: '4', page: 3, quote: 'deposit two', verified: true, part: 'support' },
+          ],
+          answer: [{ text: 'It is Rs 50,000.', cites: ['P1'] }],
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.groups.flatMap((g) => g.quotes)).toHaveLength(2);
+    expect(pr.sourcesMore).toBe(0);
+  });
+
   it('shows the synthesis failure message instead of claiming nothing was found', () => {
     const model = buildReportModel(
       report([], {

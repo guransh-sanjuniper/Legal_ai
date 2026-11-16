@@ -8,6 +8,7 @@ import {
   type ReportSection,
   type RiskRow,
 } from '../analysis/reportModel';
+import { moreSourcesLabel } from '../analysis/supportingSources';
 
 // Export blocks: the single content description that both the DOCX and the HTML writers render.
 // It is built only from ReportModel, so the exports match the screen section for section.
@@ -114,6 +115,7 @@ function sectionBlocks(section: ReportSection, model: ReportModel): Block[] {
         for (const g of section.groups) {
           out.push({ kind: 'bullets', items: g.quotes.map((q) => `“${q.quote}” (${citationText(q.citation)})`) });
         }
+        if (section.sourcesMore > 0) out.push({ kind: 'paragraph', text: moreSourcesLabel(section.sourcesMore), muted: true });
       }
       out.push({
         kind: 'paragraph',

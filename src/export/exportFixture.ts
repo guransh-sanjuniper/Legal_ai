@@ -120,6 +120,7 @@ export function fixtureModel(opts: { withPrompt?: boolean; clauses?: number } = 
       error: null,
       answer: [{ text: 'Yes, delivery is due within thirty days of the order.', citations: [c('2', 2, 'within thirty days of the order')] }],
       groups: [{ clause: '2', quotes: [{ quote: 'within thirty days of the order', citation: c('2', 2, 'within thirty days of the order') }] }],
+      sourcesMore: 0,
       failed: [],
       chunksDone: 2,
       chunksTotal: 2,

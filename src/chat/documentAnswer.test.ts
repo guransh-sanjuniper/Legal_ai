@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { PromptAnswer, PromptResult } from '../analysis/types';
-import { MODE_LABEL, citationLabel, promptResultContent, savedCitations, savedContent } from './documentAnswer';
+import { MODE_LABEL, chatSources, citationLabel, promptResultContent, savedCitations, savedContent } from './documentAnswer';
 import type { SavedRow } from './route';
 
 const ans = (id: string, page: number, clause: string, quote: string): PromptAnswer => ({
@@ -50,6 +50,15 @@ describe('promptResultContent', () => {
     expect(out.citations).toEqual([{ page: 7, clause: '9', quote: 'quote two' }]);
   });
 
+  it('lists the source the prose leads with first', () => {
+    const r = result({
+      answers: [ans('P1', 3, '4', 'quote one'), ans('P2', 7, '9', 'quote two')],
+      answer: [{ text: 'Both apply.', cites: ['P2', 'P1'] }],
+    });
+    const out = promptResultContent(r, { searchFellBack: false });
+    expect(out.citations.map((c) => c.page)).toEqual([7, 3]);
+  });
+
   it('keeps the verified quotes as sources when the write-up failed', () => {
     const r = result({ answers: [ans('P1', 3, '4', 'quote one')], error: 'Answer generation failed (http_500).' });
     const out = promptResultContent(r, { searchFellBack: false });
@@ -78,6 +87,21 @@ describe('promptResultContent', () => {
     const out = promptResultContent(r, { searchFellBack: true });
     expect(out.content).toContain('first sections of the document were read instead');
     expect(out.content).toContain('1 section could not be read');
+  });
+});
+
+describe('chatSources', () => {
+  const cite = (i: number) => ({ page: i, clause: String(i), quote: `q${i}` });
+
+  it('caps a long source list and counts the rest', () => {
+    const sources = chatSources(Array.from({ length: 6 }, (_, i) => cite(i + 1)));
+    expect(sources.shown).toHaveLength(4);
+    expect(sources.more).toBe(2);
+  });
+
+  it('shows a short source list in full', () => {
+    const list = [cite(1), cite(2)];
+    expect(chatSources(list)).toEqual({ shown: list, more: 0 });
   });
 });
 

@@ -1,4 +1,5 @@
 import type { Citation } from '../analysis/reportModel';
+import { limitSupporting, rankPromptAnswers } from '../analysis/supportingSources';
 import type { PromptAnswer, PromptResult } from '../analysis/types';
 import type { ChatMode } from './store';
 import { uniqueCitations, type SavedRow } from './route';
@@ -32,6 +33,12 @@ export function savedCitations(rows: SavedRow[]): Citation[] {
 
 const citeOf = (a: PromptAnswer): Citation => ({ page: a.page, clause: a.clause, quote: a.quote });
 
+// The source buttons shown under a chat answer: the most representative few, plus how many are not
+// shown. The message keeps every citation, so the rest can still be opened later.
+export function chatSources(citations: Citation[]): { shown: Citation[]; more: number } {
+  return limitSupporting(citations);
+}
+
 export interface PromptTextOptions {
   // True when search failed or matched nothing, so the prompt pass read the first sections instead.
   searchFellBack: boolean;
@@ -60,13 +67,14 @@ export function promptResultContent(result: PromptResult, opts: PromptTextOption
     const text = sentences.map((s) => s.text).join(' ');
     return {
       content: [text, ...notes].join('\n\n'),
-      citations: uniqueCitations(answers.filter((a) => cited.has(a.itemId)).map(citeOf)),
+      // Most representative first, so a capped source list leads with the quotes the answer cites.
+      citations: uniqueCitations(rankPromptAnswers(answers, sentences).filter((a) => cited.has(a.itemId)).map(citeOf)),
     };
   }
   if (result.error) {
     return {
       content: [result.error, ...notes].join('\n\n'),
-      citations: uniqueCitations(answers.slice(0, SOURCE_LIMIT).map(citeOf)),
+      citations: uniqueCitations(rankPromptAnswers(answers, sentences).slice(0, SOURCE_LIMIT).map(citeOf)),
     };
   }
   if (answers.length === 0) {

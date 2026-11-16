@@ -1,6 +1,7 @@
 import { quoteOverlap } from './judgement';
 import { OVERVIEW_POINTS } from './prompts';
 import { NO_SUGGESTION, normaliseMissing, sortByPriority, sortByPriorityOf, type RiskPriority } from './rubric';
+import { limitSupporting, rankPromptAnswers } from './supportingSources';
 import type {
   AnalysisReport,
   ClauseProse,
@@ -124,8 +125,9 @@ export type ReportSection =
       error: string | null;
       // One answer in prose. Sentences cite verified chunk answers.
       answer: { text: string; citations: Citation[] }[];
-      // Supporting quotes, grouped by clause.
+      // Supporting quotes, grouped by clause. Capped; the uncapped rest is counted in sourcesMore.
       groups: { clause: string; quotes: { quote: string; citation: Citation }[] }[];
+      sourcesMore: number;
       failed: string[];
       chunksDone: number;
       chunksTotal: number;
@@ -480,13 +482,19 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
         return a ? [citationOf(a)] : [];
       }),
     }));
+    // The same quote can come back as both an answer and its support; keep one of each.
+    const seenQuotes = new Set<string>();
+    const unique = rankPromptAnswers(pr.answers, pr.answer ?? []).filter((a) => {
+      const key = `${a.page}|${a.quote}`;
+      if (seenQuotes.has(key)) return false;
+      seenQuotes.add(key);
+      return true;
+    });
+    const { shown, more } = limitSupporting(unique);
     const grouped = new Map<string, { clause: string; quotes: { quote: string; citation: Citation }[] }>();
-    for (const a of pr.answers) {
+    for (const a of shown) {
       const g = grouped.get(a.clause) ?? { clause: a.clause, quotes: [] };
-      // The same quote can come back as both an answer and its support.
-      if (!g.quotes.some((q) => q.citation.page === a.page && q.quote === a.quote)) {
-        g.quotes.push({ quote: a.quote, citation: citationOf(a) });
-      }
+      g.quotes.push({ quote: a.quote, citation: citationOf(a) });
       grouped.set(a.clause, g);
     }
     sections.push({
@@ -506,6 +514,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       error: pr.error ?? null,
       answer,
       groups: [...grouped.values()],
+      sourcesMore: more,
       failed: pr.failedChunks.map((f) => `pages ${f.pages[0]}–${f.pages[1]}: ${f.message ?? f.failureCode ?? 'not completed'}`),
       chunksDone: pr.chunksDone,
       chunksTotal: pr.chunksTotal,

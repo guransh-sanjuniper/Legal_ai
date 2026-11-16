@@ -9,6 +9,7 @@ import {
   type ReportSection,
   type RiskRow,
 } from '../../analysis/reportModel';
+import { moreSourcesLabel } from '../../analysis/supportingSources';
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -269,6 +270,7 @@ function SectionBody({
                   </ul>
                 </div>
               ))}
+              {section.sourcesMore > 0 && <p className="app-muted">{moreSourcesLabel(section.sourcesMore)}</p>}
             </>
           )}
           <p className="app-muted">
