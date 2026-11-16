@@ -124,6 +124,34 @@ export interface SourceText {
   outlineFingerprint: string;
 }
 
+export type ClauseStatus = 'pending' | 'writing' | 'done' | 'failed' | 'verbatim';
+
+export interface ClauseRecord {
+  text: string;
+  status: ClauseStatus;
+  itemFingerprint: string;
+  sourceBindingIds: string[];
+  model: string;
+  generatedAt: string;
+  durationMs: number;
+  error?: string;
+  errorCode?: string;
+  copiedFrom?: { bindingId: string; label: string; pages: string };
+  truncated?: boolean;
+  unknownRefs?: string[];
+  edited?: false;
+}
+
+export interface WriteRun {
+  startedAt: string;
+  finishedAt: string | null;
+  calls: number;
+  retries: number;
+  rateLimitEvents: number;
+  rateLimitWaitMs: number;
+  stopped?: boolean;
+}
+
 export interface DraftRecord {
   id: string;
   userId: string;
@@ -137,7 +165,8 @@ export interface DraftRecord {
   sourcePlan: SourcePlan | null;
   outline: Outline | null;
   sourceText: SourceText | null;
-  clauses: Record<string, unknown>;
+  clauses: Record<string, ClauseRecord>;
+  writeRun: WriteRun | null;
   schemaVersion: typeof DRAFTER_SCHEMA_VERSION;
   createdAt: string;
   updatedAt: string;
@@ -158,6 +187,7 @@ export type DraftPatch = Partial<
     | 'outline'
     | 'sourceText'
     | 'clauses'
+    | 'writeRun'
   >
 >;
 

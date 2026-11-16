@@ -50,6 +50,11 @@ function fnv(text: string, seed: number): string {
   return hash.toString(16).padStart(8, '0');
 }
 
+// Stable, synchronous content hash used for fingerprints. Equality only.
+export function hashText(text: string): string {
+  return `${fnv(text, 0x811c9dc5)}${fnv(text, 0x9e3779b9)}`;
+}
+
 // Stable, synchronous, non-cryptographic. Equality only: the outline is stale when this value
 // differs from the one stored with it.
 export function planFingerprint(

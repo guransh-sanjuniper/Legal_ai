@@ -341,4 +341,39 @@ describe('drafter sync', () => {
     } as unknown as DraftRow);
     expect(malformed.sourceText).toBeNull();
   });
+
+  it('round-trips clauses and the write run', async () => {
+    const created = await createDraft(db, { userId: 'user-a', instruction: 'Draft a lease.' });
+    const clauses = {
+      i1: {
+        text: 'The licensee shall pay rent.',
+        status: 'done' as const,
+        itemFingerprint: 'fp-1',
+        sourceBindingIds: ['bind-1'],
+        model: 'write-model',
+        generatedAt: '2026-01-02T00:00:00.000Z',
+        durationMs: 1200,
+      },
+    };
+    const writeRun = {
+      startedAt: '2026-01-02T00:00:00.000Z',
+      finishedAt: '2026-01-02T00:01:00.000Z',
+      calls: 2,
+      retries: 1,
+      rateLimitEvents: 1,
+      rateLimitWaitMs: 500,
+    };
+    const updated = await updateDraft(db, created.id, { clauses, writeRun });
+    const converted = rowToDraft(draftToRow(updated));
+
+    expect(converted.clauses).toEqual(clauses);
+    expect(converted.writeRun).toEqual(writeRun);
+
+    const malformed = rowToDraft({
+      ...draftToRow(updated),
+      data: { clauses: { i1: { nope: true } }, writeRun: { nope: true } },
+    } as unknown as DraftRow);
+    expect(malformed.clauses).toEqual({});
+    expect(malformed.writeRun).toBeNull();
+  });
 });

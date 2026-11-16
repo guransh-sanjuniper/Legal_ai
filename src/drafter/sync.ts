@@ -10,6 +10,7 @@ import {
 import { normaliseStoredParticulars, normaliseStoredPlan } from './plan';
 import { normaliseStoredOutline } from './outline';
 import { normaliseStoredSourceText, sourceTextForSync } from './resolveRef';
+import { normaliseStoredClauses, normaliseStoredWriteRun } from './write';
 import { DRAFTER_SCHEMA_VERSION, type DraftRecord, type DraftStatus } from './types';
 
 // Local-first sync for drafts. IndexedDB is the working copy; Supabase is the backup and the
@@ -33,7 +34,8 @@ export interface DraftRow {
     sourcePlan: unknown;
     outline: unknown;
     sourceText?: unknown;
-    clauses: Record<string, unknown>;
+    clauses: unknown;
+    writeRun?: unknown;
   };
   schema_version: number;
   created_at: string;
@@ -58,6 +60,7 @@ export function draftToRow(draft: DraftRecord): DraftRow {
       outline: draft.outline,
       sourceText: sourceTextForSync(draft.sourceText),
       clauses: draft.clauses,
+      writeRun: draft.writeRun,
     },
     schema_version: DRAFTER_SCHEMA_VERSION,
     created_at: draft.createdAt,
@@ -74,7 +77,6 @@ function reviewingForOf(value: unknown): ReviewingFor {
 // failing the whole pull.
 export function rowToDraft(row: DraftRow): DraftRecord {
   const data = (row.data ?? {}) as Partial<DraftRow['data']>;
-  const clauses = data.clauses;
   return {
     id: row.id,
     userId: row.user_id,
@@ -89,7 +91,8 @@ export function rowToDraft(row: DraftRow): DraftRecord {
     sourcePlan: normaliseStoredPlan(data.sourcePlan),
     outline: normaliseStoredOutline(data.outline),
     sourceText: normaliseStoredSourceText(data.sourceText),
-    clauses: clauses && typeof clauses === 'object' && !Array.isArray(clauses) ? clauses : {},
+    clauses: normaliseStoredClauses(data.clauses),
+    writeRun: normaliseStoredWriteRun(data.writeRun),
     schemaVersion: DRAFTER_SCHEMA_VERSION,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

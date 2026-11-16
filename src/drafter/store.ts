@@ -62,6 +62,7 @@ export async function createDraft(db: DrafterDBHandle, input: NewDraftInput): Pr
     outline: null,
     sourceText: null,
     clauses: {},
+    writeRun: null,
     schemaVersion: DRAFTER_SCHEMA_VERSION,
     createdAt: now,
     updatedAt: now,
@@ -101,6 +102,7 @@ export async function updateDraft(db: DrafterDBHandle, id: string, patch: DraftP
     outline,
     sourceText,
     clauses,
+    writeRun,
   } = patch;
 
   const next: DraftRecord = {
@@ -115,6 +117,7 @@ export async function updateDraft(db: DrafterDBHandle, id: string, patch: DraftP
     outline: outline !== undefined ? outline : current.outline,
     sourceText: sourceText !== undefined ? sourceText : current.sourceText,
     clauses: clauses !== undefined ? clauses : current.clauses,
+    writeRun: writeRun !== undefined ? writeRun : current.writeRun,
     updatedAt: new Date().toISOString(),
   };
   // A blank title is always replaced by the start of the instruction. A title that was itself

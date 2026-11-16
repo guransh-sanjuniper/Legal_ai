@@ -408,11 +408,12 @@ export function sourceTextStale(sourceText: SourceText | null, draft: DraftRecor
 // Every verbatim/adapt binding must be confirmed or skipped, and the text must be present on
 // this device, before writing can start.
 export function sourceTextReady(sourceText: SourceText | null, draft: DraftRecord): boolean {
-  if (!sourceText) return false;
-  if (sourceTextStale(sourceText, draft)) return false;
   const bindings = (draft.sourcePlan?.bindings ?? []).filter(
     (binding) => binding.useMode === 'verbatim' || binding.useMode === 'adapt',
   );
+  if (bindings.length === 0) return true;
+  if (!sourceText) return false;
+  if (sourceTextStale(sourceText, draft)) return false;
   return bindings.every((binding) => {
     const resolution = sourceText.resolutions.find((entry) => entry.bindingId === binding.id);
     if (!resolution) return false;
