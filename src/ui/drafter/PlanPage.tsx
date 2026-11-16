@@ -10,13 +10,12 @@ import type {
   DraftRecord,
   DraftStatus,
   Particular,
-  ReferenceMode,
   SourceBinding,
   SourcePlan,
   UnresolvedRef,
 } from '../../drafter/types';
 import { loadDrafterLibrary } from './library';
-import { parsePlanForDraft, planDocsForDraft, readPlanRaw } from './planRun';
+import { parsePlanForDraft, planDocsForDraft } from './planRun';
 import { generateOutline } from './outlineRun';
 import {
   answerQuestion,
@@ -34,13 +33,6 @@ import {
   UnresolvedList,
 } from './PlanTables';
 import './drafter.css';
-
-const MODE_LABEL: Record<ReferenceMode, string> = {
-  none: 'No references',
-  general: 'General reference',
-  specific: 'Specific bindings',
-  mixed: 'Mixed',
-};
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -77,7 +69,6 @@ export function PlanPage() {
   const [busy, setBusy] = useState<'parse' | 'confirm' | 'outline' | null>(null);
   const [outlineFailed, setOutlineFailed] = useState(false);
   const [dropped, setDropped] = useState(0);
-  const [raw, setRaw] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [docType, setDocType] = useState('');
@@ -142,7 +133,6 @@ export function PlanPage() {
         setDraft(found);
         setDocs(planDocsForDraft(found, entries));
         if (found.sourcePlan) applyPlan(found.sourcePlan, found.particulars);
-        setRaw(readPlanRaw(draftId));
         setLoading(false);
       } catch (e) {
         if (!alive) return;
@@ -287,7 +277,6 @@ export function PlanPage() {
     setDropped(0);
     try {
       const outcome = await parsePlanForDraft(db, draft, library);
-      setRaw(outcome.raw);
       if (!outcome.ok) {
         setError(outcome.message ?? 'I could not read the instructions. Try again.');
         return;
@@ -299,7 +288,7 @@ export function PlanPage() {
         if (saved.sourcePlan) applyPlan(saved.sourcePlan, saved.particulars);
       }
       setDropped(outcome.dropped);
-      setNotice(outcome.dropped > 0 ? 'Read. Some items could not be used; check Advanced options.' : 'Read.');
+      setNotice('Read.');
     } catch (e) {
       setError(`I could not read the instructions: ${errorText(e)}`);
     } finally {
@@ -390,18 +379,11 @@ export function PlanPage() {
             </p>
           </div>
         </section>
-        {raw && (
-          <details className="drafter-raw">
-            <summary>Model reply (debug)</summary>
-            <pre>{raw}</pre>
-          </details>
-        )}
       </>
     );
   }
 
   const refRows = referenceRows(docs, bindings);
-  const mode = computeReferenceMode(docs, bindings);
 
   const liveDetails = missingDetails(particulars, questions);
   const byKey = new Map<string, MissingDetail>();
@@ -423,6 +405,11 @@ export function PlanPage() {
         </div>
       )}
       {notice && <div className="app-banner app-banner--notice">{notice}</div>}
+      {dropped > 0 && (
+        <p className="app-muted drafter-dropped">
+          {dropped} item{dropped === 1 ? '' : 's'} could not be used and were dropped.
+        </p>
+      )}
 
       <section className="drafter-plan-section">
         <label className="app-field">
@@ -552,15 +539,6 @@ export function PlanPage() {
 
         {advancedOpen && (
           <div className="drafter-advanced-body">
-            <div className="drafter-plan-meta">
-              <span className="app-chip app-chip--neutral" title="Computed from the selected references and bindings">
-                {MODE_LABEL[mode]}
-              </span>
-              <span className="app-muted drafter-plan-stamp">
-                Read {new Date(plan.parsedAt).toLocaleString()} · {plan.model}
-              </span>
-            </div>
-
             <section className="drafter-plan-section">
               <h2>Source bindings</h2>
               <p className="app-muted drafter-section-help">
@@ -607,18 +585,6 @@ export function PlanPage() {
               </p>
               <ParticularsTable particulars={particulars} disabled={busy !== null} onChange={setParticulars} />
             </section>
-
-            {dropped > 0 && (
-              <p className="app-muted drafter-dropped">
-                {dropped} item{dropped === 1 ? '' : 's'} could not be verified and were dropped.
-              </p>
-            )}
-            {raw && (
-              <details className="drafter-raw" open={Boolean(error) || dropped > 0}>
-                <summary>Model reply (debug)</summary>
-                <pre>{raw}</pre>
-              </details>
-            )}
           </div>
         )}
       </section>

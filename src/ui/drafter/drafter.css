@@ -952,3 +952,26 @@
   background: var(--app-warn-soft);
   color: var(--app-text);
 }
+
+/* Write progress: label + live in-flight count above the existing app progress bar. */
+.drafter-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.drafter-progress-head h2 {
+  margin: 0;
+}
+
+.drafter-progress-now {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.drafter-progress-note {
+  margin: 2px 0 0;
+  font-size: 12px;
+}

@@ -4,6 +4,7 @@ import type { ReviewingFor } from '../../analysis/types';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../app/AuthProvider';
 import { PageHeader } from '../app/pages/Placeholder';
+import { deriveTitle } from '../../drafter/brief';
 import { createDraft, getDraft, openDrafterDb, updateDraft, type DrafterDBHandle } from '../../drafter/store';
 import { isPlanStale } from '../../drafter/plan';
 import { syncDraftById } from '../../drafter/sync';
@@ -11,6 +12,7 @@ import type { LibraryEntry } from '../../drafter/references';
 import type { DraftRecord } from '../../drafter/types';
 import { loadDrafterLibrary } from './library';
 import { parsePlanForDraft } from './planRun';
+import { decideBriefContinue } from './briefContinue';
 import { ReferencePicker } from './ReferencePicker';
 import './drafter.css';
 
@@ -42,7 +44,6 @@ export function DraftEditorPage() {
   const [parsing, setParsing] = useState(false);
   const [parseFailed, setParseFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
   // An untouched title field means "derive from the instruction", so a rewrite of the
@@ -92,7 +93,9 @@ export function DraftEditorPage() {
         }
         setDraft(found);
         setTitle(found.title);
-        setTitleEdited(false);
+        // A title that differs from the derived one was typed by the user and must survive
+        // later saves (the store only re-derives a blank title).
+        setTitleEdited(found.title !== deriveTitle(found.instruction));
         setInstruction(found.instruction);
         setReviewingFor(found.reviewingFor);
         setReferenceIds(found.referenceDocIds);
@@ -117,18 +120,21 @@ export function DraftEditorPage() {
       refsChanged
     : instruction.trim().length > 0;
   const hasPlan = Boolean(draft?.sourcePlan);
-  const planStale = draft ? isPlanStale(draft.sourcePlan, draft) : false;
+  const savedPlanStale = draft ? isPlanStale(draft.sourcePlan, draft) : false;
+  const formPlanStale = draft
+    ? isPlanStale(draft.sourcePlan, { instruction: instruction.trim(), referenceDocIds: referenceIds })
+    : false;
+  const busy = saving || parsing;
 
-  async function save() {
-    if (!db) return;
+  async function persistBrief(): Promise<DraftRecord | null> {
+    if (!db) return null;
     const text = instruction.trim();
     if (!text) {
-      setError('Write what you need before saving the draft.');
-      return;
+      setError('Write what you need drafted first.');
+      return null;
     }
     setSaving(true);
     setError(null);
-    setNotice(null);
     try {
       // Only an edited title is sent; otherwise the store derives it from the instruction.
       const nextTitle = titleEdited ? title : '';
@@ -148,37 +154,66 @@ export function DraftEditorPage() {
           });
       setDraft(saved);
       setTitle(saved.title);
-      setTitleEdited(false);
+      setTitleEdited(saved.title !== deriveTitle(saved.instruction));
       setInstruction(saved.instruction);
-      setNotice('Saved.');
       // Best effort: the draft is already durable on this device.
       void syncDraftById(supabase, db, saved.id);
-      if (!draftId) navigate(`/draft/${saved.id}`, { replace: true });
+      return saved;
     } catch (e) {
       setError(`Could not save the draft: ${errorText(e)}`);
+      return null;
     } finally {
       setSaving(false);
     }
   }
 
-  async function nextPlan() {
-    if (!db || !draft) return;
-    if (draft.sourcePlan) {
-      navigate(`/draft/${draft.id}/plan`);
+  async function saveAndClose() {
+    const saved = await persistBrief();
+    if (saved) navigate('/draft');
+  }
+
+  async function continueFlow() {
+    if (!db) return;
+    const text = instruction.trim();
+    const action = decideBriefContinue({
+      instructionTrimmed: text,
+      draftExists: Boolean(draft),
+      dirty,
+      planFreshForForm: draft?.sourcePlan
+        ? !isPlanStale(draft.sourcePlan, { instruction: text, referenceDocIds: referenceIds })
+        : false,
+    });
+
+    if (action === 'blocked:instruction') {
+      setParseFailed(false);
+      setError('Write what you need drafted first.');
       return;
     }
-    setParsing(true);
+
     setError(null);
-    setNotice(null);
     setParseFailed(false);
+
+    let saved = draft;
+    if (action === 'create-and-read' || action === 'save-and-read' || action === 'save-and-navigate') {
+      saved = await persistBrief();
+      if (!saved) return;
+    }
+
+    if (action === 'navigate' || action === 'save-and-navigate') {
+      if (saved) navigate(`/draft/${saved.id}/plan`);
+      return;
+    }
+
+    if (!saved) return;
+    setParsing(true);
     try {
-      const outcome = await parsePlanForDraft(db, draft, library);
+      const outcome = await parsePlanForDraft(db, saved, library);
       if (!outcome.ok) {
         setParseFailed(true);
         setError(outcome.message ?? 'I could not read the instructions. Try again.');
         return;
       }
-      navigate(`/draft/${draft.id}/plan`);
+      navigate(`/draft/${saved.id}/plan`);
     } catch (e) {
       setParseFailed(true);
       setError(`I could not read the instructions: ${errorText(e)}`);
@@ -217,7 +252,7 @@ export function DraftEditorPage() {
       <PageHeader
         eyebrow="Drafter"
         title={draft ? 'Brief' : 'New draft'}
-        description="Write what you need drafted. Nothing changes until you press Save."
+        description="Write what you need drafted. Continue saves it and reads it before showing the plan."
         actions={
           <Link className="app-link-button" to="/draft">
             Back to drafts
@@ -230,10 +265,9 @@ export function DraftEditorPage() {
           {error}
         </div>
       )}
-      {notice && <div className="app-banner app-banner--notice">{notice}</div>}
-      {hasPlan && planStale && (
+      {hasPlan && (savedPlanStale || formPlanStale) && (
         <div className="app-banner app-banner--error" role="alert">
-          You changed your instructions. Open the plan and re-read them before continuing.
+          You changed your instructions. Continue will read them again before opening the plan.
         </div>
       )}
 
@@ -241,7 +275,7 @@ export function DraftEditorPage() {
         className="app-form drafter-form"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!saving) void save();
+          if (!busy) void continueFlow();
         }}
       >
         <label className="app-field">
@@ -249,6 +283,7 @@ export function DraftEditorPage() {
           <input
             value={title}
             maxLength={TITLE_MAX}
+            disabled={busy}
             placeholder="Taken from the instruction when left blank"
             onChange={(e) => {
               setTitle(e.target.value);
@@ -264,16 +299,21 @@ export function DraftEditorPage() {
             rows={12}
             maxLength={INSTRUCTION_MAX}
             value={instruction}
+            disabled={busy}
             placeholder={INSTRUCTION_PLACEHOLDER}
             onChange={(e) => setInstruction(e.target.value)}
           />
         </label>
 
-        <ReferencePicker library={library} selectedIds={referenceIds} onChange={setReferenceIds} disabled={saving} />
+        <ReferencePicker library={library} selectedIds={referenceIds} onChange={setReferenceIds} disabled={busy} />
 
         <label className="app-field drafter-reviewing">
           <span>Which side are you drafting for?</span>
-          <select value={reviewingFor} onChange={(e) => setReviewingFor(e.target.value as ReviewingFor)}>
+          <select
+            value={reviewingFor}
+            disabled={busy}
+            onChange={(e) => setReviewingFor(e.target.value as ReviewingFor)}
+          >
             <option value="neutral">Neutral</option>
             <option value="licensor">Landlord (licensor)</option>
             <option value="licensee">Tenant (licensee)</option>
@@ -281,23 +321,17 @@ export function DraftEditorPage() {
         </label>
 
         <div className="drafter-actions">
-          <button type="submit" className="app-primary-button" disabled={saving || !db}>
-            {saving ? 'Saving…' : 'Save'}
+          <button type="submit" className="app-primary-button" disabled={!db || busy}>
+            {parsing ? 'Reading…' : saving ? 'Saving…' : parseFailed ? 'Try again' : 'Continue'}
           </button>
-          <span className="drafter-dirty">{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
-          <span
-            className="drafter-next"
-            title={!draft || dirty ? 'Save first.' : undefined}
+          <button
+            type="button"
+            className="app-link-button"
+            disabled={!db || busy}
+            onClick={() => void saveAndClose()}
           >
-            <button
-              type="button"
-              className="app-primary-button"
-              disabled={saving || parsing || !db || !draft || dirty || !instruction.trim()}
-              onClick={() => void nextPlan()}
-            >
-              {parsing ? 'Reading…' : parseFailed ? 'Try again' : 'Continue'}
-            </button>
-          </span>
+            Save and close
+          </button>
         </div>
       </form>
     </>

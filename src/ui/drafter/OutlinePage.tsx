@@ -19,30 +19,12 @@ import type { LibraryEntry } from '../../drafter/references';
 import type { DraftRecord, Outline, OutlineItem } from '../../drafter/types';
 import type { DocAlias } from '../../drafter/plan';
 import { loadDrafterLibrary } from './library';
-import { generateOutline, readOutlineRaw } from './outlineRun';
+import { generateOutline } from './outlineRun';
 import { planDocsForDraft } from './planRun';
 import { OutlineList } from './OutlineList';
 import './drafter.css';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-const advancedKey = (draftId: string) => `legal-app.draft.${draftId}.outlineAdvancedOpen`;
-
-function readAdvanced(draftId: string): boolean {
-  try {
-    return localStorage.getItem(advancedKey(draftId)) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function writeAdvanced(draftId: string, open: boolean): void {
-  try {
-    localStorage.setItem(advancedKey(draftId), open ? '1' : '0');
-  } catch {
-    // Storage can be unavailable; the section still opens for this visit.
-  }
-}
 
 function duplicateTitles(items: OutlineItem[]): string[] {
   const seen = new Set<string>();
@@ -71,9 +53,6 @@ export function OutlinePage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<'generate' | 'refine' | 'save' | null>(null);
   const [dropped, setDropped] = useState(0);
-  const [duplicates, setDuplicates] = useState<string[]>([]);
-  const [raw, setRaw] = useState<string | null>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [items, setItems] = useState<OutlineItem[]>([]);
   const [notes, setNotes] = useState('');
@@ -105,7 +84,6 @@ export function OutlinePage() {
       }
       if (!alive) return;
       setDb(handle);
-      setAdvancedOpen(readAdvanced(draftId));
       try {
         const entries = await loadDrafterLibrary().catch(() => []);
         if (!alive) return;
@@ -120,7 +98,6 @@ export function OutlinePage() {
         setDraft(found);
         setDocs(planDocsForDraft(found, entries));
         if (found.outline) applyOutline(found.outline);
-        setRaw(readOutlineRaw(draftId));
         setLoading(false);
       } catch (e) {
         if (!alive) return;
@@ -141,7 +118,6 @@ export function OutlinePage() {
     setNotice(null);
     try {
       const outcome = await generateOutline(db, draft, library, opts);
-      setRaw(outcome.raw);
       if (!outcome.ok) {
         setError(outcome.message ?? 'I could not make the outline. Try again.');
         return;
@@ -152,7 +128,6 @@ export function OutlinePage() {
         if (saved.outline) applyOutline(saved.outline);
       }
       setDropped(outcome.dropped);
-      setDuplicates(outcome.duplicates);
       setNotice(opts.feedback ? 'Updated.' : 'Here is the structure.');
     } catch (e) {
       setError(`I could not make the outline: ${errorText(e)}`);
@@ -234,12 +209,6 @@ export function OutlinePage() {
     setItems(deleteItem(items, item.id).items);
   }
 
-  function toggleAdvanced() {
-    const next = !advancedOpen;
-    setAdvancedOpen(next);
-    if (draftId) writeAdvanced(draftId, next);
-  }
-
   if (loading) {
     return (
       <>
@@ -317,12 +286,6 @@ export function OutlinePage() {
             </p>
           </div>
         </section>
-        {raw && (
-          <details className="drafter-raw">
-            <summary>Model reply (debug)</summary>
-            <pre>{raw}</pre>
-          </details>
-        )}
       </>
     );
   }
@@ -362,6 +325,11 @@ export function OutlinePage() {
             {busy === 'generate' ? 'Updating…' : 'Update the outline'}
           </button>
         </div>
+      )}
+      {dropped > 0 && (
+        <p className="app-muted drafter-dropped">
+          {dropped} item{dropped === 1 ? '' : 's'} could not be used and were dropped.
+        </p>
       )}
 
       <OutlineList
@@ -469,40 +437,6 @@ export function OutlinePage() {
           </button>
         </div>
       </div>
-
-      <section className="drafter-advanced">
-        <button
-          type="button"
-          className="app-link-button drafter-advanced-toggle"
-          aria-expanded={advancedOpen}
-          onClick={toggleAdvanced}
-        >
-          {advancedOpen ? 'Hide advanced options' : 'Advanced options'}
-        </button>
-        {advancedOpen && (
-          <div className="drafter-advanced-body">
-            <p className="app-muted drafter-plan-stamp">
-              Made {new Date(outline.createdAt).toLocaleString()} · {outline.model}
-            </p>
-            {dropped > 0 && (
-              <p className="app-muted drafter-dropped">
-                {dropped} item{dropped === 1 ? '' : 's'} could not be used and were dropped.
-              </p>
-            )}
-            {duplicates.length > 0 && (
-              <p className="app-muted drafter-dropped">Repeated titles: {duplicates.join(', ')}.</p>
-            )}
-            <p className="app-muted drafter-plan-stamp">Plan fingerprint: {outline.planFingerprint}</p>
-            {raw && (
-              <details className="drafter-raw" open={Boolean(error)}>
-                <summary>Model reply (debug)</summary>
-                <pre>{raw}</pre>
-              </details>
-            )}
-            <p className="app-muted drafter-plan-stamp">Notes: {notes || '—'}</p>
-          </div>
-        )}
-      </section>
     </>
   );
 }

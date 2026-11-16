@@ -73,6 +73,7 @@ export interface WriteEngineOptions {
   onUpdate?: (progress: WriteProgress) => void;
   stop?: { stopped: boolean };
   forceItemIds?: string[];
+  onlyItemIds?: string[];
   maxRetries?: number;
   retryBaseMs?: number;
   now?: () => Date;
@@ -313,6 +314,7 @@ export async function runWriting(opts: WriteEngineOptions): Promise<WriteEngineR
 
   const items = outline.items;
   const force = new Set(opts.forceItemIds ?? []);
+  const only = opts.onlyItemIds ? new Set(opts.onlyItemIds) : null;
   const maxRetries = opts.maxRetries ?? DRAFTER_MAX_RETRIES;
   const retryBase = opts.retryBaseMs ?? DRAFTER_RETRY_BASE_MS;
   const gate = createGate(() => now().getTime(), sleep);
@@ -347,7 +349,7 @@ export async function runWriting(opts: WriteEngineOptions): Promise<WriteEngineR
     if (record.itemFingerprint !== entry.fingerprint) return false;
     return record.status === 'done' || record.status === 'verbatim';
   };
-  const work = entries.filter((entry) => !isFresh(entry));
+  const work = entries.filter((entry) => !isFresh(entry) && (!only || only.has(entry.item.id)));
 
   let consecutive429 = 0;
 

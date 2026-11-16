@@ -1,10 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../app/pages/Placeholder';
 import { assemble, exportGate } from '../../drafter/assemble';
 import { isOutlineStale } from '../../drafter/outline';
-import { sourceTextReady } from '../../drafter/resolveRef';
-import { ledgerFromClauses } from '../../drafter/ledger';
+import { sourceTextReady, sourceTextStale } from '../../drafter/resolveRef';
 import { itemFingerprint, renderClauseText } from '../../drafter/write';
 import { estimateWriting } from '../../drafter/writeEstimate';
 import { getDraft, openDrafterDb, type DrafterDBHandle } from '../../drafter/store';
@@ -12,14 +11,26 @@ import type { ClauseRecord, DraftRecord, OutlineItem, WriteRun } from '../../dra
 import type { DocAlias } from '../../drafter/plan';
 import { loadDrafterLibrary } from './library';
 import { planDocsForDraft } from './planRun';
-import { isWriting, startWriting, stopWriting, subscribeWriting } from './writeRunner';
+import {
+  draftWriteLockHeld,
+  isWriting,
+  startWriting,
+  stopWriting,
+  subscribeWriting,
+} from './writeRunner';
+import { analyseWriteState, decideWriteStart, writeProgress } from './writeProgress';
 import './drafter.css';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(1)} s`;
+function formatRunDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function withPlaceholders(text: string): ReactNode[] {
@@ -38,6 +49,10 @@ function countPlaceholders(text: string): number {
   return (text.match(/\[●/g) ?? []).length;
 }
 
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? '' : 's'}`;
+}
+
 export function WritePage() {
   const { draftId } = useParams();
   const navigate = useNavigate();
@@ -47,13 +62,19 @@ export function WritePage() {
   const [docs, setDocs] = useState<DocAlias[]>([]);
   const [clauses, setClauses] = useState<Record<string, ClauseRecord>>({});
   const [run, setRun] = useState<WriteRun | null>(null);
+  const [writingNow, setWritingNow] = useState(0);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [startBlocked, setStartBlocked] = useState<'lock' | 'error' | null>(null);
+  const [startCheckDone, setStartCheckDone] = useState(false);
+
+  const visitDraftRef = useRef<string | null>(null);
+  const autoStartRef = useRef(false);
+  const userStoppedRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -103,41 +124,151 @@ export function WritePage() {
     };
   }, [draftId]);
 
+  // Listeners are kept by the runner even before a run starts, so the progress bar updates
+  // from the engine's per-section saves and a revisit can attach to a run in progress.
   useEffect(() => {
     if (!draft) return;
+    setRunning(isWriting(draft.id));
     return subscribeWriting(draft.id, (live) => {
       setClauses(live.clauses);
       setRun(live.run);
+      setWritingNow(live.writing);
+      setRunning(live.active);
+      if (!live.active) {
+        setStopping(false);
+        // The engine's final save may be newer than this page's draft object (a revisit
+        // attached to another page's run). Re-read before showing the finished gate.
+        void refresh();
+      }
     });
   }, [draft?.id]);
 
+  useEffect(() => {
+    if (!running || !db || !draft) return;
+    const timer = setInterval(() => {
+      void refresh();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [running, db, draft?.id]);
+
+  // One automatic start per page visit. The ref survives StrictMode's double effect; the
+  // runner's own "already running" check is the second guard.
+  useEffect(() => {
+    if (loading || !db || !draft) return;
+
+    // A different draft in the same mounted route is a new page visit.
+    if (visitDraftRef.current !== draft.id) {
+      visitDraftRef.current = draft.id;
+      autoStartRef.current = false;
+      userStoppedRef.current = false;
+      setStartCheckDone(false);
+      setStartBlocked(null);
+      setError(null);
+      setStopping(false);
+      setWritingNow(0);
+    }
+    if (autoStartRef.current) return;
+
+    const plan = draft.sourcePlan;
+    const outline = draft.outline;
+    if (!plan || !outline) return;
+    autoStartRef.current = true;
+
+    void (async () => {
+      try {
+        const outlineStale = isOutlineStale(outline, draft);
+        const sourcesStale = sourceTextStale(draft.sourceText, draft);
+        const sourcesUnconfirmed = !sourceTextReady(draft.sourceText, draft) && !sourcesStale;
+        const items = outline.items;
+        const state = analyseWriteState(
+          items,
+          clauses,
+          (item) => itemFingerprint(item, draft),
+          writingNow,
+        );
+        const runningNow = isWriting(draft.id);
+        const lockHeld = runningNow ? false : await draftWriteLockHeld(draft.id);
+        const decision = decideWriteStart({
+          counts: state.counts,
+          outlineStale,
+          sourcesStale,
+          sourcesUnconfirmed,
+          running: runningNow,
+          lockHeld,
+          userStopped: userStoppedRef.current,
+          startedThisVisit: false,
+          pendingOnlyStart: true,
+        });
+
+        if (decision === 'start') {
+          if (state.pendingIds.length > 0) await start({ onlyItemIds: state.pendingIds });
+        } else if (decision === 'attach') {
+          setRunning(true);
+        } else if (decision === 'blocked:lock') {
+          setError('This draft is already being written in another tab.');
+          setStartBlocked('lock');
+        }
+      } catch (e) {
+        setError(`Could not start writing: ${errorText(e)}`);
+        setStartBlocked('error');
+      } finally {
+        setStartCheckDone(true);
+      }
+    })();
+  }, [db, loading, draft?.id]);
+
   async function refresh() {
     if (!db || !draft) return;
-    const saved = await getDraft(db, draft.id);
-    if (saved) {
-      setDraft(saved);
-      setClauses(saved.clauses);
-      setRun(saved.writeRun);
+    try {
+      const saved = await getDraft(db, draft.id);
+      if (saved) {
+        setDraft(saved);
+        setClauses(saved.clauses);
+        setRun(saved.writeRun);
+      }
+      if (!isWriting(draft.id)) {
+        setRunning(false);
+        setStopping(false);
+        setWritingNow(0);
+      }
+    } catch (e) {
+      setError(`Could not read the draft: ${errorText(e)}`);
     }
   }
 
-  async function start(forceItemIds?: string[]) {
+  async function start(opts: { forceItemIds?: string[]; onlyItemIds?: string[] } = {}) {
     if (!db || !draft) return;
     setBusy(true);
     setError(null);
+    setStartBlocked(null);
     setRunning(true);
     setStopping(false);
-    const result = await startWriting(db, draft, forceItemIds ? { forceItemIds } : {});
-    if (!result.ok) {
-      setError(result.message ?? 'Could not start writing.');
-      setRunning(false);
+    setWritingNow(0);
+    try {
+      const result = await startWriting(db, draft, opts);
+      if (!result.ok) {
+        setError(result.message ?? 'Could not start writing.');
+        setStartBlocked(result.locked ? 'lock' : 'error');
+      }
+    } catch (e) {
+      setError(`Could not start writing: ${errorText(e)}`);
+      setStartBlocked('error');
+    } finally {
+      await refresh();
+      setRunning(isWriting(draft.id));
+      setBusy(false);
     }
-    await refresh();
-    setBusy(false);
+  }
+
+  function startBatch(ids: string[]) {
+    // A user-requested batch clears the stopped state; per-section actions do not.
+    userStoppedRef.current = false;
+    void start({ onlyItemIds: ids });
   }
 
   function stop() {
     if (!draft) return;
+    userStoppedRef.current = true;
     stopWriting(draft.id);
     setStopping(true);
   }
@@ -190,26 +321,39 @@ export function WritePage() {
   const currentDraft: DraftRecord = draft;
   const outlineStale = isOutlineStale(outline, draft);
   const sourcesReady = sourceTextReady(draft.sourceText, draft);
-  const estimate = estimateWriting(draft);
-  const hasSources = plan.bindings.some(
-    (binding) => binding.useMode === 'verbatim' || binding.useMode === 'adapt',
+  const state = analyseWriteState(
+    items,
+    clauses,
+    (item) => itemFingerprint(item, draft),
+    writingNow,
   );
+  const progress = writeProgress(state.counts);
+  const complete = progress.complete;
+  const estimate = estimateWriting(draft);
+  const canWriteBase = !outlineStale && sourcesReady && items.length > 0;
+  const canBatchWrite = canWriteBase && !complete;
 
-  const doneCount = items.filter((item) => {
-    const record = clauses[item.id];
-    return Boolean(record && (record.status === 'done' || record.status === 'verbatim'));
-  }).length;
-  const progress = items.length > 0 ? Math.round((doneCount / items.length) * 100) : 0;
+  const attentionLabel =
+    state.counts.failed === 1 ? '1 section needs attention' : `${state.counts.failed} sections need attention`;
   const staleCount = items.filter((item) => {
     const record = clauses[item.id];
     if (!record || (record.status !== 'done' && record.status !== 'verbatim')) return false;
     return record.itemFingerprint !== itemFingerprint(item, draft);
   }).length;
   const placeholders = items.reduce((sum, item) => sum + countPlaceholders(clauses[item.id]?.text ?? ''), 0);
-  const allWritten = items.length > 0 && doneCount === items.length;
   const assembled = assemble(draft);
   const gate = exportGate(assembled.stats);
-  const canStart = !outlineStale && sourcesReady && items.length > 0 && !running;
+  const hasSources = plan.bindings.some(
+    (binding) => binding.useMode === 'verbatim' || binding.useMode === 'adapt',
+  );
+
+  const runLine = (() => {
+    if (!run?.finishedAt) return null;
+    const started = new Date(run.startedAt).getTime();
+    const finished = new Date(run.finishedAt).getTime();
+    if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return null;
+    return `Finished in ${formatRunDuration(finished - started)} · ${plural(run.retries, 'retry')}`;
+  })();
 
   function aliasFor(record: ClauseRecord): string {
     const binding = record.copiedFrom
@@ -240,14 +384,14 @@ export function WritePage() {
     }
   }
 
-  const ledger = ledgerFromClauses(clauses, items);
+  const minutes = Math.max(1, Math.round(estimate.seconds / 60));
 
   return (
     <>
       <PageHeader
         eyebrow="Drafter"
         title="Writing your draft"
-        description="Each section is written separately. Your work is saved as it goes."
+        description="Writing starts automatically for the sections that still need it. Your work is saved as it goes."
       />
 
       {error && (
@@ -272,54 +416,117 @@ export function WritePage() {
         </div>
       )}
 
-      {!running && !allWritten && (
+      {items.length === 0 ? (
+        <p className="app-muted">This structure has no sections to write.</p>
+      ) : (
         <section className="drafter-outline-section">
-          <h2>Before I start</h2>
-          <p className="drafter-outline-summary">
-            {items.length} section{items.length === 1 ? '' : 's'} to write
-            {estimate.verbatimItems > 0 ? ` (${estimate.verbatimItems} copied directly from your documents)` : ''}
-          </p>
-          <p className="app-muted drafter-section-help">
-            Estimate: {estimate.modelItems} model call{estimate.modelItems === 1 ? '' : 's'}, about{' '}
-            {estimate.inputTokens.toLocaleString()} tokens in and {estimate.outputTokens.toLocaleString()} out, roughly{' '}
-            {Math.max(1, Math.round(estimate.seconds / 60))} minute
-            {Math.max(1, Math.round(estimate.seconds / 60)) === 1 ? '' : 's'}
-            {estimate.costUsd === null ? '.' : `, about $${estimate.costUsd.toFixed(2)}.`}
-          </p>
-          <div className="drafter-actions">
-            <button type="button" className="app-primary-button" disabled={!canStart || busy} onClick={() => void start()}>
-              {busy ? 'Starting…' : 'Start writing'}
-            </button>
+          <div className="drafter-progress-head">
+            <h2>
+              {running
+                ? stopping
+                  ? 'Finishing the current sections…'
+                  : 'Writing…'
+                : complete
+                  ? 'All sections written'
+                  : 'Progress'}
+            </h2>
+            {state.counts.writing > 0 && (
+              <span className="app-muted drafter-progress-now">{state.counts.writing} writing now</span>
+            )}
           </div>
-        </section>
-      )}
+          <div
+            className="app-progress"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={progress.total}
+            aria-valuenow={progress.done}
+          >
+            <div className="app-progress-bar" style={{ width: `${progress.percent}%` }} />
+          </div>
+          <p className="app-muted drafter-section-help">
+            {progress.label}
+            {state.counts.failed > 0 ? ` · ${attentionLabel}` : ''}
+          </p>
+          {!complete && (running || (canWriteBase && state.pendingIds.length > 0)) && (
+            <p className="app-muted drafter-progress-note">
+              {plural(items.length, 'section')}
+              {estimate.modelItems > 0
+                ? ` · about ${plural(minutes, 'minute')}`
+                : ''}
+              {estimate.verbatimItems > 0 ? ` · ${estimate.verbatimItems} copied directly` : ''}
+            </p>
+          )}
 
-      {running && (
-        <section className="drafter-outline-section">
-          <h2>{stopping ? 'Finishing the current sections…' : 'Writing…'}</h2>
-          <div className="app-progress" role="progressbar" aria-valuemin={0} aria-valuemax={items.length} aria-valuenow={doneCount}>
-            <div className="app-progress-bar" style={{ width: `${progress}%` }} />
-          </div>
-          <p className="app-muted drafter-section-help">
-            {doneCount} of {items.length} done
-          </p>
-          <div className="drafter-actions">
-            <button type="button" className="app-link-button" disabled={stopping} onClick={stop}>
-              {stopping ? 'Stopping…' : 'Stop'}
-            </button>
-          </div>
-        </section>
-      )}
+          {!startCheckDone && !running && !complete && <p className="app-muted">Starting…</p>}
 
-      {!running && !allWritten && doneCount > 0 && (
-        <section className="drafter-outline-section">
-          <h2>Continue</h2>
-          <p className="app-muted drafter-section-help">
-            {doneCount} of {items.length} sections are saved. Resume picks up where it stopped.
-          </p>
-          <button type="button" className="app-primary-button" disabled={!canStart || busy} onClick={() => void start()}>
-            {busy ? 'Starting…' : 'Resume'}
-          </button>
+          <div className="drafter-actions">
+            {running && (
+              <button type="button" className="app-link-button" disabled={stopping} onClick={stop}>
+                {stopping ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
+            {!running &&
+              startCheckDone &&
+              userStoppedRef.current &&
+              canBatchWrite &&
+              state.pendingIds.length > 0 && (
+                <button
+                  type="button"
+                  className="app-primary-button"
+                  disabled={busy}
+                  onClick={() => startBatch(state.pendingIds)}
+                >
+                  {busy ? 'Starting…' : 'Resume'}
+                </button>
+              )}
+            {!running &&
+              startCheckDone &&
+              startBlocked &&
+              canBatchWrite &&
+              state.pendingIds.length > 0 && (
+                <button
+                  type="button"
+                  className="app-primary-button"
+                  disabled={busy}
+                  onClick={() => startBatch(state.pendingIds)}
+                >
+                  {busy ? 'Starting…' : 'Try again'}
+                </button>
+              )}
+          </div>
+
+          {state.counts.failed > 0 && (
+            <p className="drafter-source-note">{attentionLabel}. Use Try again next to each one.</p>
+          )}
+
+          {complete && !running && (
+            <>
+              <p className="drafter-outline-summary">
+                {placeholders === 0
+                  ? 'No details are still open.'
+                  : `${plural(placeholders, 'detail')} still to fill in ([●]).`}
+              </p>
+              {staleCount > 0 && (
+                <p className="drafter-source-note">
+                  {plural(staleCount, 'section')} changed since they were written.
+                </p>
+              )}
+              {runLine && <p className="app-muted drafter-progress-note">{runLine}</p>}
+              <div className="drafter-actions">
+                <button
+                  type="button"
+                  className="app-primary-button"
+                  disabled={!gate.allowed}
+                  onClick={() => navigate(`/draft/${draft.id}/review`)}
+                >
+                  Review and download
+                </button>
+                {!gate.allowed && (
+                  <span className="app-muted drafter-next-note">{gate.blockers[0] ?? 'The draft is not ready yet.'}</span>
+                )}
+              </div>
+            </>
+          )}
         </section>
       )}
 
@@ -345,18 +552,24 @@ export function WritePage() {
                 >
                   {status}
                 </span>
-                {!running && record?.status === 'failed' && (
-                  <button type="button" className="app-link-button" onClick={() => void start([item.id])}>
-                    Try again
-                  </button>
-                )}
-                {!running && (record?.status === 'done' || record?.status === 'verbatim') && (
+                {!running && canWriteBase && record?.status === 'failed' && (
                   <button
                     type="button"
                     className="app-link-button"
+                    disabled={busy}
+                    onClick={() => void start({ onlyItemIds: [item.id] })}
+                  >
+                    Try again
+                  </button>
+                )}
+                {!running && canWriteBase && (record?.status === 'done' || record?.status === 'verbatim') && (
+                  <button
+                    type="button"
+                    className="app-link-button"
+                    disabled={busy}
                     onClick={() => {
                       if (window.confirm('Write this section again? The current text will be replaced.')) {
-                        void start([item.id]);
+                        void start({ onlyItemIds: [item.id], forceItemIds: [item.id] });
                       }
                     }}
                   >
@@ -389,30 +602,6 @@ export function WritePage() {
         })}
       </ul>
 
-      {allWritten && (
-        <section className="drafter-outline-section">
-          <h2>All sections written</h2>
-          <p className="drafter-outline-summary">
-            {placeholders === 0
-              ? 'No details are still open.'
-              : `${placeholders} detail${placeholders === 1 ? '' : 's'} still to fill in ([●]).`}
-          </p>
-          <div className="drafter-actions">
-            <button
-              type="button"
-              className="app-primary-button"
-              disabled={!gate.allowed}
-              onClick={() => navigate(`/draft/${draft.id}/review`)}
-            >
-              Review and download
-            </button>
-            {!gate.allowed && (
-              <span className="app-muted drafter-next-note">{gate.blockers[0] ?? 'The draft is not ready yet.'}</span>
-            )}
-          </div>
-        </section>
-      )}
-
       <div className="drafter-actions drafter-plan-actions">
         <div className="drafter-secondary-actions">
           <Link className="app-link-button" to={`/draft/${draft.id}/outline`}>
@@ -428,46 +617,6 @@ export function WritePage() {
           </Link>
         </div>
       </div>
-
-      <section className="drafter-advanced">
-        <button
-          type="button"
-          className="app-link-button drafter-advanced-toggle"
-          aria-expanded={advancedOpen}
-          onClick={() => setAdvancedOpen((open) => !open)}
-        >
-          {advancedOpen ? 'Hide advanced options' : 'Advanced options'}
-        </button>
-        {advancedOpen && (
-          <div className="drafter-advanced-body">
-            <p className="app-muted drafter-plan-stamp">
-              {staleCount > 0 ? `${staleCount} section(s) changed since they were written.` : 'No section is out of date.'}
-            </p>
-            {run && (
-              <p className="app-muted drafter-plan-stamp">
-                Run started {new Date(run.startedAt).toLocaleString()}
-                {run.finishedAt ? `, finished ${new Date(run.finishedAt).toLocaleString()}` : ', not finished'}
-                {` · ${run.calls} calls · ${run.retries} retries · ${run.rateLimitEvents} rate limits`}
-                {run.rateLimitWaitMs > 0 ? ` (${formatDuration(run.rateLimitWaitMs)} waited)` : ''}
-              </p>
-            )}
-            <ul className="drafter-write-timings">
-              {items.map((item) => {
-                const record = clauses[item.id];
-                if (!record) return null;
-                return (
-                  <li key={item.id}>
-                    {item.title}: {record.status}
-                    {record.model ? ` · ${record.model}` : ''} · {formatDuration(record.durationMs)}
-                    {record.generatedAt ? ` · ${new Date(record.generatedAt).toLocaleTimeString()}` : ''}
-                  </li>
-                );
-              })}
-            </ul>
-            <p className="app-muted drafter-plan-stamp">Defined terms: {ledger.length > 0 ? ledger.map((entry) => entry.term).join(', ') : 'none'}</p>
-          </div>
-        )}
-      </section>
     </>
   );
 }

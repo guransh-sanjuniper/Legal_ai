@@ -262,6 +262,60 @@ describe('writing engine', () => {
     expect(result.clauses.i1.text).toBe('Existing parties text.');
   });
 
+  it('retries failed items when onlyItemIds is absent (default behaviour)', async () => {
+    const items = [item('i1', { title: 'A' }), item('i2', { title: 'B' })];
+    const base = await makeDraft(items);
+    const failed: ClauseRecord = {
+      text: 'Old failed text.',
+      status: 'failed',
+      itemFingerprint: itemFingerprint(items[0], base),
+      sourceBindingIds: [],
+      model: 'm',
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      durationMs: 1,
+      error: 'old failure',
+    };
+    const seeded = await updateDraft(db, base.id, { clauses: { i1: failed } });
+    const titles: string[] = [];
+    const result = await run(seeded, async (messages) => {
+      titles.push(/- Title: (.+)/.exec(messages[1].content)?.[1] ?? '');
+      return ok('Fresh text.');
+    });
+
+    expect(titles).toEqual(['A', 'B']);
+    expect(result.clauses.i1.status).toBe('done');
+    expect(result.clauses.i2.status).toBe('done');
+  });
+
+  it('writes only the ids given in onlyItemIds', async () => {
+    const items = [item('i1', { title: 'A' }), item('i2', { title: 'B' })];
+    const base = await makeDraft(items);
+    const failed: ClauseRecord = {
+      text: 'Old failed text.',
+      status: 'failed',
+      itemFingerprint: itemFingerprint(items[0], base),
+      sourceBindingIds: [],
+      model: 'm',
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      durationMs: 1,
+      error: 'old failure',
+    };
+    const seeded = await updateDraft(db, base.id, { clauses: { i1: failed } });
+    const titles: string[] = [];
+    const result = await run(
+      seeded,
+      async (messages) => {
+        titles.push(/- Title: (.+)/.exec(messages[1].content)?.[1] ?? '');
+        return ok('Fresh text.');
+      },
+      { onlyItemIds: ['i2'] },
+    );
+
+    expect(titles).toEqual(['B']);
+    expect(result.clauses.i1).toMatchObject({ status: 'failed', text: 'Old failed text.' });
+    expect(result.clauses.i2.status).toBe('done');
+  });
+
   it('rewrites a clause whose item fingerprint changed', async () => {
     const items = [item('i1', { title: 'Parties' })];
     const base = await makeDraft(items);
