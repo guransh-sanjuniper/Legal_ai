@@ -9,7 +9,8 @@ import { DocumentsPage } from '../library/DocumentsPage';
 import { ReviewPage } from '../library/ReviewPage';
 import { AnalysisIndexPage } from './pages/AnalysisIndexPage';
 import { AnalysisDocPage } from './pages/AnalysisDocPage';
-import { DraftPage } from './pages/DraftPage';
+import { DraftsPage } from '../drafter/DraftsPage';
+import { DraftEditorPage } from '../drafter/DraftEditorPage';
 import { ComparePage } from './pages/ComparePage';
 import './app.css';
 
@@ -55,7 +56,9 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
         <Route path="/documents/:docId/review" element={<ReviewPage />} />
         <Route path="/analysis" element={<AnalysisIndexPage />} />
         <Route path="/analysis/:docId" element={<AnalysisDocPage />} />
-        <Route path="/draft" element={<DraftPage />} />
+        <Route path="/draft" element={<DraftsPage />} />
+        <Route path="/draft/new" element={<DraftEditorPage />} />
+        <Route path="/draft/:draftId" element={<DraftEditorPage />} />
         <Route path="/compare" element={<ComparePage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>

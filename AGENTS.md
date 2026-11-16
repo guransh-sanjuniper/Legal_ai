@@ -19,14 +19,17 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `tasks/` task types, fingerprint, parse, split, validation
 - `retrieval/` embeddings in a worker (transformers.js), Unicode tokenizer + MiniSearch keyword index, RRF hybrid search, law stand-in, definitions sheet
 - `quality/` pure scorers over saved runs, golden thresholds, repeat-run comparison, regression config and score history (no UI imports)
+- `drafter/` draft storage (separate `legal-drafter` IndexedDB), local-first Supabase sync, title derivation, reference resolution (plain TS, no UI imports)
 - `ui/` React pages only
 - `ui/app/` the app shell: router, sidebar, login gate, theme, placeholders (UI only)
 - `ui/library/` document library page, preparation orchestrator, status derivation, ingest-worker wrapper, local removal
+- `ui/drafter/` drafts list and Brief form (UI only)
 - `lib/` shared Supabase client for the app shell (one persisted session per project)
 
 ## App shell (routes)
 - `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
-- `/chat` and `/chat/:sessionId` are general chat (see "Chat" below). `/draft`, `/compare` are placeholders.
+- `/chat` and `/chat/:sessionId` are general chat (see "Chat" below). `/compare` is a placeholder.
+- `/draft` lists drafts; `/draft/new` and `/draft/:draftId` are the Brief form (see "Drafter" below). No generation yet.
 - `/documents` lists IndexedDB documents, imports a PDF and runs the whole preparation (ingestion, embeddings, index, definitions), removes a document from this device.
 - `/documents/:docId/review` is the in-app review screen (page image beside OCR text, decisions, Retry OCR, Recheck, Proceed without reviewing). Needs-review rows and the Review action open it; the harness page is not linked from the library.
 - `/analysis` lists ready documents; `/analysis/:docId` is the Deep Analysis page (Ready documents only, see "Deep Analysis page").
@@ -53,8 +56,10 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - "Retry" re-runs the failed stage; "Remove" deletes the document and its local state. `preparedAt` and the prepared fingerprint (including the embedding model version) are stored on Ready.
 
 ## Tables
-Supabase: `runs` (with `source`, `chat` for chat-originated runs), `task_results`, `reports`, `rate_limits`, `chat_sessions`, `chat_messages`. RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.
+Supabase: `runs` (with `source`, `chat` for chat-originated runs), `task_results`, `reports`, `rate_limits`, `chat_sessions`, `chat_messages`, `drafts` (RLS owner-only, migration 0006). RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.
 IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `embedding_windows`, `embedding_state`, `definitions`, `analysis_reports`, `analysis_state`, `tasks`, `raw_responses`, `ocr_decisions`, `run_state`.
+IndexedDB (`legal-drafter`, separate database, v1): `drafts`, `draft_deletions`.
+Library documents are **device-wide, not per-user**: `pipeline-harness` has no user column, so every signed-in account on this device sees the same documents. Drafts and chat are per user (`userId` locally, RLS remotely). This is a known gap, not a design decision.
 
 ## Key rules
 - `runTask` is plain TypeScript. No DOM, no Edge APIs.
@@ -158,6 +163,16 @@ IndexedDB (`pipeline-harness`): `documents`, `pages`, `chunks`, `embeddings`, `e
 - Retry-failed refreshes the stored prompt, prompt version and fingerprint from the current plan before re-queuing a failed task, so a retry after a prompt fix uses the new prompt. The synthesis task is re-queued with the current template too.
 - The failed-task table shows the first 300 characters of the stored raw response for each failed attempt, so `bad_json` and similar failures can be diagnosed without the browser devtools.
 - Tests use the hosted Supabase project (`testSupport.ts` helpers); `runAnalysis.retry.test.ts` covers retry.
+
+## Drafter (D1: storage + Brief form)
+- `/draft` lists drafts (title, updated time, status chip, reference count; Open, Delete with confirm). `/draft/new` and `/draft/:draftId` are the Brief form: title (optional, derived from the first ~60 chars of the instruction when blank), instruction, Reviewing for (Licensor/Licensee/Neutral, default Neutral), reference documents. Save is explicit; there is no autosave. "Next: plan" is disabled ("Coming in D2"). No model call, no generation.
+- `src/drafter/` is plain TypeScript with no UI imports. `store.ts` opens a **separate** IndexedDB `legal-drafter` (v1, stores `drafts`, `draft_deletions`); `pipeline-harness` is never opened for writing and its name, version and stores are locked by `harnessDb.test.ts`. `sync.ts` maps to the Supabase `drafts` row. `references.ts` resolves the picker. `brief.ts` derives the title.
+- Draft record: `{ id, userId, title, instruction, referenceDocIds, reviewingFor, status: 'brief', particulars: null, sourcePlan: null, outline: null, clauses: {}, schemaVersion: 1, createdAt, updatedAt, syncedAt? }`. The null fields are placeholders for D2-D6. `status` also allows `planned`/`outlined`/`generating`/`done`/`failed`, unused in D1.
+- Sync is local-first and never blocks the UI: IndexedDB is the working copy, Supabase is pushed best effort after Save and retried on `/draft` load. Every sync call swallows errors and returns a falsy result; an offline or signed-out user keeps working. A failed push leaves the local record untouched and `syncedAt` unset (pending = `syncedAt !== updatedAt`).
+- Pull on `/draft` load is **insert-only**: rows missing locally are added; a local draft is never overwritten. D1 conflict rule is local wins, whole-row upserts, last push wins. Cross-device edits to a draft that already exists locally are not merged (deferred to a later stage).
+- Deletes are local-first with a tombstone (`draft_deletions`): the row is removed here immediately, the remote delete is retried, and a tombstoned id is never pulled back. The tombstone is cleared when the remote delete succeeds.
+- Reference documents reuse the library's own Ready check (`isPrepared` from `src/ui/library/preparationState.ts`); only Ready documents are offered. A saved reference that is no longer Ready, or no longer on this device, stays attached and is flagged ("not on this device" / "not prepared") until the user removes it. Zero references is valid.
+- `supabase/migrations/0006_drafts.sql` creates `drafts` (uuid id generated on the client, `user_id` default `auth.uid()` with cascade, `reference_doc_ids` jsonb, `reviewing_for` check, `data` jsonb for later stages, `schema_version`) with RLS owner-only. Apply with `npx supabase db push` (hosted, after link) or `npx supabase db reset` (local). No updated_at trigger, matching the chat tables.
 
 ## Chat (`/chat`, `/chat/:sessionId`)
 - General chat with no document. The request carries only the system prompt and the thread; no retrieval. The thread sent to the model includes only messages that have no document context (`generalHistory`), so a General answer is never grounded in an earlier document answer.
