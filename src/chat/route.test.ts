@@ -132,6 +132,14 @@ describe('routeQuestion', () => {
     expect(routeQuestion('who are the parties?', model, false).mode).toBe('saved');
   });
 
+  it('routes "parties" with an action word to the specific intent, not the overview', () => {
+    const r = routeQuestion('what are the parties\' obligations', model, false);
+    expect(r.mode).toBe('saved');
+    if (r.mode !== 'saved') return;
+    expect(r.rows.map((x) => x.label)).not.toContain('Overview: Parties');
+    expect(r.rows[0].label).toBe('Tenant · clause 3');
+  });
+
   it('falls back to retrieval for an overview question when the report has no overview', () => {
     const noOverview = { ...model, sections: model.sections.filter((s) => s.key !== 'overview') } as unknown as ReportModel;
     expect(routeQuestion('what is this document about', noOverview, false)).toEqual({ mode: 'retrieval' });

@@ -28,7 +28,7 @@ const CLAUSE = /\bclause\s+(\d+(?:\.\d+)*)/i;
 const MISSING = /\b(missing|absent|lack\w*|not (?:included|covered|mentioned|stated)|no (?:clause|provision|protection))\b/i;
 const MONEY = /\b(amounts?|deposits?|rent|fees?|pay(?:ment|ments|able|s)?|paid|price|cost|charges?|premium|money|advance|security|how much|sum)\b/i;
 const DATE = /\b(dates?|deadlines?|due|when|expir\w*|notice|periods?|term|commenc\w*|renew\w*|start\w*|end)\b/i;
-const OBLIGATION = /\b(obligations?|duty|duties|responsib\w*|must|who (?:must|has to|should|is required))\b/i;
+const OBLIGATION = /\b(obligations?|duty|duties|responsib\w*|must|owes?|owed|owing|liable|who (?:must|has to|should|is required))\b/i;
 const RISK = /\b(risks?|liabilit\w*|penalt\w*|concerns?|exposure|unfair|one-sided|dangers?)\b/i;
 const OVERVIEW = /\b(what is (?:this|the) (?:document|agreement|contract|lease|deed) about|overview|summary|summari[sz]e|nature|purpose|parties|project details?|about (?:this|the) (?:document|agreement|contract))\b/i;
 
@@ -94,11 +94,15 @@ function candidatesFor(model: ReportModel, kind: 'money' | 'date' | 'obligation'
   }));
 }
 
+// Party words name who the question is about, not the subject of the row: "what are the parties'
+// obligations" must match the obligation rows. Local to the router; the shared term list is unchanged.
+const ROUTE_PARTY_TERMS = new Set(['partie', 'party']);
+
 // A row answers the question only when every specific word of the question appears in it. Sharing
 // one word is not enough: "late rent" must not return the monthly rent row.
 function pick(candidates: Candidate[], question: string): { rows: Candidate[]; total: number } | null {
   if (candidates.length === 0) return null;
-  const specific = significantTerms(question);
+  const specific = significantTerms(question).filter((t) => !ROUTE_PARTY_TERMS.has(t));
   const matched = specific.length === 0
     ? candidates
     : candidates.filter((c) => {
@@ -129,11 +133,6 @@ export function savedRowsFor(question: string, model: ReportModel): { rows: Save
     const missing = candidatesFor(model, 'missing');
     if (missing.length > 0) return { rows: missing.slice(0, SAVED_ROW_LIMIT).map(strip), total: missing.length };
   }
-  if (OVERVIEW.test(question)) {
-    // "What is this about" asks for the whole overview, so every point is returned, not one match.
-    const points = candidatesFor(model, 'overview');
-    if (points.length > 0) return { rows: points.slice(0, SAVED_ROW_LIMIT).map(strip), total: points.length };
-  }
   const intents: [RegExp, 'money' | 'date' | 'obligation' | 'risk'][] = [
     [MONEY, 'money'],
     [DATE, 'date'],
@@ -144,6 +143,12 @@ export function savedRowsFor(question: string, model: ReportModel): { rows: Save
     if (!re.test(question)) continue;
     const hit = pick(candidatesFor(model, kind), question);
     if (hit) return { rows: hit.rows.map(strip), total: hit.total };
+  }
+  // Overview comes last: a descriptive question with no action word. "What is this about" returns
+  // every point, not one match.
+  if (OVERVIEW.test(question)) {
+    const points = candidatesFor(model, 'overview');
+    if (points.length > 0) return { rows: points.slice(0, SAVED_ROW_LIMIT).map(strip), total: points.length };
   }
   return null;
 }
