@@ -83,6 +83,22 @@ export function isOutlineStale(
   return outline.planFingerprint !== planFingerprint(draft);
 }
 
+// Structure content fingerprint: used to tell whether resolved sources still match the
+// outline they were read for.
+export function outlineFingerprint(outline: Pick<Outline, 'items'> | null): string {
+  const canonical = JSON.stringify(
+    (outline?.items ?? []).map((item) => [
+      item.id,
+      item.level,
+      item.title,
+      item.purpose,
+      item.kind,
+      item.bindingIds,
+    ]),
+  );
+  return `${fnv(canonical, 0x811c9dc5)}${fnv(canonical, 0x9e3779b9)}`;
+}
+
 // ---------- Model input ----------
 
 function oneLine(text: string, max = 400): string {

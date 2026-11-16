@@ -60,6 +60,7 @@ export async function createDraft(db: DrafterDBHandle, input: NewDraftInput): Pr
     particulars: null,
     sourcePlan: null,
     outline: null,
+    sourceText: null,
     clauses: {},
     schemaVersion: DRAFTER_SCHEMA_VERSION,
     createdAt: now,
@@ -98,6 +99,7 @@ export async function updateDraft(db: DrafterDBHandle, id: string, patch: DraftP
     particulars,
     sourcePlan,
     outline,
+    sourceText,
     clauses,
   } = patch;
 
@@ -111,6 +113,7 @@ export async function updateDraft(db: DrafterDBHandle, id: string, patch: DraftP
     particulars: particulars !== undefined ? particulars : current.particulars,
     sourcePlan: sourcePlan !== undefined ? sourcePlan : current.sourcePlan,
     outline: outline !== undefined ? outline : current.outline,
+    sourceText: sourceText !== undefined ? sourceText : current.sourceText,
     clauses: clauses !== undefined ? clauses : current.clauses,
     updatedAt: new Date().toISOString(),
   };

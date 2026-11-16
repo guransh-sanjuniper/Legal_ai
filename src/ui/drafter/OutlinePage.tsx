@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { PageHeader } from '../app/pages/Placeholder';
 import {
@@ -59,6 +59,7 @@ function duplicateTitles(items: OutlineItem[]): string[] {
 
 export function OutlinePage() {
   const { draftId } = useParams();
+  const navigate = useNavigate();
 
   const [db, setDb] = useState<DrafterDBHandle | null>(null);
   const [draft, setDraft] = useState<DraftRecord | null>(null);
@@ -209,6 +210,10 @@ export function OutlinePage() {
       setDraft(saved);
       setNotice('Saved. The structure is confirmed.');
       void syncDraftById(supabase, db, saved.id);
+      const needsSources = (draft.sourcePlan?.bindings ?? []).some(
+        (binding) => binding.useMode === 'verbatim' || binding.useMode === 'adapt',
+      );
+      navigate(`/draft/${draft.id}/${needsSources ? 'sources' : 'write'}`);
     } catch (e) {
       setError(`Could not save the outline: ${errorText(e)}`);
     } finally {
@@ -447,9 +452,13 @@ export function OutlinePage() {
             disabled={busy !== null}
             onClick={() => void confirmOutline()}
           >
-            {busy === 'save' ? 'Saving…' : 'Looks good, continue'}
+            {busy === 'save'
+              ? 'Saving…'
+              : draft.status === 'outlined'
+                ? 'Continue'
+                : 'Looks good, continue'}
           </button>
-          <span className="app-muted drafter-next-note">Writing step coming next</span>
+          <span className="app-muted drafter-next-note">Next, I'll check the parts I'll use.</span>
         </div>
         <div className="drafter-secondary-actions">
           <Link className="app-link-button" to={`/draft/${draft.id}/plan`}>

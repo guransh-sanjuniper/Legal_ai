@@ -282,8 +282,7 @@ describe('drafter sync', () => {
     expect(converted.syncedAt).toBe(updated.updatedAt);
   });
 
-  it('round-trips an outline and drops a malformed one', async () => {
-    const created = await createDraft(db, { userId: 'user-a', instruction: 'Draft a lease.' });
+  it('round-trips an outline and drops a malformed one', async () => {    const created = await createDraft(db, { userId: 'user-a', instruction: 'Draft a lease.' });
     const outline = {
       items: [
         { id: 'o1', level: 1 as const, title: 'Parties', purpose: 'Who the lease is between', kind: 'preamble' as const, bindingIds: [] },
@@ -303,5 +302,43 @@ describe('drafter sync', () => {
       data: { outline: { nope: true } },
     } as unknown as DraftRow);
     expect(malformed.outline).toBeNull();
+  });
+
+  it('round-trips source metadata without the source text', async () => {
+    const created = await createDraft(db, { userId: 'user-a', instruction: 'Draft a lease.' });
+    const sourceText = {
+      resolutions: [
+        {
+          bindingId: 'bind-1',
+          status: 'resolved' as const,
+          candidates: [
+            { id: 'clause:14', label: 'Clause 14', pages: '5', text: 'stored source text', chars: 18 },
+          ],
+          chosenCandidateId: 'clause:14',
+          userConfirmed: true,
+        },
+      ],
+      resolvedAt: '2026-01-02T00:00:00.000Z',
+      planFingerprint: 'plan-fp',
+      outlineFingerprint: 'outline-fp',
+    };
+    const updated = await updateDraft(db, created.id, { sourceText });
+    const row = draftToRow(updated);
+
+    const synced = row.data.sourceText as {
+      resolutions: { candidates: { text: string }[] }[];
+    };
+    expect(synced.resolutions[0].candidates[0].text).toBe('');
+
+    const converted = rowToDraft(row);
+    expect(converted.sourceText?.resolutions[0].candidates[0].text).toBe('');
+    expect(converted.sourceText?.resolutions[0].candidates[0].pages).toBe('5');
+    expect(converted.sourceText?.resolutions[0].userConfirmed).toBe(true);
+
+    const malformed = rowToDraft({
+      ...row,
+      data: { sourceText: { nope: true } },
+    } as unknown as DraftRow);
+    expect(malformed.sourceText).toBeNull();
   });
 });

@@ -9,6 +9,7 @@ import {
 } from './store';
 import { normaliseStoredParticulars, normaliseStoredPlan } from './plan';
 import { normaliseStoredOutline } from './outline';
+import { normaliseStoredSourceText, sourceTextForSync } from './resolveRef';
 import { DRAFTER_SCHEMA_VERSION, type DraftRecord, type DraftStatus } from './types';
 
 // Local-first sync for drafts. IndexedDB is the working copy; Supabase is the backup and the
@@ -31,6 +32,7 @@ export interface DraftRow {
     particulars: unknown;
     sourcePlan: unknown;
     outline: unknown;
+    sourceText?: unknown;
     clauses: Record<string, unknown>;
   };
   schema_version: number;
@@ -54,6 +56,7 @@ export function draftToRow(draft: DraftRecord): DraftRow {
       particulars: draft.particulars,
       sourcePlan: draft.sourcePlan,
       outline: draft.outline,
+      sourceText: sourceTextForSync(draft.sourceText),
       clauses: draft.clauses,
     },
     schema_version: DRAFTER_SCHEMA_VERSION,
@@ -85,6 +88,7 @@ export function rowToDraft(row: DraftRow): DraftRecord {
     particulars: normaliseStoredParticulars(data.particulars),
     sourcePlan: normaliseStoredPlan(data.sourcePlan),
     outline: normaliseStoredOutline(data.outline),
+    sourceText: normaliseStoredSourceText(data.sourceText),
     clauses: clauses && typeof clauses === 'object' && !Array.isArray(clauses) ? clauses : {},
     schemaVersion: DRAFTER_SCHEMA_VERSION,
     createdAt: row.created_at,

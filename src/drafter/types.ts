@@ -93,6 +93,37 @@ export interface Outline {
   feedback?: string;
 }
 
+export type SourceResolutionStatus = 'resolved' | 'ambiguous' | 'not_found' | 'too_broad';
+
+export interface SourceCandidate {
+  id: string;
+  label: string;
+  pages: string;
+  // Stored locally only; never synced.
+  text: string;
+  chars: number;
+  score?: number;
+  truncated?: boolean;
+}
+
+export interface SourceResolution {
+  bindingId: string;
+  status: SourceResolutionStatus;
+  candidates: SourceCandidate[];
+  chosenCandidateId?: string;
+  // Set by the Sources screen. A source is never sent to the model before this is true.
+  userConfirmed: boolean;
+  skipped?: boolean;
+  note?: string;
+}
+
+export interface SourceText {
+  resolutions: SourceResolution[];
+  resolvedAt: string;
+  planFingerprint: string;
+  outlineFingerprint: string;
+}
+
 export interface DraftRecord {
   id: string;
   userId: string;
@@ -105,6 +136,7 @@ export interface DraftRecord {
   particulars: Particular[] | null;
   sourcePlan: SourcePlan | null;
   outline: Outline | null;
+  sourceText: SourceText | null;
   clauses: Record<string, unknown>;
   schemaVersion: typeof DRAFTER_SCHEMA_VERSION;
   createdAt: string;
@@ -124,6 +156,7 @@ export type DraftPatch = Partial<
     | 'particulars'
     | 'sourcePlan'
     | 'outline'
+    | 'sourceText'
     | 'clauses'
   >
 >;
