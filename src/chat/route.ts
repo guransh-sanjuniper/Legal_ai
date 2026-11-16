@@ -30,7 +30,7 @@ const MONEY = /\b(amounts?|deposits?|rent|fees?|pay(?:ment|ments|able|s)?|paid|p
 const DATE = /\b(dates?|deadlines?|due|when|expir\w*|notice|periods?|term|commenc\w*|renew\w*|start\w*|end)\b/i;
 const OBLIGATION = /\b(obligations?|duty|duties|responsib\w*|must|owes?|owed|owing|liable|who (?:must|has to|should|is required))\b/i;
 const RISK = /\b(risks?|liabilit\w*|penalt\w*|concerns?|exposure|unfair|one-sided|dangers?)\b/i;
-const OVERVIEW = /\b(what is (?:this|the) (?:document|agreement|contract|lease|deed) about|overview|summary|summari[sz]e|nature|purpose|parties|project details?|about (?:this|the) (?:document|agreement|contract))\b/i;
+const OVERVIEW = /\b(what is (?:this|the) (?:document|agreement|contract|lease|deed) about|overview|summary|summari[sz]e|nature|purpose|parties|project details?|details?|tell me about|describe|about (?:this|the) (?:document|agreement|contract))\b/i;
 
 import { contentTokens, significantTerms } from '../analysis/questionTerms';
 

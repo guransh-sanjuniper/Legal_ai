@@ -140,6 +140,19 @@ describe('routeQuestion', () => {
     expect(r.rows[0].label).toBe('Tenant · clause 3');
   });
 
+  it('routes details, tell-me-about and describe questions about the document to the overview', () => {
+    expect(routeQuestion('give me the details', model, false).mode).toBe('saved');
+    expect(routeQuestion('tell me about this document', model, false).mode).toBe('saved');
+    expect(routeQuestion('describe the document', model, false).mode).toBe('saved');
+  });
+
+  it('keeps a specific question on its own row when it names a stored item', () => {
+    const r = routeQuestion('tell me about the deposit', model, false);
+    expect(r.mode).toBe('saved');
+    if (r.mode !== 'saved') return;
+    expect(r.rows[0].label).toBe('Amount: Security deposit');
+  });
+
   it('falls back to retrieval for an overview question when the report has no overview', () => {
     const noOverview = { ...model, sections: model.sections.filter((s) => s.key !== 'overview') } as unknown as ReportModel;
     expect(routeQuestion('what is this document about', noOverview, false)).toEqual({ mode: 'retrieval' });
