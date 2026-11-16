@@ -7,6 +7,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 ## Stack
 - React + Vite SPA (`src/`), TypeScript
 - `docx` produces the Word export in the browser; no server build step.
+- Library DOCX/text/image conversion runs in a lazy module worker: `mammoth` (DOCX → HTML), `jspdf` (PDF writer, MIT), committed Noto Sans / Noto Sans Devanagari fonts (SIL OFL 1.1). The main bundle does not include either library.
 - Browser IndexedDB via `idb` (documents with PDF Blob, pages, chunks, embeddings, tasks, raw_responses, ocr_decisions, run_state)
 - Supabase (local CLI + Docker): Postgres, Auth, Edge Functions. RLS off (throwaway) for `runs`, `task_results`, `reports`, `rate_limits`; RLS on with owner-only policies for `chat_sessions` and `chat_messages` (migration 0004). Pending (P8): enable owner-only RLS on the older tables too.
 - Hosted Supabase for the app shell: `npm run dev:hosted` reads `.env.hosted`; local `npm run dev` reads `.env.local`. The `ai-proxy` proxy is the same function in both. See `docs/hosted-supabase.md`.
@@ -22,7 +23,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `drafter/` draft storage (separate `legal-drafter` IndexedDB), local-first Supabase sync, title derivation, reference resolution (plain TS, no UI imports)
 - `ui/` React pages only
 - `ui/app/` the app shell: router, sidebar, login gate, theme, placeholders (UI only)
-- `ui/library/` document library page, preparation orchestrator, status derivation, ingest-worker wrapper, local removal
+- `ui/library/` document library page, preparation orchestrator, status derivation, ingest-worker wrapper, local removal, multi-file import queue (`importQueue*.ts`), conversion metadata, and `convert/` (DOCX/text/image → PDF, worker, fonts, fixtures)
 - `ui/drafter/` drafts list and Brief form (UI only)
 - `lib/` shared Supabase client for the app shell (one persisted session per project)
 
@@ -30,7 +31,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
 - `/chat` and `/chat/:sessionId` are general chat (see "Chat" below). `/compare` is a placeholder.
 - `/draft` lists drafts; `/draft/new` and `/draft/:draftId` are the Brief form, `/draft/:draftId/plan` is the plan, `/draft/:draftId/outline` is the structure, `/draft/:draftId/sources` checks the bound sources, `/draft/:draftId/write` writes the document, `/draft/:draftId/review` reviews and downloads it (see "Drafter" below).
-- `/documents` lists IndexedDB documents, imports a PDF and runs the whole preparation (ingestion, embeddings, index, definitions), removes a document from this device.
+- `/documents` lists IndexedDB documents, imports PDF/Word/text/image files (multiple files, or drag-and-drop) and runs the whole preparation (ingestion, embeddings, index, definitions) one file at a time, removes a document from this device.
 - `/documents/:docId/review` is the in-app review screen (page image beside OCR text, decisions, Retry OCR, Recheck, Proceed without reviewing). Needs-review rows and the Review action open it; the harness page is not linked from the library.
 - `/analysis` lists ready documents; `/analysis/:docId` is the Deep Analysis page (Ready documents only, see "Deep Analysis page").
 - Status: `ready` → Ready (with "Ready · N pages not reviewed" when pages were waived); `review` → Needs review (N pages); `new`/`processing` → Preparing. The library's Ready is the durable preparation result (see Document preparation); the document-level `status` stays the ingestion status.
@@ -39,7 +40,7 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - Theme: light/dark, scoped to the app shell; the harness pages keep their look.
 
 ## Document preparation (library)
-- "Import PDF" runs the whole preparation in one go: ingestion (extract, OCR, page decisions, chunking), then embeddings, then the keyword-index warm-up, then the definitions sheet. The library is the only orchestrator; the pipeline modules are unchanged.
+- "Import documents" runs the whole preparation in one go: ingestion (extract, OCR, page decisions, chunking), then embeddings, then the keyword-index warm-up, then the definitions sheet. The library is the only orchestrator; the pipeline modules are unchanged.
 - The orchestrator lives in `src/ui/library/prepare.ts` outside React. It survives route changes (one preparation per tab), and the per-document `navigator.locks` lock (`doc:<hash>`) still blocks another tab. Progress is written to `localStorage` (`legal-app.prep.<docId>`) and pushed to the library, so navigating away and back keeps the progress live.
 - Stages are skipped when their durable result exists: chunks on the document, `embedding_state` with `completedAt` and the matching preparation fingerprint and embedding model version, and a `definitions` record with the matching preparation fingerprint. A document already prepared in the harness (no wrapper state) reaches Ready without re-running those stages.
 - The keyword index is derived in the retrieval worker, not persisted. Preparation warms it with a search call; the Search page rebuilds its own index. A document with no definition/party text gets an empty `definitions` record so it can reach Ready.
@@ -54,6 +55,17 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - Decisions are shared by the harness page and the review screen (`saveReviewDecision`). The harness page's Retry OCR and the review screen's Retry OCR write the same page; a saved decision still wins on a later recheck (existing behaviour, not changed).
 - Analysis reports carry `unreviewedPages` (count of waived pages when the run was saved). The report shows a separate "Pages not reviewed." banner, also in exports. Older reports have no count and show no banner.
 - "Retry" re-runs the failed stage; "Remove" deletes the document and its local state. `preparedAt` and the prepared fingerprint (including the embedding model version) are stored on Ready.
+
+### Import queue and file conversion
+- "Import documents" and drag-and-drop accept many files: PDF, Word `.docx`, text `.txt`/`.md`, image `.png`/`.jpg`. Common unsupported types (`.doc`, `.rtf`, `.xls/.xlsx`, `.ppt/.pptx`) are in the picker so the user gets a plain message; each is skipped, the rest continue.
+- Files are queued and prepared one at a time through the existing `runPreparation` path. `prepare.ts` and `preparationState.ts` are not changed by this work. The queue waits for the tab's active preparation to finish, so "one preparation per tab" and the `doc:<hash>` lock still hold. A needs-review file pauses only itself and the queue continues; a failed file does not stop the queue either.
+- `src/ui/library/importQueue.ts` is the pure queue engine (injected dependencies, tested). `importQueueInstance.ts` is the singleton wiring and lives outside React, so changing route does not stop the queue. Closing or reloading the tab loses files still waiting; a file already preparing is a document and resumes from the library. The panel says this.
+- Conversion runs before the import path in a lazy module worker (`src/ui/library/convert/`): mammoth for DOCX, jsPDF for the PDF writer, committed Noto Sans / Noto Sans Devanagari fonts. PDFs pass through untouched. TXT/MD become text PDFs with headings/paragraphs/lists/simple tables. Images become one page each so the existing OCR pipeline handles them. No new ingestion code path.
+- Converted text pages have a real text layer that pdf.js extracts, so `assessNativeText` calls them native and no OCR runs. Devanagari is preserved in logical order (correct extraction) but is not shaped for print; a visible warning says so. A glyph missing from the built-in fonts is replaced with a visible substitute and warned about, never dropped silently. Pictures in a DOCX are not included (warning).
+- Determinism: fixed PDF creation date, file id from the input hash, no timestamps or random ids. Re-importing the same DOCX/TXT/MD/image produces identical converted bytes and hits the existing content-hash duplicate check. A later converter or font change changes the bytes, so an old converted document will not dedupe against a fresh conversion.
+- The document keeps the original file name (`Lease.docx`); size and page numbers refer to the converted PDF. The converted note is in localStorage `legal-app.converted.<docId>` (`src/ui/library/conversionMeta.ts`): "Converted from Word · Page numbers refer to the converted version", warnings, original name/size. No `pipeline-harness` schema change. Removal clears it.
+- `VITE_LIBRARY_MAX_FILE_MB` (default 50) limits converted types only; PDFs keep today's no-added-limit behaviour. Conversion is off the main thread. The built worker chunk is ~743 kB minified / ~234 kB gzip; the two fonts are ~569 kB and ~219 kB raw (~286 kB / ~95 kB gzip), fetched only for text conversions.
+- Tests: `importQueue.test.ts` covers sequential processing, failure isolation, needs-review not blocking, duplicate reuse, unsupported and oversize files, retry and removal. `prepare.guard.test.ts` locks the guarantee that a needs-review pause releases `getActiveDocId()`. `convert/convert.test.ts` covers DOCX/TXT/MD/image text extraction, deterministic bytes, corrupt/unsupported failures and the native-text/OCR verdicts.
 
 ## Tables
 Supabase: `runs` (with `source`, `chat` for chat-originated runs), `task_results`, `reports`, `rate_limits`, `chat_sessions`, `chat_messages`, `drafts` (RLS owner-only, migration 0006). RPCs: `save_task_result(p_row jsonb)`, `increment_rate_limit(p_user, p_window)`.

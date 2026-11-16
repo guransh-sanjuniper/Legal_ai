@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   openHarnessDb,
   type DocumentRecord,
   type HarnessDBHandle,
 } from '../../runner/db';
-import { sha256Bytes } from '../../ingest/hash';
 import { requestPersistence, storageReport, type StorageReport } from '../../ingest/storage';
 import { libraryStatusFrom, needsResumeAfterReview, readyLabel, stageLabel, statusLabel, statusTone } from './docStatus';
 import { countReviewPages, isPrepared, readPreparationState, type PreparationState } from './preparationState';
@@ -13,8 +12,82 @@ import { countWaivedPages, waiveUnresolvedPages } from '../../ingest/review';
 import { getActiveDocId, runPreparation, subscribePreparation } from './prepare';
 import { documentLock, removeDocumentWhenIdle } from './removeDocument';
 import { PageHeader } from '../app/pages/Placeholder';
+import {
+  clearFinishedImports,
+  enqueueFiles,
+  getImportEntries,
+  removeImportEntry,
+  retryImportEntry,
+  subscribeImportNotice,
+  subscribeImportQueue,
+} from './importQueueInstance';
+import type { QueueEntry } from './importQueue';
+import { conversionNote, readConversionMeta } from './conversionMeta';
+import { formatFileSize } from './convert/detect';
+import './library.css';
 
 const LANG_OPTIONS = ['eng', 'eng+mar', 'eng+hin', 'eng+mar+hin'];
+const FILE_ACCEPT =
+  '.pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.doc,.rtf,.xls,.xlsx,.ppt,.pptx,' +
+  'application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
+  'text/plain,text/markdown,image/png,image/jpeg';
+
+function queueStatusText(entry: QueueEntry): string {
+  switch (entry.status) {
+    case 'waiting':
+      return 'Waiting';
+    case 'converting':
+      return 'Converting to PDF';
+    case 'preparing':
+      return 'Preparing';
+    case 'ready':
+      return 'Ready';
+    case 'needs_review':
+      return entry.reviewPages && entry.reviewPages > 0
+        ? `Needs review (${entry.reviewPages} page${entry.reviewPages === 1 ? '' : 's'})`
+        : 'Needs review';
+    case 'failed':
+      return 'Failed';
+    case 'skipped':
+      return entry.duplicate ? 'Already on this device' : 'Not supported';
+    default:
+      return '';
+  }
+}
+
+function queueStatusTone(entry: QueueEntry): 'neutral' | 'warn' | 'ok' | 'danger' {
+  if (entry.status === 'failed') return 'danger';
+  if (entry.status === 'needs_review') return 'warn';
+  if (entry.status === 'ready') return 'ok';
+  if (entry.status === 'skipped') return entry.duplicate ? 'neutral' : 'warn';
+  return 'neutral';
+}
+
+function queueSummary(entries: QueueEntry[]): string {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    const key =
+      entry.status === 'skipped'
+        ? entry.duplicate
+          ? 'already on this device'
+          : 'not supported'
+        : entry.status === 'needs_review'
+          ? 'needs review'
+          : entry.status;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const order = ['preparing', 'converting', 'waiting', 'ready', 'needs review', 'failed', 'already on this device', 'not supported'];
+  const parts = [...counts.entries()]
+    .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
+    .map(([label, count]) => `${count} ${label}`);
+  return `${entries.length} file${entries.length === 1 ? '' : 's'}: ${parts.join(', ')}`;
+}
+
+function maxFileLabel(): string {
+  const raw = Number(import.meta.env.VITE_LIBRARY_MAX_FILE_MB);
+  const mb = Number.isFinite(raw) && raw > 0 ? raw : 50;
+  return `${mb} MB`;
+}
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B';
@@ -44,14 +117,17 @@ export function DocumentsPage() {
   const [loading, setLoading] = useState(true);
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [queueEntries, setQueueEntries] = useState<QueueEntry[]>(() => getImportEntries());
+  const [queueNotice, setQueueNotice] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [storage, setStorage] = useState<StorageReport | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [ocrLangs, setOcrLangs] = useState('eng');
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
   const reviewCacheRef = useRef(new Map<string, number>());
   const reviewSigRef = useRef(new Map<string, string>());
   const waivedCacheRef = useRef(new Map<string, number>());
@@ -167,6 +243,28 @@ export function DocumentsPage() {
     });
   }, [refresh]);
 
+  // The import queue also lives outside React; this keeps its panel live and refreshes
+  // the document table when a queued file reaches a terminal state.
+  useEffect(() => subscribeImportQueue(setQueueEntries), []);
+  useEffect(() => subscribeImportNotice(setQueueNotice), []);
+  useEffect(() => {
+    if (
+      queueEntries.some(
+        (entry) =>
+          entry.status === 'converting' ||
+          entry.status === 'preparing' ||
+          entry.status === 'ready' ||
+          entry.status === 'needs_review' ||
+          entry.status === 'failed',
+      )
+    ) {
+      void refresh();
+      void storageReport(0)
+        .then(setStorage)
+        .catch(() => undefined);
+    }
+  }, [queueEntries, refresh]);
+
   // Review counts can change from the harness page in another tab.
   useEffect(() => {
     const onFocus = () => {
@@ -203,6 +301,14 @@ export function DocumentsPage() {
   useEffect(() => {
     if (!db || loading || resumeAttemptRef.current) return;
     if (getActiveDocId()) return;
+    if (
+      queueEntries.some(
+        (entry) =>
+          entry.status === 'waiting' || entry.status === 'converting' || entry.status === 'preparing',
+      )
+    ) {
+      return;
+    }
     const first = docs.find((doc) => {
       if (preparedIds[doc.id]) return false;
       if (doc.status === 'review' && !needsResumeAfterReview(doc.status, reviewCounts[doc.id] ?? 0)) return false;
@@ -213,56 +319,45 @@ export function DocumentsPage() {
     if (!first) return;
     resumeAttemptRef.current = true;
     runFor(first);
-  }, [db, loading, docs, preparedIds, prepStates, reviewCounts, runFor]);
+  }, [db, loading, docs, preparedIds, prepStates, reviewCounts, queueEntries, runFor]);
 
-  async function onFile(file: File) {
-    if (!db || importing) return;
-    setImporting(true);
+  function enqueue(files: File[]) {
+    if (!db || files.length === 0) return;
     setError(null);
     setNotice(null);
-    try {
-      const report = await storageReport(file.size);
-      setStorage(report);
-      if (!report.fits) {
-        setNotice(
-          `Quota warning: this file needs about ${formatBytes(report.neededBytes)} free, but only ${formatBytes(
-            report.free,
-          )} is available. Importing may fail.`,
-        );
-      }
-      setPersisted(await requestPersistence());
+    enqueueFiles(files, { db, ocrLangs });
+  }
 
-      const buffer = await file.arrayBuffer();
-      const hash = await sha256Bytes(buffer);
-      const existing = await db.get('documents', hash);
-      if (existing) {
-        setNotice(`${file.name} is already on this device.`);
-        await refresh();
-        return;
-      }
+  function onFileInput(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (files.length > 0) enqueue(files);
+  }
 
-      const doc: DocumentRecord = {
-        id: hash,
-        name: file.name,
-        hash,
-        size: file.size,
-        pdf: new Blob([buffer], { type: 'application/pdf' }),
-        createdAt: Date.now(),
-        status: 'new',
-        ocrLangs,
-        pageCount: 0,
-        prepFingerprint: null,
-        chunkCount: 0,
-      };
-      await db.put('documents', doc);
-      await refresh();
-      runFor(doc);
-    } catch (e) {
-      setError(`Could not import the PDF: ${String(e)}`);
-    } finally {
-      setImporting(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+  function onDragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragging(true);
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  }
+
+  function onDragLeave() {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragging(false);
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    if (event.dataTransfer.files.length === 0) return;
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragging(false);
+    enqueue(Array.from(event.dataTransfer.files));
   }
 
   function openDoc(doc: DocumentRecord) {
@@ -329,16 +424,28 @@ export function DocumentsPage() {
       : null;
 
   return (
-    <>
+    <div
+      className={`library-page${dragging ? ' library-page--dragging' : ''}`}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div className="library-drop-overlay" aria-hidden="true">
+          <span>Drop files to import</span>
+        </div>
+      )}
+
       <PageHeader
         eyebrow="Library"
         title="Documents"
-        description="PDFs are prepared once on this device, then used by every module. They are never uploaded to Supabase."
+        description="PDFs, Word files, text and images are prepared once on this device, then used by every module. They are never uploaded to Supabase."
         actions={
           <>
             <label className="app-select-label">
               <span>OCR language</span>
-              <select value={ocrLangs} onChange={(e) => setOcrLangs(e.target.value)} disabled={importing}>
+              <select value={ocrLangs} onChange={(e) => setOcrLangs(e.target.value)}>
                 {LANG_OPTIONS.map((lang) => (
                   <option key={lang} value={lang}>
                     {lang}
@@ -349,20 +456,18 @@ export function DocumentsPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="application/pdf"
+              multiple
+              accept={FILE_ACCEPT}
               className="app-hidden-input"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void onFile(file);
-              }}
+              onChange={onFileInput}
             />
             <button
               type="button"
               className="app-primary-button"
-              disabled={!db || importing || Boolean(busyDocId)}
+              disabled={!db}
               onClick={() => fileInputRef.current?.click()}
             >
-              {importing ? 'Importing…' : 'Import PDF'}
+              Import documents
             </button>
           </>
         }
@@ -377,6 +482,10 @@ export function DocumentsPage() {
         )}
         {persisted === true && <span className="app-muted">Storage is protected on this device.</span>}
       </div>
+      <p className="library-format-hint">
+        PDF, Word (.docx), text (.txt or .md) and image (.png or .jpg) files. Files are converted to PDF before
+        preparation; page numbers refer to the converted version. Up to {maxFileLabel()} per converted file.
+      </p>
 
       {error && (
         <div className="app-banner app-banner--error" role="alert">
@@ -384,6 +493,140 @@ export function DocumentsPage() {
         </div>
       )}
       {notice && <div className="app-banner app-banner--notice">{notice}</div>}
+      {queueNotice && <div className="app-banner app-banner--notice">{queueNotice}</div>}
+
+      {queueEntries.length > 0 && (
+        <section className="library-queue" aria-label="Import queue">
+          <div className="library-queue-head">
+            <div>
+              <h2>Import queue</h2>
+              <p className="app-muted" role="status">
+                {queueSummary(queueEntries)}
+              </p>
+            </div>
+            {queueEntries.some(
+              (entry) =>
+                entry.status === 'ready' || entry.status === 'needs_review' || entry.status === 'skipped',
+            ) && (
+              <button type="button" className="app-link-button" onClick={clearFinishedImports}>
+                Clear finished
+              </button>
+            )}
+          </div>
+          <ul className="library-queue-list">
+            {queueEntries.map((entry) => (
+              <li key={entry.id} className="library-queue-row">
+                <div className="library-queue-main">
+                  <div className="library-queue-title">
+                    <span>{entry.fileName}</span>
+                    <span className={`app-chip app-chip--${queueStatusTone(entry)}`}>
+                      {queueStatusText(entry)}
+                    </span>
+                  </div>
+                  <span className="library-queue-meta">
+                    {formatBytes(entry.size)}
+                    {entry.conversionLabel ? ` · Converted from ${entry.conversionLabel}` : ''}
+                  </span>
+                  {(entry.status === 'converting' || entry.status === 'preparing') && (
+                    <div
+                      className="app-progress app-progress--indeterminate"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={0}
+                      aria-valuenow={0}
+                    >
+                      <div className="app-progress-bar app-progress-bar--indeterminate" />
+                    </div>
+                  )}
+                  {entry.message && (
+                    <span
+                      className={`library-queue-message${
+                        entry.status === 'failed' ? ' library-queue-message--danger' : ''
+                      }`}
+                    >
+                      {entry.message}
+                    </span>
+                  )}
+                  {entry.warnings.map((warning, index) => (
+                    <span key={`${entry.id}-warning-${index}`} className="library-queue-warn">
+                      {warning}
+                    </span>
+                  ))}
+                </div>
+                <div className="library-queue-actions">
+                  {entry.status === 'ready' && entry.docId && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      onClick={() => navigate(`/analysis/${encodeURIComponent(entry.docId!)}`)}
+                    >
+                      Open
+                    </button>
+                  )}
+                  {entry.status === 'needs_review' && entry.docId && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      onClick={() => navigate(`/documents/${encodeURIComponent(entry.docId!)}/review`)}
+                    >
+                      Review
+                    </button>
+                  )}
+                  {entry.status === 'failed' && entry.retryable && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      onClick={() => retryImportEntry(entry.id)}
+                    >
+                      Retry
+                    </button>
+                  )}
+                  {entry.status === 'waiting' && (
+                    <button
+                      type="button"
+                      className="app-link-button app-link-button--danger"
+                      onClick={() => removeImportEntry(entry.id)}
+                    >
+                      Remove from queue
+                    </button>
+                  )}
+                  {entry.status === 'skipped' && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      onClick={() => removeImportEntry(entry.id)}
+                    >
+                      Dismiss
+                    </button>
+                  )}
+                  {entry.status === 'failed' && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      onClick={() => removeImportEntry(entry.id)}
+                    >
+                      {entry.docId ? 'Dismiss' : 'Remove from queue'}
+                    </button>
+                  )}
+                  {(entry.status === 'ready' || entry.status === 'needs_review') && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      onClick={() => removeImportEntry(entry.id)}
+                    >
+                      Dismiss
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="library-queue-note">
+            Waiting files are not kept if you close or reload this tab. A file that is already preparing resumes from
+            the library.
+          </p>
+        </section>
+      )}
 
       {loading ? (
         <p className="app-muted">Loading documents…</p>
@@ -394,18 +637,21 @@ export function DocumentsPage() {
           </span>
           <h2>No documents on this device</h2>
           <div className="app-empty-body">
-            <p>Import a PDF to extract its pages, run OCR where needed and prepare it for analysis.</p>
+            <p>
+              Import a PDF, Word file, text file or image to extract its pages, run OCR where needed and prepare it for
+              analysis.
+            </p>
             <p className="app-muted">
-              Preparation happens in this browser. A scanned document will show “Needs review” with the pages that need a
-              decision.
+              Word, text and image files are converted to PDF on this device first. Preparation happens in this browser.
+              A scanned document will show “Needs review” with the pages that need a decision.
             </p>
             <button
               type="button"
               className="app-primary-button"
-              disabled={!db || importing || Boolean(busyDocId)}
+              disabled={!db}
               onClick={() => fileInputRef.current?.click()}
             >
-              Import PDF
+              Import documents
             </button>
           </div>
         </section>
@@ -443,6 +689,7 @@ export function DocumentsPage() {
                       : label;
                 const indeterminate = status === 'preparing' && (!current || current.total === 0);
                 const failed = state?.failed;
+                const conversion = readConversionMeta(doc.id);
                 return (
                   <tr key={doc.id}>
                     <td>
@@ -454,6 +701,23 @@ export function DocumentsPage() {
                         {doc.chunkCount > 0 ? ` · ${doc.chunkCount} chunks` : ''}
                         {status === 'ready' && state?.preparedAt ? ` · Prepared ${formatDate(state.preparedAt)}` : ''}
                       </span>
+                      {conversion && (
+                        <span
+                          className="library-converted-note"
+                          title={
+                            `${conversionNote(conversion)}. Page numbers refer to the converted version. ` +
+                            'Headers, footers, pictures and tracked changes may not be included.'
+                          }
+                        >
+                          {conversionNote(conversion)} · Page numbers refer to the converted version.
+                        </span>
+                      )}
+                      {conversion && conversion.warnings.length > 0 && (
+                        <span className="library-row-warn" title={conversion.warnings.join('\n')}>
+                          {conversion.warnings[0]}
+                          {conversion.warnings.length > 1 ? ` (+${conversion.warnings.length - 1} more)` : ''}
+                        </span>
+                      )}
                       {status === 'preparing' && state?.message && (
                         <span className="app-stage-label">{state.message}</span>
                       )}
@@ -557,6 +821,6 @@ export function DocumentsPage() {
           </table>
         </div>
       )}
-    </>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { deleteEmbeddingsForDoc, type DocumentRecord, type HarnessDBHandle } from '../../runner/db';
 import { clearPreparationState } from './preparationState';
+import { clearConversionMeta } from './conversionMeta';
 
 const pageRange = (docId: string) => IDBKeyRange.bound([docId, 0], [docId, Number.MAX_SAFE_INTEGER]);
 const chunkRange = (docId: string) => IDBKeyRange.bound(`${docId}:`, `${docId}:\uffff`);
@@ -36,6 +37,7 @@ export async function removeDocumentWhenIdle(db: HarnessDBHandle, doc: DocumentR
 export async function removeDocumentFromDevice(db: HarnessDBHandle, doc: DocumentRecord): Promise<void> {
   await deleteEmbeddingsForDoc(db, doc.id);
   clearPreparationState(doc.id);
+  clearConversionMeta(doc.id);
 
   const tasks = (await db.getAll('tasks')).filter((task) => task.docHash === doc.hash);
   const tx = db.transaction(
