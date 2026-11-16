@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../app/AuthProvider';
 import { PageHeader } from '../app/pages/Placeholder';
-import { draftStatusLabel } from '../../drafter/brief';
+import { draftStatusText } from './statusLabel';
 import { listDrafts, openDrafterDb, type DrafterDBHandle } from '../../drafter/store';
 import { removeDraftEverywhere, syncDrafts } from '../../drafter/sync';
 import type { DraftRecord, DraftStatus } from '../../drafter/types';
@@ -162,7 +162,7 @@ export function DraftsPage() {
                   <td>{formatUpdated(draft.updatedAt)}</td>
                   <td>
                     <span className={`app-chip app-chip--${statusTone(draft.status)}`}>
-                      {draftStatusLabel(draft.status)}
+                      {draftStatusText(draft.status)}
                     </span>
                   </td>
                   <td>

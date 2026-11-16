@@ -233,6 +233,7 @@ describe('drafter sync', () => {
     expect(converted.clauses).toEqual({});
     expect(converted.particulars).toBeNull();
     expect(converted.sourcePlan).toBeNull();
+    expect(converted.outline).toBeNull();
   });
 
   it('loads a D1 row with no plan and no particulars', () => {
@@ -279,5 +280,28 @@ describe('drafter sync', () => {
     expect(converted.particulars).toEqual(particulars);
     expect(converted.status).toBe('brief');
     expect(converted.syncedAt).toBe(updated.updatedAt);
+  });
+
+  it('round-trips an outline and drops a malformed one', async () => {
+    const created = await createDraft(db, { userId: 'user-a', instruction: 'Draft a lease.' });
+    const outline = {
+      items: [
+        { id: 'o1', level: 1 as const, title: 'Parties', purpose: 'Who the lease is between', kind: 'preamble' as const, bindingIds: [] },
+      ],
+      notes: 'Short.',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      model: 'outline-model',
+      planFingerprint: '0123456789abcdef',
+    };
+    const updated = await updateDraft(db, created.id, { outline });
+
+    const converted = rowToDraft(draftToRow(updated));
+    expect(converted.outline).toEqual(outline);
+
+    const malformed = rowToDraft({
+      ...draftToRow(updated),
+      data: { outline: { nope: true } },
+    } as unknown as DraftRow);
+    expect(malformed.outline).toBeNull();
   });
 });

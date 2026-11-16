@@ -12,6 +12,7 @@ import { AnalysisDocPage } from './pages/AnalysisDocPage';
 import { DraftsPage } from '../drafter/DraftsPage';
 import { DraftEditorPage } from '../drafter/DraftEditorPage';
 import { PlanPage } from '../drafter/PlanPage';
+import { OutlinePage } from '../drafter/OutlinePage';
 import { ComparePage } from './pages/ComparePage';
 import './app.css';
 
@@ -61,6 +62,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
         <Route path="/draft/new" element={<DraftEditorPage />} />
         <Route path="/draft/:draftId" element={<DraftEditorPage />} />
         <Route path="/draft/:draftId/plan" element={<PlanPage />} />
+        <Route path="/draft/:draftId/outline" element={<OutlinePage />} />
         <Route path="/compare" element={<ComparePage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>

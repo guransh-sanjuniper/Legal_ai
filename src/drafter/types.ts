@@ -67,6 +67,32 @@ export interface Particular {
   edited?: boolean;
 }
 
+export type OutlineLevel = 1 | 2;
+export type OutlineKind = 'preamble' | 'recital' | 'clause' | 'schedule' | 'signature' | 'other';
+
+export interface OutlineItem {
+  id: string;
+  level: OutlineLevel;
+  title: string;
+  // One line: what this section covers.
+  purpose: string;
+  kind: OutlineKind;
+  // Ids from sourcePlan.bindings. Never a document the user did not select.
+  bindingIds: string[];
+  edited?: boolean;
+}
+
+export interface Outline {
+  items: OutlineItem[];
+  notes: string;
+  createdAt: string;
+  model: string;
+  // The plan the outline was built from. The outline is stale when this no longer matches.
+  planFingerprint: string;
+  // The last instruction used to refine it, if any.
+  feedback?: string;
+}
+
 export interface DraftRecord {
   id: string;
   userId: string;
@@ -78,7 +104,7 @@ export interface DraftRecord {
   // D1 records have null here and still load.
   particulars: Particular[] | null;
   sourcePlan: SourcePlan | null;
-  outline: null;
+  outline: Outline | null;
   clauses: Record<string, unknown>;
   schemaVersion: typeof DRAFTER_SCHEMA_VERSION;
   createdAt: string;

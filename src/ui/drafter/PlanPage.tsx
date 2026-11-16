@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { PageHeader } from '../app/pages/Placeholder';
 import { computeReferenceMode, isPlanStale, newPlanId, type DocAlias } from '../../drafter/plan';
-import { getDraft, openDrafterDb, updateDraft, type DrafterDBHandle } from '../../drafter/store';
+import { planFingerprint } from '../../drafter/outline';import { getDraft, openDrafterDb, updateDraft, type DrafterDBHandle } from '../../drafter/store';
 import { syncDraftById } from '../../drafter/sync';
 import type { LibraryEntry } from '../../drafter/references';
 import type {
@@ -17,6 +17,7 @@ import type {
 } from '../../drafter/types';
 import { loadDrafterLibrary } from './library';
 import { parsePlanForDraft, planDocsForDraft, readPlanRaw } from './planRun';
+import { generateOutline } from './outlineRun';
 import {
   answerQuestion,
   missingDetails,
@@ -63,6 +64,7 @@ function writeAdvanced(draftId: string, open: boolean): void {
 
 export function PlanPage() {
   const { draftId } = useParams();
+  const navigate = useNavigate();
 
   const [db, setDb] = useState<DrafterDBHandle | null>(null);
   const [draft, setDraft] = useState<DraftRecord | null>(null);
@@ -72,7 +74,8 @@ export function PlanPage() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'parse' | 'confirm' | null>(null);
+  const [busy, setBusy] = useState<'parse' | 'confirm' | 'outline' | null>(null);
+  const [outlineFailed, setOutlineFailed] = useState(false);
   const [dropped, setDropped] = useState(0);
   const [raw, setRaw] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -177,14 +180,14 @@ export function PlanPage() {
   async function save(
     nextStatus?: DraftStatus,
     overrides?: { particulars?: Particular[]; questions?: string[] },
-  ) {
-    if (!db || !draft) return;
+  ): Promise<DraftRecord | null> {
+    if (!db || !draft) return null;
     const plan = currentPlan(overrides?.questions);
-    if (!plan) return;
+    if (!plan) return null;
 
     if (nextStatus === 'planned' && stale) {
       setError('You changed your instructions after this was read. Please re-read them.');
-      return;
+      return null;
     }
     const incomplete = bindings.find(
       (binding) => !binding.refDocId || (binding.target.type !== 'whole' && !binding.target.value.trim()),
@@ -193,7 +196,7 @@ export function PlanPage() {
       setError(
         'One of the references is missing a document or a part. Open Advanced options and fix that row, or remove it.',
       );
-      return;
+      return null;
     }
 
     const nextParticulars = overrides?.particulars ?? particulars;
@@ -213,8 +216,10 @@ export function PlanPage() {
       setKeptDetails([]);
       void syncDraftById(supabase, db, saved.id);
       setNotice('Saved. This plan is confirmed.');
+      return saved;
     } catch (e) {
       setError(`Could not save the plan: ${errorText(e)}`);
+      return null;
     } finally {
       setBusy(null);
     }
@@ -235,7 +240,37 @@ export function PlanPage() {
       nextQuestions = result.questions;
     }
     setAnswers({});
-    await save('planned', { particulars: nextParticulars, questions: nextQuestions });
+
+    const nextPlan = currentPlan(nextQuestions);
+    if (!nextPlan) return;
+
+    // An outline that already matches this plan is opened, never silently regenerated.
+    const fingerprint = planFingerprint({ ...draft, sourcePlan: nextPlan, particulars: nextParticulars });
+    if (draft.outline && draft.outline.planFingerprint === fingerprint) {
+      navigate(`/draft/${draft.id}/outline`);
+      return;
+    }
+
+    const saved = await save('planned', { particulars: nextParticulars, questions: nextQuestions });
+    if (!saved) return;
+
+    setBusy('outline');
+    setError(null);
+    setOutlineFailed(false);
+    try {
+      const outcome = await generateOutline(db, saved, library);
+      if (!outcome.ok) {
+        setOutlineFailed(true);
+        setError(outcome.message ?? 'I could not make the outline. Try again.');
+        return;
+      }
+      navigate(`/draft/${saved.id}/outline`);
+    } catch (e) {
+      setOutlineFailed(true);
+      setError(`I could not make the outline: ${errorText(e)}`);
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function parse() {
@@ -485,9 +520,15 @@ export function PlanPage() {
             disabled={busy !== null}
             onClick={() => void continuePlan()}
           >
-            {busy === 'confirm' ? 'Saving…' : 'Looks good, continue'}
+            {busy === 'outline'
+              ? 'Planning the structure…'
+              : busy === 'confirm'
+                ? 'Saving…'
+                : outlineFailed
+                  ? 'Try again'
+                  : 'Looks good, continue'}
           </button>
-          <span className="app-muted drafter-next-note">Outline step coming next</span>
+          <span className="app-muted drafter-next-note">Next, I'll propose the structure.</span>
         </div>
         <div className="drafter-secondary-actions">
           <button type="button" className="app-link-button" disabled={busy !== null} onClick={() => void parse()}>
