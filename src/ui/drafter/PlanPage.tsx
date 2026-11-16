@@ -29,7 +29,6 @@ import {
   BindingsTable,
   MissingDetailsList,
   ParticularsTable,
-  QuestionsList,
   SimpleReferenceList,
   UnresolvedList,
 } from './PlanTables';
@@ -566,11 +565,6 @@ export function PlanPage() {
                 Values are kept only when the instruction states them. Everything else stays a placeholder.
               </p>
               <ParticularsTable particulars={particulars} disabled={busy !== null} onChange={setParticulars} />
-            </section>
-
-            <section className="drafter-plan-section">
-              <h2>Questions</h2>
-              <QuestionsList questions={questions} disabled={busy !== null} onChange={setQuestions} />
             </section>
 
             {dropped > 0 && (
