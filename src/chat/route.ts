@@ -30,6 +30,7 @@ const MONEY = /\b(amounts?|deposits?|rent|fees?|pay(?:ment|ments|able|s)?|paid|p
 const DATE = /\b(dates?|deadlines?|due|when|expir\w*|notice|periods?|term|commenc\w*|renew\w*|start\w*|end)\b/i;
 const OBLIGATION = /\b(obligations?|duty|duties|responsib\w*|must|who (?:must|has to|should|is required))\b/i;
 const RISK = /\b(risks?|liabilit\w*|penalt\w*|concerns?|exposure|unfair|one-sided|dangers?)\b/i;
+const OVERVIEW = /\b(what is (?:this|the) (?:document|agreement|contract|lease|deed) about|overview|summary|summari[sz]e|nature|purpose|parties|project details?|about (?:this|the) (?:document|agreement|contract))\b/i;
 
 import { contentTokens, significantTerms } from '../analysis/questionTerms';
 
@@ -40,7 +41,17 @@ interface Candidate extends SavedRow {
   match: string;
 }
 
-function candidatesFor(model: ReportModel, kind: 'money' | 'date' | 'obligation' | 'risk' | 'missing'): Candidate[] {
+function candidatesFor(model: ReportModel, kind: 'money' | 'date' | 'obligation' | 'risk' | 'missing' | 'overview'): Candidate[] {
+  if (kind === 'overview') {
+    return (sectionOf(model, 'overview')?.points ?? [])
+      .filter((p) => p.sentences.length > 0)
+      .map((p) => ({
+        label: `Overview: ${p.title}`,
+        text: p.sentences.map((s) => s.text).join(' '),
+        match: `${p.title} ${p.sentences.map((s) => s.text).join(' ')}`,
+        citation: p.sentences.flatMap((s) => s.citations)[0] ?? null,
+      }));
+  }
   if (kind === 'money') {
     return (sectionOf(model, 'datesAmounts')?.amounts ?? []).map((a) => ({
       label: `Amount: ${a.purpose || 'purpose not stated'}`,
@@ -117,6 +128,11 @@ export function savedRowsFor(question: string, model: ReportModel): { rows: Save
     // The missing list is a list: a question about missing terms returns all of it, not a match.
     const missing = candidatesFor(model, 'missing');
     if (missing.length > 0) return { rows: missing.slice(0, SAVED_ROW_LIMIT).map(strip), total: missing.length };
+  }
+  if (OVERVIEW.test(question)) {
+    // "What is this about" asks for the whole overview, so every point is returned, not one match.
+    const points = candidatesFor(model, 'overview');
+    if (points.length > 0) return { rows: points.slice(0, SAVED_ROW_LIMIT).map(strip), total: points.length };
   }
   const intents: [RegExp, 'money' | 'date' | 'obligation' | 'risk'][] = [
     [MONEY, 'money'],

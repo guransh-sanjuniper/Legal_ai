@@ -18,6 +18,16 @@ const model = {
   ],
   sections: [
     {
+      key: 'overview',
+      title: 'Overview',
+      number: 1,
+      points: [
+        { title: 'Parties', sentences: [{ text: 'The Landlord lets the flat to the Tenant.', citations: [deposit] }] },
+        { title: 'Termination and Exit', sentences: [] },
+        { title: 'Dispute Resolution', sentences: [{ text: 'Disputes go to arbitration.', citations: [rent] }] },
+      ],
+    },
+    {
       key: 'datesAmounts',
       title: 'Dates and Amounts',
       number: 6,
@@ -107,6 +117,24 @@ describe('routeQuestion', () => {
     expect(r.mode).toBe('saved');
     if (r.mode !== 'saved') return;
     expect(r.rows[0].label).toBe('Tenant · clause 3');
+  });
+
+  it('answers "what is this document about" from the saved overview when a report exists', () => {
+    const r = routeQuestion('what is this document about', model, false);
+    expect(r.mode).toBe('saved');
+    if (r.mode !== 'saved') return;
+    expect(r.rows.map((x) => x.label)).toEqual(['Overview: Parties', 'Overview: Dispute Resolution']);
+    expect(r.rows[0].citation).toEqual(deposit);
+  });
+
+  it('routes overview words such as summary and parties to the overview', () => {
+    expect(routeQuestion('give me a summary', model, false).mode).toBe('saved');
+    expect(routeQuestion('who are the parties?', model, false).mode).toBe('saved');
+  });
+
+  it('falls back to retrieval for an overview question when the report has no overview', () => {
+    const noOverview = { ...model, sections: model.sections.filter((s) => s.key !== 'overview') } as unknown as ReportModel;
+    expect(routeQuestion('what is this document about', noOverview, false)).toEqual({ mode: 'retrieval' });
   });
 
   it('misses when one specific word of the question is not in any row', () => {
