@@ -7,6 +7,7 @@ import type {
   SourceBinding,
   UnresolvedRef,
 } from '../../drafter/types';
+import type { MissingDetail, ReferenceRow } from './planUi';
 
 const TARGET_LABELS: Record<BindingTargetType, string> = {
   clause: 'Clause',
@@ -389,5 +390,119 @@ export function QuestionsList({
         Add question
       </button>
     </div>
+  );
+}
+
+// ---------- Plain-language view ----------
+
+export function SimpleReferenceList({
+  rows,
+  disabled,
+  onChange,
+}: {
+  rows: ReferenceRow[];
+  disabled?: boolean;
+  onChange: (refDocId: string, mode: BindingUseMode | null) => void;
+}) {
+  return (
+    <ul className="drafter-ref-simple-list">
+      {rows.map((row) => (
+        <li key={row.refDocId} className="drafter-ref-simple">
+          <div className="drafter-ref-simple-head">
+            <span className="drafter-ref-simple-name">
+              {row.alias} — {row.name ?? 'not on this device'}
+            </span>
+            {row.available && row.editable && (
+              <select
+                value={row.mode ?? 'general'}
+                disabled={disabled}
+                aria-label={`How should I use ${row.alias}?`}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  onChange(row.refDocId, value === 'general' ? null : (value as BindingUseMode));
+                }}
+              >
+                {(row.mode === null || row.canClear) && <option value="general">General reference</option>}
+                <option value="verbatim">Follow its wording</option>
+                <option value="adapt">Use as guidance</option>
+                <option value="style">Style only</option>
+              </select>
+            )}
+            {row.available && !row.editable && (
+              <span className="app-muted drafter-ref-specific">Specific parts used (see Advanced options)</span>
+            )}
+          </div>
+          {row.usedFor.map((text, index) => (
+            <p key={`${text}-${index}`} className="app-muted drafter-ref-used">
+              Used for: {text}
+            </p>
+          ))}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function MissingDetailsList({
+  details,
+  particulars,
+  answers,
+  disabled,
+  onValue,
+  onAnswerChange,
+  onAnswerCommit,
+  onSkip,
+}: {
+  details: MissingDetail[];
+  particulars: Particular[];
+  answers: Record<string, string>;
+  disabled?: boolean;
+  onValue: (detail: Extract<MissingDetail, { kind: 'particular' }>, value: string) => void;
+  onAnswerChange: (text: string, value: string) => void;
+  onAnswerCommit: (text: string, value: string) => void;
+  onSkip: (key: string) => void;
+}) {
+  if (details.length === 0) return <p className="app-muted">Nothing else needed.</p>;
+
+  return (
+    <ul className="drafter-details">
+      {details.map((detail) => {
+        const label = detail.kind === 'particular' ? detail.label : detail.text;
+        const value =
+          detail.kind === 'particular'
+            ? (particulars.find((item) => item.id === detail.id)?.value ?? '')
+            : (answers[detail.text] ?? '');
+        return (
+          <li key={detail.key} className="drafter-detail-row">
+            <label className="app-field drafter-detail-field">
+              <span>{label}</span>
+              <input
+                value={value}
+                disabled={disabled}
+                placeholder="Type the answer"
+                onChange={(e) => {
+                  if (detail.kind === 'particular') onValue(detail, e.target.value);
+                  else onAnswerChange(detail.text, e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && detail.kind === 'question') {
+                    e.preventDefault();
+                    onAnswerCommit(detail.text, answers[detail.text] ?? '');
+                  }
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="app-link-button"
+              disabled={disabled}
+              onClick={() => onSkip(detail.key)}
+            >
+              Leave blank for now
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

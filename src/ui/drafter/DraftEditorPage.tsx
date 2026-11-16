@@ -123,7 +123,7 @@ export function DraftEditorPage() {
     if (!db) return;
     const text = instruction.trim();
     if (!text) {
-      setError('Write the instruction before saving the draft.');
+      setError('Write what you need before saving the draft.');
       return;
     }
     setSaving(true);
@@ -175,13 +175,13 @@ export function DraftEditorPage() {
       const outcome = await parsePlanForDraft(db, draft, library);
       if (!outcome.ok) {
         setParseFailed(true);
-        setError(outcome.message ?? 'Parsing failed. Retry.');
+        setError(outcome.message ?? 'I could not read the instructions. Try again.');
         return;
       }
       navigate(`/draft/${draft.id}/plan`);
     } catch (e) {
       setParseFailed(true);
-      setError(`Could not parse the instruction: ${errorText(e)}`);
+      setError(`I could not read the instructions: ${errorText(e)}`);
     } finally {
       setParsing(false);
     }
@@ -217,7 +217,7 @@ export function DraftEditorPage() {
       <PageHeader
         eyebrow="Drafter"
         title={draft ? 'Brief' : 'New draft'}
-        description="The brief is the instruction the Drafter will work from. Saving is explicit: nothing changes until you press Save."
+        description="Write what you need drafted. Nothing changes until you press Save."
         actions={
           <Link className="app-link-button" to="/draft">
             Back to drafts
@@ -233,7 +233,7 @@ export function DraftEditorPage() {
       {notice && <div className="app-banner app-banner--notice">{notice}</div>}
       {hasPlan && planStale && (
         <div className="app-banner app-banner--error" role="alert">
-          The plan is out of date. Re-run parsing on the plan screen before confirming.
+          You changed your instructions. Open the plan and re-read them before continuing.
         </div>
       )}
 
@@ -258,7 +258,7 @@ export function DraftEditorPage() {
         </label>
 
         <label className="app-field app-field--wide">
-          <span>Instruction</span>
+          <span>What do you need drafted?</span>
           <textarea
             className="drafter-instruction"
             rows={12}
@@ -272,11 +272,11 @@ export function DraftEditorPage() {
         <ReferencePicker library={library} selectedIds={referenceIds} onChange={setReferenceIds} disabled={saving} />
 
         <label className="app-field drafter-reviewing">
-          <span>Reviewing for</span>
+          <span>Which side are you drafting for?</span>
           <select value={reviewingFor} onChange={(e) => setReviewingFor(e.target.value as ReviewingFor)}>
             <option value="neutral">Neutral</option>
-            <option value="licensor">Licensor</option>
-            <option value="licensee">Licensee</option>
+            <option value="licensor">Landlord (licensor)</option>
+            <option value="licensee">Tenant (licensee)</option>
           </select>
         </label>
 
@@ -287,7 +287,7 @@ export function DraftEditorPage() {
           <span className="drafter-dirty">{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
           <span
             className="drafter-next"
-            title={!draft || dirty ? 'Save the brief first.' : undefined}
+            title={!draft || dirty ? 'Save first.' : undefined}
           >
             <button
               type="button"
@@ -295,7 +295,7 @@ export function DraftEditorPage() {
               disabled={saving || parsing || !db || !draft || dirty || !instruction.trim()}
               onClick={() => void nextPlan()}
             >
-              {parsing ? 'Parsing…' : parseFailed ? 'Retry plan' : hasPlan ? 'Open plan' : 'Next: plan'}
+              {parsing ? 'Reading…' : parseFailed ? 'Try again' : 'Continue'}
             </button>
           </span>
         </div>

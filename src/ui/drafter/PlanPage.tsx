@@ -2,13 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { PageHeader } from '../app/pages/Placeholder';
-import { draftStatusLabel } from '../../drafter/brief';
-import {
-  computeReferenceMode,
-  isPlanStale,
-  newPlanId,
-  type DocAlias,
-} from '../../drafter/plan';
+import { computeReferenceMode, isPlanStale, newPlanId, type DocAlias } from '../../drafter/plan';
 import { getDraft, openDrafterDb, updateDraft, type DrafterDBHandle } from '../../drafter/store';
 import { syncDraftById } from '../../drafter/sync';
 import type { LibraryEntry } from '../../drafter/references';
@@ -23,7 +17,22 @@ import type {
 } from '../../drafter/types';
 import { loadDrafterLibrary } from './library';
 import { parsePlanForDraft, planDocsForDraft, readPlanRaw } from './planRun';
-import { BindingsTable, ParticularsTable, QuestionsList, UnresolvedList } from './PlanTables';
+import {
+  answerQuestion,
+  missingDetails,
+  referenceRows,
+  setParticularValue,
+  setReferenceUseMode,
+  type MissingDetail,
+} from './planUi';
+import {
+  BindingsTable,
+  MissingDetailsList,
+  ParticularsTable,
+  QuestionsList,
+  SimpleReferenceList,
+  UnresolvedList,
+} from './PlanTables';
 import './drafter.css';
 
 const MODE_LABEL: Record<ReferenceMode, string> = {
@@ -35,11 +44,22 @@ const MODE_LABEL: Record<ReferenceMode, string> = {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-function statusTone(status: DraftStatus): 'ok' | 'warn' | 'neutral' | 'danger' {
-  if (status === 'done') return 'ok';
-  if (status === 'failed') return 'danger';
-  if (status === 'generating') return 'warn';
-  return 'neutral';
+const advancedKey = (draftId: string) => `legal-app.draft.${draftId}.advancedOpen`;
+
+function readAdvanced(draftId: string): boolean {
+  try {
+    return localStorage.getItem(advancedKey(draftId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeAdvanced(draftId: string, open: boolean): void {
+  try {
+    localStorage.setItem(advancedKey(draftId), open ? '1' : '0');
+  } catch {
+    // Storage can be unavailable; the section still opens and closes for this visit.
+  }
 }
 
 export function PlanPage() {
@@ -53,9 +73,10 @@ export function PlanPage() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'parse' | 'save' | 'confirm' | null>(null);
+  const [busy, setBusy] = useState<'parse' | 'confirm' | null>(null);
   const [dropped, setDropped] = useState(0);
   const [raw, setRaw] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [docType, setDocType] = useState('');
   const [summary, setSummary] = useState('');
@@ -65,6 +86,12 @@ export function PlanPage() {
   const [particulars, setParticulars] = useState<Particular[]>([]);
   const [questions, setQuestions] = useState<string[]>([]);
 
+  // Simple view state only. Nothing here is stored on the draft.
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [skipped, setSkipped] = useState<string[]>([]);
+  // A detail the user has started typing into stays visible even once it has a value.
+  const [keptDetails, setKeptDetails] = useState<MissingDetail[]>([]);
+
   function applyPlan(plan: SourcePlan, parts: Particular[] | null) {
     setDocType(plan.docType);
     setSummary(plan.summary);
@@ -73,6 +100,9 @@ export function PlanPage() {
     setUnresolved(plan.unresolved);
     setParticulars(parts ?? []);
     setQuestions(plan.questions);
+    setAnswers({});
+    setSkipped([]);
+    setKeptDetails([]);
   }
 
   useEffect(() => {
@@ -95,6 +125,7 @@ export function PlanPage() {
       }
       if (!alive) return;
       setDb(handle);
+      setAdvancedOpen(readAdvanced(draftId));
       try {
         const entries = await loadDrafterLibrary().catch(() => []);
         if (!alive) return;
@@ -124,18 +155,16 @@ export function PlanPage() {
   }, [draftId]);
 
   const stale = draft ? isPlanStale(draft.sourcePlan, draft) : false;
-  const mode = computeReferenceMode(docs, bindings);
-  const needed = particulars.filter((item) => item.required && item.value === null);
-  const openQuestions = questions.map((question) => question.trim()).filter(Boolean);
 
-  function currentPlan(): SourcePlan | null {
+  function currentPlan(questionsOverride?: string[]): SourcePlan | null {
     if (!draft?.sourcePlan) return null;
+    const openQuestions = (questionsOverride ?? questions).map((question) => question.trim()).filter(Boolean);
     return {
       ...draft.sourcePlan,
       docType: docType.trim(),
       summary: summary.trim(),
       lengthHint: lengthHint.trim() || null,
-      referenceMode: mode,
+      referenceMode: computeReferenceMode(docs, bindings),
       bindings: bindings.map((binding) => ({
         ...binding,
         appliesTo: binding.appliesTo.trim(),
@@ -146,29 +175,45 @@ export function PlanPage() {
     };
   }
 
-  async function save(nextStatus?: DraftStatus) {
+  async function save(
+    nextStatus?: DraftStatus,
+    overrides?: { particulars?: Particular[]; questions?: string[] },
+  ) {
     if (!db || !draft) return;
-    const plan = currentPlan();
+    const plan = currentPlan(overrides?.questions);
     if (!plan) return;
+
+    if (nextStatus === 'planned' && stale) {
+      setError('You changed your instructions after this was read. Please re-read them.');
+      return;
+    }
     const incomplete = bindings.find(
       (binding) => !binding.refDocId || (binding.target.type !== 'whole' && !binding.target.value.trim()),
     );
     if (incomplete) {
-      setError('Every binding needs a document and a target. Fill in the missing value or delete the row.');
+      setError(
+        'One of the references is missing a document or a part. Open Advanced options and fix that row, or remove it.',
+      );
       return;
     }
-    setBusy(nextStatus === 'planned' ? 'confirm' : 'save');
+
+    const nextParticulars = overrides?.particulars ?? particulars;
+    const nextQuestions = overrides?.questions ?? questions;
+    setBusy('confirm');
     setError(null);
     setNotice(null);
     try {
       const saved = await updateDraft(db, draft.id, {
         sourcePlan: plan,
-        particulars,
+        particulars: nextParticulars,
         ...(nextStatus ? { status: nextStatus } : {}),
       });
       setDraft(saved);
+      setParticulars(nextParticulars);
+      setQuestions(nextQuestions);
+      setKeptDetails([]);
       void syncDraftById(supabase, db, saved.id);
-      setNotice(nextStatus === 'planned' ? 'Plan confirmed.' : 'Plan saved.');
+      setNotice('Saved. This plan is confirmed.');
     } catch (e) {
       setError(`Could not save the plan: ${errorText(e)}`);
     } finally {
@@ -176,9 +221,32 @@ export function PlanPage() {
     }
   }
 
+  async function continuePlan() {
+    if (!db || !draft) return;
+    if (stale) {
+      setError('You changed your instructions after this was read. Please re-read them.');
+      return;
+    }
+    let nextParticulars = particulars;
+    let nextQuestions = questions;
+    for (const [text, answer] of Object.entries(answers)) {
+      if (!answer.trim() || !nextQuestions.includes(text)) continue;
+      const result = answerQuestion(nextParticulars, nextQuestions, text, answer);
+      nextParticulars = result.particulars;
+      nextQuestions = result.questions;
+    }
+    setAnswers({});
+    await save('planned', { particulars: nextParticulars, questions: nextQuestions });
+  }
+
   async function parse() {
     if (!db || !draft) return;
-    if (draft.sourcePlan && !window.confirm('Re-run parsing? This replaces the plan and discards edits.')) return;
+    if (
+      draft.sourcePlan &&
+      !window.confirm('Read my instructions again? This replaces the plan and any changes you made to it.')
+    ) {
+      return;
+    }
     setBusy('parse');
     setError(null);
     setNotice(null);
@@ -187,7 +255,7 @@ export function PlanPage() {
       const outcome = await parsePlanForDraft(db, draft, library);
       setRaw(outcome.raw);
       if (!outcome.ok) {
-        setError(outcome.message ?? 'Parsing failed. Retry.');
+        setError(outcome.message ?? 'I could not read the instructions. Try again.');
         return;
       }
       const saved = await getDraft(db, draft.id);
@@ -197,39 +265,44 @@ export function PlanPage() {
         if (saved.sourcePlan) applyPlan(saved.sourcePlan, saved.particulars);
       }
       setDropped(outcome.dropped);
-      setNotice(
-        outcome.dropped > 0
-          ? `${outcome.dropped} item${outcome.dropped === 1 ? '' : 's'} could not be verified and were dropped.`
-          : 'Plan parsed.',
-      );
+      setNotice(outcome.dropped > 0 ? 'Read. Some items could not be used; check Advanced options.' : 'Read.');
     } catch (e) {
-      setError(`Could not parse the instruction: ${errorText(e)}`);
+      setError(`I could not read the instructions: ${errorText(e)}`);
     } finally {
       setBusy(null);
     }
   }
 
-  function createBinding(entry: UnresolvedRef) {
-    setBindings([
-      ...bindings,
-      {
-        id: newPlanId(),
-        refDocId: docs[0]?.refDocId ?? '',
-        target: { type: 'topic', value: '' },
-        useMode: 'adapt',
-        appliesTo: '',
-        phrase: entry.phrase,
-        edited: true,
-      },
-    ]);
-    setUnresolved(unresolved.filter((candidate) => candidate !== entry));
+  function toggleAdvanced() {
+    const next = !advancedOpen;
+    setAdvancedOpen(next);
+    if (draftId) writeAdvanced(draftId, next);
+  }
+
+  function onParticularValue(detail: Extract<MissingDetail, { kind: 'particular' }>, value: string) {
+    setParticulars((current) => setParticularValue(current, detail.id, value));
+    setKeptDetails((current) =>
+      current.some((item) => item.key === detail.key) ? current : [...current, detail],
+    );
+  }
+
+  function commitAnswer(text: string, answer: string) {
+    if (!answer.trim() || !questions.includes(text)) return;
+    const result = answerQuestion(particulars, questions, text, answer);
+    setParticulars(result.particulars);
+    setQuestions(result.questions);
+    setAnswers((current) => {
+      const next = { ...current };
+      delete next[text];
+      return next;
+    });
   }
 
   if (loading) {
     return (
       <>
         <PageHeader eyebrow="Drafter" title="Plan" />
-        <p className="app-muted">Loading plan…</p>
+        <p className="app-muted">Loading…</p>
       </>
     );
   }
@@ -251,20 +324,14 @@ export function PlanPage() {
   }
 
   const plan = draft.sourcePlan;
-  const backToBrief = (
-    <Link className="app-link-button" to={`/draft/${draft.id}`}>
-      Back to Brief
-    </Link>
-  );
 
   if (!plan) {
     return (
       <>
         <PageHeader
           eyebrow="Drafter"
-          title="Plan"
-          description="The plan is parsed from the saved Brief. Nothing is generated in this step."
-          actions={backToBrief}
+          title="I haven't read your instructions yet"
+          description="Read them once and I'll show you what I understood. Nothing is drafted yet."
         />
         {error && (
           <div className="app-banner app-banner--error" role="alert">
@@ -272,12 +339,21 @@ export function PlanPage() {
           </div>
         )}
         <section className="app-empty-card">
-          <h2>No plan yet</h2>
+          <h2>Ready when you are</h2>
           <div className="app-empty-body">
-            <p>Parsing turns the instruction into source bindings and the particulars to confirm.</p>
-            <button type="button" className="app-primary-button" disabled={busy === 'parse'} onClick={() => void parse()}>
-              {busy === 'parse' ? 'Parsing…' : 'Parse the instruction'}
+            <button
+              type="button"
+              className="app-primary-button"
+              disabled={busy === 'parse'}
+              onClick={() => void parse()}
+            >
+              {busy === 'parse' ? 'Reading…' : 'Read my instructions'}
             </button>
+            <p>
+              <Link className="app-link-button" to={`/draft/${draft.id}`}>
+                Back
+              </Link>
+            </p>
           </div>
         </section>
         {raw && (
@@ -290,37 +366,23 @@ export function PlanPage() {
     );
   }
 
+  const refRows = referenceRows(docs, bindings);
+  const mode = computeReferenceMode(docs, bindings);
+
+  const liveDetails = missingDetails(particulars, questions);
+  const byKey = new Map<string, MissingDetail>();
+  for (const detail of liveDetails) byKey.set(detail.key, detail);
+  for (const detail of keptDetails) if (!byKey.has(detail.key)) byKey.set(detail.key, detail);
+  const details = [...byKey.values()].filter((detail) => !skipped.includes(detail.key));
+
   return (
     <>
       <PageHeader
         eyebrow="Drafter"
-        title="Plan"
-        description="Check and edit the plan the Drafter will work from. Confirming it is the only thing that moves the draft on."
-        actions={
-          <>
-            {backToBrief}
-            <Link className="app-link-button" to="/draft">
-              Back to drafts
-            </Link>
-          </>
-        }
+        title="Here's what I understood"
+        description="Check this is right, then continue. You can change anything below."
       />
 
-      <div className="drafter-plan-meta">
-        <span className={`app-chip app-chip--${statusTone(draft.status)}`}>{draftStatusLabel(draft.status)}</span>
-        <span className="app-chip app-chip--neutral" title="Computed from the selected references and the bindings">
-          {MODE_LABEL[mode]}
-        </span>
-        <span className="app-muted drafter-plan-stamp">
-          Parsed {new Date(plan.parsedAt).toLocaleString()} · {plan.model}
-        </span>
-      </div>
-
-      {stale && (
-        <div className="app-banner app-banner--error" role="alert">
-          The Brief changed since this plan was parsed. Re-run parsing before confirming.
-        </div>
-      )}
       {error && (
         <div className="app-banner app-banner--error" role="alert">
           {error}
@@ -329,24 +391,8 @@ export function PlanPage() {
       {notice && <div className="app-banner app-banner--notice">{notice}</div>}
 
       <section className="drafter-plan-section">
-        <h2>Summary</h2>
-        <div className="drafter-plan-grid">
-          <label className="app-field">
-            <span>Document type (the instruction's own words)</span>
-            <input value={docType} disabled={busy !== null} onChange={(e) => setDocType(e.target.value)} />
-          </label>
-          <label className="app-field">
-            <span>Length hint (only if the instruction stated one)</span>
-            <input
-              value={lengthHint}
-              disabled={busy !== null}
-              placeholder="e.g. 2 pages, short, detailed"
-              onChange={(e) => setLengthHint(e.target.value)}
-            />
-          </label>
-        </div>
         <label className="app-field">
-          <span>Summary</span>
+          <span>What I'll draft</span>
           <textarea
             rows={3}
             value={summary}
@@ -354,99 +400,193 @@ export function PlanPage() {
             onChange={(e) => setSummary(e.target.value)}
           />
         </label>
+        <label className="app-field drafter-length">
+          <span>How long should it be? (optional)</span>
+          <input
+            value={lengthHint}
+            disabled={busy !== null}
+            placeholder="e.g. 2 pages, short, detailed"
+            onChange={(e) => setLengthHint(e.target.value)}
+          />
+        </label>
       </section>
 
+      {docs.length > 0 && (
+        <section className="drafter-plan-section">
+          <h2>Reference documents</h2>
+          <p className="app-muted drafter-section-help">Tell me how to use each one.</p>
+          <SimpleReferenceList
+            rows={refRows}
+            disabled={busy !== null}
+            onChange={(refDocId, nextMode) => setBindings(setReferenceUseMode(bindings, refDocId, nextMode))}
+          />
+        </section>
+      )}
+
       <section className="drafter-plan-section">
-        <h2>Source bindings</h2>
+        <h2>Details we need</h2>
         <p className="app-muted drafter-section-help">
-          A binding points at a selected reference. Clause and topic targets are kept as your words; the documents are not
-          read in this step.
+          Fill in what you know. Anything left blank becomes a placeholder.
         </p>
-        <BindingsTable
-          bindings={bindings}
-          docs={docs}
-          instruction={draft.instruction}
+        <MissingDetailsList
+          details={details}
+          particulars={particulars}
+          answers={answers}
           disabled={busy !== null}
-          onChange={setBindings}
+          onValue={onParticularValue}
+          onAnswerChange={(text, value) => setAnswers((current) => ({ ...current, [text]: value }))}
+          onAnswerCommit={commitAnswer}
+          onSkip={(key) => setSkipped((current) => (current.includes(key) ? current : [...current, key]))}
         />
+        {skipped.length > 0 && (
+          <button type="button" className="app-link-button" onClick={() => setSkipped([])}>
+            Show them again
+          </button>
+        )}
       </section>
 
-      <section className="drafter-plan-section">
-        <h2>Unresolved references</h2>
-        <UnresolvedList
-          unresolved={unresolved}
-          disabled={busy !== null}
-          onCreate={createBinding}
-          onDismiss={(entry) => setUnresolved(unresolved.filter((candidate) => candidate !== entry))}
-        />
-      </section>
-
-      <section className="drafter-plan-section">
-        <h2>Particulars</h2>
-        <p className="app-muted drafter-section-help">
-          Values are kept only when the instruction states them. Everything else stays a placeholder.
-        </p>
-        <ParticularsTable particulars={particulars} disabled={busy !== null} onChange={setParticulars} />
-      </section>
-
-      <section className="drafter-plan-section">
-        <h2>Needed to complete the draft</h2>
-        <p className="app-muted drafter-section-help">Informational. Missing items do not block confirming the plan.</p>
-        {needed.length === 0 && openQuestions.length === 0 ? (
-          <p className="app-muted">Nothing outstanding.</p>
-        ) : (
-          <ul className="drafter-needed">
-            {needed.map((item) => (
-              <li key={item.id}>
-                <strong>{item.label}</strong> <span className="app-muted">({item.kind}) is not in the instruction.</span>
+      {unresolved.length > 0 && (
+        <section className="drafter-plan-section">
+          <h2>I couldn't use everything</h2>
+          <ul className="drafter-notes">
+            {unresolved.map((entry, index) => (
+              <li key={`${entry.phrase}-${index}`} className="drafter-note">
+                <span>
+                  I couldn't use: <strong>{entry.phrase || 'an instruction'}</strong>
+                  {entry.reason ? ` — ${entry.reason}` : ''}
+                </span>
+                <button
+                  type="button"
+                  className="app-link-button"
+                  disabled={busy !== null}
+                  onClick={() => setUnresolved(unresolved.filter((_, position) => position !== index))}
+                >
+                  Dismiss
+                </button>
               </li>
             ))}
           </ul>
-        )}
-        <QuestionsList questions={questions} disabled={busy !== null} onChange={setQuestions} />
-      </section>
+        </section>
+      )}
+
+      {stale && (
+        <div className="drafter-stale" role="alert">
+          <p>You changed your instructions after this was read. Please re-read them.</p>
+          <button type="button" className="app-link-button" disabled={busy !== null} onClick={() => void parse()}>
+            {busy === 'parse' ? 'Reading…' : 'Re-read my instructions'}
+          </button>
+        </div>
+      )}
 
       <div className="drafter-actions drafter-plan-actions">
-        <button
-          type="button"
-          className="app-link-button"
-          disabled={busy !== null}
-          onClick={() => void parse()}
-        >
-          {busy === 'parse' ? 'Parsing…' : 'Re-run parsing'}
-        </button>
-        <button
-          type="button"
-          className="app-link-button"
-          disabled={busy !== null}
-          onClick={() => void save()}
-        >
-          {busy === 'save' ? 'Saving…' : 'Save plan'}
-        </button>
-        <button
-          type="button"
-          className="app-primary-button"
-          disabled={busy !== null || stale}
-          onClick={() => void save('planned')}
-        >
-          {busy === 'confirm' ? 'Confirming…' : 'Confirm plan'}
-        </button>
-        <span className="drafter-next" title="Coming in D3">
-          <button type="button" className="app-primary-button" disabled>
-            Next: outline
+        <div className="drafter-primary-stack">
+          <button
+            type="button"
+            className="app-primary-button"
+            disabled={busy !== null}
+            onClick={() => void continuePlan()}
+          >
+            {busy === 'confirm' ? 'Saving…' : 'Looks good, continue'}
           </button>
-        </span>
+          <span className="app-muted drafter-next-note">Outline step coming next</span>
+        </div>
+        <div className="drafter-secondary-actions">
+          <button type="button" className="app-link-button" disabled={busy !== null} onClick={() => void parse()}>
+            {busy === 'parse' ? 'Reading…' : 'Re-read my instructions'}
+          </button>
+          <Link className="app-link-button" to={`/draft/${draft.id}`}>
+            Back
+          </Link>
+        </div>
       </div>
 
-      {dropped > 0 && (
-        <p className="app-muted drafter-dropped">{dropped} item{dropped === 1 ? '' : 's'} could not be verified and were dropped.</p>
-      )}
-      {raw && (
-        <details className="drafter-raw" open={Boolean(error) || dropped > 0}>
-          <summary>Model reply (debug)</summary>
-          <pre>{raw}</pre>
-        </details>
-      )}
+      <section className="drafter-advanced">
+        <button
+          type="button"
+          className="app-link-button drafter-advanced-toggle"
+          aria-expanded={advancedOpen}
+          onClick={toggleAdvanced}
+        >
+          {advancedOpen ? 'Hide advanced options' : 'Advanced options'}
+        </button>
+
+        {advancedOpen && (
+          <div className="drafter-advanced-body">
+            <div className="drafter-plan-meta">
+              <span className="app-chip app-chip--neutral" title="Computed from the selected references and bindings">
+                {MODE_LABEL[mode]}
+              </span>
+              <span className="app-muted drafter-plan-stamp">
+                Read {new Date(plan.parsedAt).toLocaleString()} · {plan.model}
+              </span>
+            </div>
+
+            <section className="drafter-plan-section">
+              <h2>Source bindings</h2>
+              <p className="app-muted drafter-section-help">
+                A binding points at a selected reference. Clause and topic targets are kept as your words; the documents
+                are not read in this step.
+              </p>
+              <BindingsTable
+                bindings={bindings}
+                docs={docs}
+                instruction={draft.instruction}
+                disabled={busy !== null}
+                onChange={setBindings}
+              />
+            </section>
+
+            <section className="drafter-plan-section">
+              <h2>Unresolved references</h2>
+              <UnresolvedList
+                unresolved={unresolved}
+                disabled={busy !== null}
+                onCreate={(entry) => {
+                  setBindings([
+                    ...bindings,
+                    {
+                      id: newPlanId(),
+                      refDocId: docs[0]?.refDocId ?? '',
+                      target: { type: 'topic', value: '' },
+                      useMode: 'adapt',
+                      appliesTo: '',
+                      phrase: entry.phrase,
+                      edited: true,
+                    },
+                  ]);
+                  setUnresolved(unresolved.filter((candidate) => candidate !== entry));
+                }}
+                onDismiss={(entry) => setUnresolved(unresolved.filter((candidate) => candidate !== entry))}
+              />
+            </section>
+
+            <section className="drafter-plan-section">
+              <h2>Particulars</h2>
+              <p className="app-muted drafter-section-help">
+                Values are kept only when the instruction states them. Everything else stays a placeholder.
+              </p>
+              <ParticularsTable particulars={particulars} disabled={busy !== null} onChange={setParticulars} />
+            </section>
+
+            <section className="drafter-plan-section">
+              <h2>Questions</h2>
+              <QuestionsList questions={questions} disabled={busy !== null} onChange={setQuestions} />
+            </section>
+
+            {dropped > 0 && (
+              <p className="app-muted drafter-dropped">
+                {dropped} item{dropped === 1 ? '' : 's'} could not be verified and were dropped.
+              </p>
+            )}
+            {raw && (
+              <details className="drafter-raw" open={Boolean(error) || dropped > 0}>
+                <summary>Model reply (debug)</summary>
+                <pre>{raw}</pre>
+              </details>
+            )}
+          </div>
+        )}
+      </section>
     </>
   );
 }
