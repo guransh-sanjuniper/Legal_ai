@@ -6,8 +6,7 @@ import { ConfigMissingPage, LoginPage } from './LoginPage';
 import { useTheme, type Theme } from './theme';
 import { ChatPage } from './pages/ChatPage';
 import { DocumentsPage } from '../library/DocumentsPage';
-import { ReviewPage } from '../library/ReviewPage';
-import { AnalysisIndexPage } from './pages/AnalysisIndexPage';
+import { ReviewPage } from '../library/ReviewPage';import { AnalysisIndexPage } from './pages/AnalysisIndexPage';
 import { AnalysisDocPage } from './pages/AnalysisDocPage';
 import { DraftsPage } from '../drafter/DraftsPage';
 import { DraftEditorPage } from '../drafter/DraftEditorPage';
@@ -15,6 +14,7 @@ import { PlanPage } from '../drafter/PlanPage';
 import { OutlinePage } from '../drafter/OutlinePage';
 import { SourcesPage } from '../drafter/SourcesPage';
 import { WritePage } from '../drafter/WritePage';
+import { DraftReviewPage } from '../drafter/ReviewPage';
 import { ComparePage } from './pages/ComparePage';
 import './app.css';
 
@@ -67,6 +67,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
         <Route path="/draft/:draftId/outline" element={<OutlinePage />} />
         <Route path="/draft/:draftId/sources" element={<SourcesPage />} />
         <Route path="/draft/:draftId/write" element={<WritePage />} />
+        <Route path="/draft/:draftId/review" element={<DraftReviewPage />} />
         <Route path="/compare" element={<ComparePage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>

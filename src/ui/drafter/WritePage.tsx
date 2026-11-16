@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../app/pages/Placeholder';
+import { assemble, exportGate } from '../../drafter/assemble';
 import { isOutlineStale } from '../../drafter/outline';
 import { sourceTextReady } from '../../drafter/resolveRef';
 import { ledgerFromClauses } from '../../drafter/ledger';
@@ -39,6 +40,7 @@ function countPlaceholders(text: string): number {
 
 export function WritePage() {
   const { draftId } = useParams();
+  const navigate = useNavigate();
 
   const [db, setDb] = useState<DrafterDBHandle | null>(null);
   const [draft, setDraft] = useState<DraftRecord | null>(null);
@@ -204,7 +206,9 @@ export function WritePage() {
     return record.itemFingerprint !== itemFingerprint(item, draft);
   }).length;
   const placeholders = items.reduce((sum, item) => sum + countPlaceholders(clauses[item.id]?.text ?? ''), 0);
-  const allWritten = items.length > 0 && doneCount === items.length && staleCount === 0;
+  const allWritten = items.length > 0 && doneCount === items.length;
+  const assembled = assemble(draft);
+  const gate = exportGate(assembled.stats);
   const canStart = !outlineStale && sourcesReady && items.length > 0 && !running;
 
   function aliasFor(record: ClauseRecord): string {
@@ -394,9 +398,17 @@ export function WritePage() {
               : `${placeholders} detail${placeholders === 1 ? '' : 's'} still to fill in ([●]).`}
           </p>
           <div className="drafter-actions">
-            <button type="button" className="app-primary-button" disabled>
-              Review and download — coming next
+            <button
+              type="button"
+              className="app-primary-button"
+              disabled={!gate.allowed}
+              onClick={() => navigate(`/draft/${draft.id}/review`)}
+            >
+              Review and download
             </button>
+            {!gate.allowed && (
+              <span className="app-muted drafter-next-note">{gate.blockers[0] ?? 'The draft is not ready yet.'}</span>
+            )}
           </div>
         </section>
       )}

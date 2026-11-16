@@ -864,3 +864,91 @@
   font-size: 11.5px;
   color: var(--app-text-muted);
 }
+
+/* ---------- Review screen ---------- */
+
+.drafter-review-notices {
+  margin-bottom: 16px;
+}
+
+.drafter-review-warnings {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--app-text-muted);
+}
+
+.drafter-review-actions {
+  margin-bottom: 20px;
+}
+
+.drafter-doc {
+  max-width: 780px;
+  padding: 32px 40px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  background: var(--app-surface);
+  color: var(--app-text);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.drafter-doc-title {
+  margin: 0 0 6px;
+  font-size: 22px;
+  line-height: 1.3;
+}
+
+.drafter-doc-subtitle {
+  margin: 0 0 24px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--app-text-muted);
+}
+
+.drafter-doc h2 {
+  margin: 24px 0 8px;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.drafter-doc h3 {
+  margin: 18px 0 6px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.drafter-doc p {
+  margin: 0 0 10px;
+  text-align: justify;
+  white-space: pre-wrap;
+}
+
+.drafter-doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 16px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.drafter-doc-table th,
+.drafter-doc-table td {
+  border: 1px solid var(--app-border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.drafter-doc-table th {
+  background: var(--app-surface-2);
+  font-weight: 650;
+}
+
+.drafter-doc-mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--app-warn-soft);
+  color: var(--app-text);
+}
