@@ -7,6 +7,7 @@ import {
   listDeletions,
   type DrafterDBHandle,
 } from './store';
+import { normaliseStoredParticulars, normaliseStoredPlan } from './plan';
 import { DRAFTER_SCHEMA_VERSION, type DraftRecord, type DraftStatus } from './types';
 
 // Local-first sync for drafts. IndexedDB is the working copy; Supabase is the backup and the
@@ -80,8 +81,8 @@ export function rowToDraft(row: DraftRow): DraftRecord {
       : [],
     reviewingFor: reviewingForOf(row.reviewing_for),
     status: typeof row.status === 'string' ? (row.status as DraftStatus) : 'brief',
-    particulars: (data.particulars ?? null) as null,
-    sourcePlan: (data.sourcePlan ?? null) as null,
+    particulars: normaliseStoredParticulars(data.particulars),
+    sourcePlan: normaliseStoredPlan(data.sourcePlan),
     outline: (data.outline ?? null) as null,
     clauses: clauses && typeof clauses === 'object' && !Array.isArray(clauses) ? clauses : {},
     schemaVersion: DRAFTER_SCHEMA_VERSION,

@@ -9,9 +9,10 @@ import {
   getDraft,
   listDeletions,
   openDrafterDb,
+  updateDraft,
   type DrafterDBHandle,
 } from './store';
-import { pushDraft, removeDraftEverywhere, rowToDraft, syncDrafts, type DraftRow } from './sync';
+import { draftToRow, pushDraft, removeDraftEverywhere, rowToDraft, syncDrafts, type DraftRow } from './sync';
 
 // In-memory stand-in for the subset of the supabase-js query builder the sync uses.
 type Row = Record<string, unknown>;
@@ -231,5 +232,52 @@ describe('drafter sync', () => {
     expect(converted.reviewingFor).toBe('neutral');
     expect(converted.clauses).toEqual({});
     expect(converted.particulars).toBeNull();
+    expect(converted.sourcePlan).toBeNull();
+  });
+
+  it('loads a D1 row with no plan and no particulars', () => {
+    const converted = rowToDraft({
+      id: 'remote-d1',
+      user_id: 'user-a',
+      title: 'Old draft',
+      instruction: 'Draft a lease.',
+      reference_doc_ids: [],
+      reviewing_for: 'neutral',
+      status: 'brief',
+      data: { particulars: null, sourcePlan: null, outline: null, clauses: {} },
+      schema_version: 1,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    } as unknown as DraftRow);
+
+    expect(converted.particulars).toBeNull();
+    expect(converted.sourcePlan).toBeNull();
+    expect(converted.status).toBe('brief');
+  });
+
+  it('round-trips a D2 plan and particulars through the row mapping', async () => {
+    const created = await createDraft(db, { userId: 'user-a', instruction: 'Draft a lease.' });
+    const plan = {
+      docType: 'lease',
+      summary: 'A lease.',
+      lengthHint: null,
+      referenceMode: 'general' as const,
+      bindings: [],
+      unresolved: [],
+      questions: ['Who are the parties?'],
+      parsedAt: '2026-01-02T00:00:00.000Z',
+      model: 'test-model',
+      parsedFrom: { instruction: 'Draft a lease.', referenceDocIds: [] },
+    };
+    const particulars = [
+      { id: 'p1', label: 'Deposit', kind: 'amount' as const, value: null, source: 'instruction' as const, required: true },
+    ];
+    const updated = await updateDraft(db, created.id, { sourcePlan: plan, particulars });
+
+    const converted = rowToDraft(draftToRow(updated));
+    expect(converted.sourcePlan).toEqual(plan);
+    expect(converted.particulars).toEqual(particulars);
+    expect(converted.status).toBe('brief');
+    expect(converted.syncedAt).toBe(updated.updatedAt);
   });
 });

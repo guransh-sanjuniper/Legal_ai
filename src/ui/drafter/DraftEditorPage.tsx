@@ -2,14 +2,15 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { ReviewingFor } from '../../analysis/types';
 import { supabase } from '../../lib/supabase';
-import { openHarnessDb } from '../../runner/db';
-import { isPrepared } from '../library/preparationState';
 import { useAuth } from '../app/AuthProvider';
 import { PageHeader } from '../app/pages/Placeholder';
 import { createDraft, getDraft, openDrafterDb, updateDraft, type DrafterDBHandle } from '../../drafter/store';
+import { isPlanStale } from '../../drafter/plan';
 import { syncDraftById } from '../../drafter/sync';
 import type { LibraryEntry } from '../../drafter/references';
 import type { DraftRecord } from '../../drafter/types';
+import { loadDrafterLibrary } from './library';
+import { parsePlanForDraft } from './planRun';
 import { ReferencePicker } from './ReferencePicker';
 import './drafter.css';
 
@@ -38,6 +39,8 @@ export function DraftEditorPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [parseFailed, setParseFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -68,17 +71,7 @@ export function DraftEditorPage() {
       // The reference list reuses the library's own Ready check; a failure here only removes
       // the picker, it never blocks the brief.
       try {
-        const docsDb = await openHarnessDb();
-        const docs = await docsDb.getAll('documents');
-        const entries: LibraryEntry[] = [];
-        for (const doc of docs) {
-          entries.push({
-            id: doc.id,
-            name: doc.name,
-            pageCount: doc.pageCount,
-            ready: await isPrepared(docsDb, doc),
-          });
-        }
+        const entries = await loadDrafterLibrary();
         if (alive) setLibrary(entries);
       } catch {
         if (alive) setLibrary([]);
@@ -123,6 +116,8 @@ export function DraftEditorPage() {
       reviewingFor !== draft.reviewingFor ||
       refsChanged
     : instruction.trim().length > 0;
+  const hasPlan = Boolean(draft?.sourcePlan);
+  const planStale = draft ? isPlanStale(draft.sourcePlan, draft) : false;
 
   async function save() {
     if (!db) return;
@@ -163,6 +158,32 @@ export function DraftEditorPage() {
       setError(`Could not save the draft: ${errorText(e)}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function nextPlan() {
+    if (!db || !draft) return;
+    if (draft.sourcePlan) {
+      navigate(`/draft/${draft.id}/plan`);
+      return;
+    }
+    setParsing(true);
+    setError(null);
+    setNotice(null);
+    setParseFailed(false);
+    try {
+      const outcome = await parsePlanForDraft(db, draft, library);
+      if (!outcome.ok) {
+        setParseFailed(true);
+        setError(outcome.message ?? 'Parsing failed. Retry.');
+        return;
+      }
+      navigate(`/draft/${draft.id}/plan`);
+    } catch (e) {
+      setParseFailed(true);
+      setError(`Could not parse the instruction: ${errorText(e)}`);
+    } finally {
+      setParsing(false);
     }
   }
 
@@ -210,6 +231,11 @@ export function DraftEditorPage() {
         </div>
       )}
       {notice && <div className="app-banner app-banner--notice">{notice}</div>}
+      {hasPlan && planStale && (
+        <div className="app-banner app-banner--error" role="alert">
+          The plan is out of date. Re-run parsing on the plan screen before confirming.
+        </div>
+      )}
 
       <form
         className="app-form drafter-form"
@@ -259,9 +285,17 @@ export function DraftEditorPage() {
             {saving ? 'Saving…' : 'Save'}
           </button>
           <span className="drafter-dirty">{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
-          <span className="drafter-next" title="Coming in D2">
-            <button type="button" className="app-primary-button" disabled>
-              Next: plan
+          <span
+            className="drafter-next"
+            title={!draft || dirty ? 'Save the brief first.' : undefined}
+          >
+            <button
+              type="button"
+              className="app-primary-button"
+              disabled={saving || parsing || !db || !draft || dirty || !instruction.trim()}
+              onClick={() => void nextPlan()}
+            >
+              {parsing ? 'Parsing…' : parseFailed ? 'Retry plan' : hasPlan ? 'Open plan' : 'Next: plan'}
             </button>
           </span>
         </div>
