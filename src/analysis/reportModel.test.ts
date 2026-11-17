@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildReportModel, compareClauseNo, longestOf, mergeClauses, placeEntry, unreviewedText, NOT_STATED } from './reportModel';
-import type { AnalysisReport, VerifiedClause, VerifiedRisk } from './types';
+import { buildReportModel, compareClauseNo, longestOf, mergeClauses, placeEntry, PROMPT_TRUNCATED_NOTE, unreviewedText, NOT_STATED } from './reportModel';
+import { buildBlocksBlocking } from '../export/blocks';
+import type { AnalysisReport, PromptAnswer, VerifiedClause, VerifiedRisk } from './types';
 
 const risk = (id: string, severity: 'high' | 'medium' | 'low', page: number, quote: string, clause: string): VerifiedRisk => ({
   itemId: id, clause, text: `risk ${id}`, severity, basis: 'other', suggestion: `fix ${id}`, laws: ['Act X'],
@@ -104,6 +105,407 @@ describe('report model', () => {
     );
     expect(model.toc.slice(0, 3).map((t) => t.title)).toEqual(['Overview', 'Prompt Result', 'Clause Breakdown']);
     expect(model.toc.map((t) => t.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it('keeps the export blocks for a stored Prompt Result report byte-identical', () => {
+    // Baseline captured before the on-screen Prompt Result work: the exports must not change.
+    // The report is in the stored (old-style) shape: a flat answer and capped supporting quotes.
+    const promptAnswers: PromptAnswer[] = Array.from({ length: 6 }, (_, i) => ({
+      itemId: `P${i + 1}`,
+      text: `answer ${i + 1}`,
+      clause: '4',
+      page: i + 2,
+      quote: `verified quote ${i + 1}`,
+      verified: true as const,
+      part: (i === 0 ? 'answer' : 'support') as PromptAnswer['part'],
+    }));
+    const exported = buildReportModel(
+      report([clause({ itemId: 'a', clauseNo: '1' })], {
+        promptResult: {
+          prompt: 'What is the security deposit?',
+          answers: promptAnswers,
+          answer: [{ text: 'The deposit is refundable on exit.', cites: ['P1'] }],
+          mode: 'inline',
+          chunksTotal: 2,
+          chunksDone: 2,
+          failedChunks: [],
+        },
+      }),
+    );
+    expect(buildBlocksBlocking(exported).filter((b) => b.kind !== 'table' || b.columns[0] !== 'Field')).toMatchInlineSnapshot(`
+      [
+        {
+          "kind": "title",
+          "text": "Deep Analysis Report",
+        },
+        {
+          "kind": "meta",
+          "rows": [
+            {
+              "label": "Matter",
+              "value": "—",
+            },
+            {
+              "label": "Document",
+              "value": "sample.pdf",
+            },
+            {
+              "label": "Review date",
+              "value": "12/11/2026",
+            },
+            {
+              "label": "Detail level",
+              "value": "standard",
+            },
+            {
+              "label": "Focus",
+              "value": "—",
+            },
+            {
+              "label": "Reviewing for",
+              "value": "Neutral",
+            },
+          ],
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "Table of Contents",
+        },
+        {
+          "entries": [
+            {
+              "number": 1,
+              "title": "Overview",
+            },
+            {
+              "number": 2,
+              "title": "Prompt Result",
+            },
+            {
+              "number": 3,
+              "title": "Clause Breakdown",
+            },
+            {
+              "number": 4,
+              "title": "Dates and Amounts",
+            },
+            {
+              "number": 5,
+              "title": "Obligations by Party",
+            },
+            {
+              "number": 6,
+              "title": "Risk Register",
+            },
+            {
+              "number": 7,
+              "title": "Internal Inconsistencies",
+            },
+            {
+              "number": 8,
+              "title": "Coverage",
+            },
+          ],
+          "kind": "toc",
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "1. Overview",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "1. Nature and Purpose",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "2. Parties and Their Roles",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "3. Subject Matter / Property and Key Particulars",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "4. Commercial Terms",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "5. Timeline and Milestones",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "6. Obligations by Party",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "7. Rights and Protections by Party",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "8. Termination and Exit",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "9. Dispute Resolution, Governing Law, Jurisdiction",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "10. Statutory Compliance",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "11. Notable Drafting Issues",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "12. Internal Inconsistencies",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "13. Executive Summary",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Not stated in the document",
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "2. Prompt Result",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Prompt: “What is the security deposit?”",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Answered with the clause analysis, with no extra reading pass.",
+        },
+        {
+          "kind": "paragraph",
+          "text": "The deposit is refundable on exit.",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "Supporting quotes",
+        },
+        {
+          "items": [
+            "“verified quote 1” (Clause 4 · p. 2)",
+            "“verified quote 2” (Clause 4 · p. 3)",
+            "“verified quote 3” (Clause 4 · p. 4)",
+            "“verified quote 4” (Clause 4 · p. 5)",
+          ],
+          "kind": "bullets",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "+2 more sources",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "Chunks answered 2 of 2.",
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "3. Clause Breakdown",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "1 stored entries → 1 clause rows. 0 unnumbered entries placed by their quotes or chunk; 0 merged into another row; 0 kept separate because they could not be placed.",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "Clause 1 · obligation",
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "4. Dates and Amounts",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "Dates",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "No dates with a stated purpose were found.",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "Amounts",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "No amounts were found.",
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "5. Obligations by Party",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "No obligations were found in the verified items.",
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "6. Risk Register",
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "Risks",
+        },
+        {
+          "columns": [
+            "#",
+            "Level",
+            "Clause and page",
+            "Affects",
+            "Issue",
+            "Law references",
+            "Suggested next steps",
+          ],
+          "kind": "table",
+          "rows": [],
+        },
+        {
+          "kind": "heading",
+          "level": 3,
+          "text": "Missing clauses and protections",
+        },
+        {
+          "columns": [
+            "#",
+            "Level",
+            "Clause and page",
+            "Affects",
+            "Issue",
+            "Law references",
+            "Suggested next steps",
+          ],
+          "kind": "table",
+          "rows": [],
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "7. Internal Inconsistencies",
+        },
+        {
+          "kind": "paragraph",
+          "muted": true,
+          "text": "No inconsistency was found by the checks.",
+        },
+        {
+          "kind": "heading",
+          "level": 2,
+          "text": "8. Coverage",
+        },
+        {
+          "items": [
+            "Clauses detected 1; analysed 1; not analysed 0.",
+            "Failed clause units: 0.",
+          ],
+          "kind": "bullets",
+        },
+        {
+          "kind": "footer",
+          "text": "AI-assisted, requires lawyer review",
+        },
+      ]
+    `);
   });
 
   it('keeps the clause table to the rows that have content, with Summary always present', () => {
@@ -247,6 +649,149 @@ describe('report model', () => {
     const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
     expect(pr.error).toMatch(/Answer generation failed \(bad_json\)/);
     expect(pr.answer).toEqual([]);
+  });
+
+  it('numbers sources in first-appearance order and points every marker at its row', () => {
+    const a = (itemId: string, page: number, quote: string) => ({
+      itemId, text: quote, clause: '4', page, quote, verified: true as const, part: 'support' as const,
+    });
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'What is the security deposit?',
+          answers: [a('P1', 6, 'the deposit is refundable'), a('P2', 3, 'the deposit is fifty thousand'), a('P3', 8, 'an unrelated quote')],
+          // The prose leads with the later quote, so it is numbered first.
+          answer: [
+            { text: 'It is fifty thousand.', cites: ['P2'] },
+            { text: 'It is refundable.', cites: ['P1', 'P2'] },
+          ],
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.parts).toHaveLength(1);
+    expect(pr.parts![0].heading).toBeNull();
+    expect(pr.sources!.map((s) => [s.n, s.page, s.quote])).toEqual([
+      [1, 3, 'the deposit is fifty thousand'],
+      [2, 6, 'the deposit is refundable'],
+    ]);
+    const sentences = pr.parts![0].sentences;
+    expect(sentences.map((s) => s.markers)).toEqual([[1], [2, 1]]);
+    // Every marker resolves to a source row with the same clause, page and quote.
+    for (const s of sentences) {
+      for (const n of s.markers) {
+        const row = pr.sources!.find((row) => row.n === n)!;
+        expect(row).toBeDefined();
+      }
+      expect(s.citations).toHaveLength(s.markers.length);
+    }
+    expect(pr.stats).toMatchObject({ cited: 2, pageStart: 3, pageEnd: 6 });
+  });
+
+  it('never caps the sources and keeps their numbering stable', () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      itemId: `P${i + 1}`, text: `text ${i + 1}`, clause: '3', page: i + 2,
+      quote: `quote ${i + 1}`, verified: true as const, part: 'support' as const,
+    }));
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'List the deposit terms.',
+          answers: many,
+          answer: many.map((a, i) => ({ text: `Point ${i + 1}.`, cites: [a.itemId] })),
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.sources!.map((s) => s.n)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+    expect(pr.sources!.map((s) => s.page)).toEqual(Array.from({ length: 12 }, (_, i) => i + 2));
+    expect(pr.stats).toMatchObject({ cited: 12, pageStart: 2, pageEnd: 13 });
+    // The export cap is unchanged.
+    expect(pr.sourcesMore).toBe(8);
+    expect(pr.groups.flatMap((g) => g.quotes)).toHaveLength(4);
+  });
+
+  it('groups a multi-part answer under the user wording, keeping bullet styles', () => {
+    const answers = [
+      { itemId: 'PA1', text: 'q1', clause: '2', page: 2, quote: 'the deposit is fifty thousand', verified: true as const },
+      { itemId: 'PA2', text: 'q2', clause: '5', page: 5, quote: 'the deposit is refunded in sixty days', verified: true as const },
+    ];
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'What is the deposit and when is it refunded?',
+          answers,
+          answer: [{ text: 'The deposit is fifty thousand.', cites: ['PA1'] }],
+          parts: [
+            { heading: 'What is the deposit', sentences: [{ text: 'The deposit is fifty thousand.', cites: ['PA1'] }], notStated: false, truncated: false, error: null },
+            {
+              heading: 'when is it refunded',
+              sentences: [{ text: 'It is refunded in sixty days.', cites: ['PA2'], style: 'bullet' }],
+              notStated: false,
+              truncated: false,
+              error: null,
+            },
+          ],
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.parts!.map((p) => p.heading)).toEqual(['What is the deposit', 'when is it refunded']);
+    expect(pr.parts![1].sentences[0].style).toBe('bullet');
+    expect(pr.parts![1].sentences[0].markers).toEqual([2]);
+  });
+
+  it('shows an unsupported part as "Not clearly stated" without a marker', () => {
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'What is the deposit and who witnesses it?',
+          answers: [{ itemId: 'PA1', text: 'q1', clause: '2', page: 2, quote: 'the deposit is fifty thousand', verified: true }],
+          answer: [{ text: 'The deposit is fifty thousand.', cites: ['PA1'] }],
+          parts: [
+            { heading: 'What is the deposit', sentences: [{ text: 'The deposit is fifty thousand.', cites: ['PA1'] }], notStated: false, truncated: false, error: null },
+            { heading: 'who witnesses it', sentences: [], notStated: true, truncated: false, error: null },
+          ],
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.parts![1]).toMatchObject({ heading: 'who witnesses it', notStated: true, sentences: [] });
+    expect(pr.truncatedNote).toBeNull();
+  });
+
+  it('shows the truncation notice when a part was cut off', () => {
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'Summarise every obligation.',
+          answers: [{ itemId: 'PA1', text: 'q1', clause: '2', page: 2, quote: 'the tenant must pay rent', verified: true }],
+          answer: [{ text: 'The tenant must pay rent.', cites: ['PA1'] }],
+          parts: [
+            { heading: null, sentences: [{ text: 'The tenant must pay rent.', cites: ['PA1'] }], notStated: false, truncated: true, error: null },
+          ],
+          truncated: true,
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.parts![0].truncated).toBe(true);
+    expect(pr.truncatedNote).toBe(PROMPT_TRUNCATED_NOTE);
   });
 
   it('splits dates and amounts into two tables and falls back to the quote when there is no purpose', () => {

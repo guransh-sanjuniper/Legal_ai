@@ -17,7 +17,9 @@ import {
   RELEVANCE_PROMPT_VERSION,
 } from './answerRelevance';
 import { normalizeQuote, verifyQuotedItems, type Located } from './verify';
-import type { AnswerRelevanceStats, PromptAnswer, PromptResult } from './types';
+import { NOT_CLEAR_ANSWER, type AnswerRelevanceStats, type PromptAnswer, type PromptResult } from './types';
+
+export { NOT_CLEAR_ANSWER };
 
 export interface RawAnswer {
   text?: unknown;
@@ -166,7 +168,6 @@ export async function runPromptPass(
 // the model then writes "not clearly stated" when nothing is left. A sentence whose numbers or
 // units do not match its cited quotes is removed after the model writes it. Both counts are
 // returned so a caller can tell a guarded answer from one the model never wrote.
-export const NOT_CLEAR_ANSWER = 'Not clearly stated in the document.';
 
 // Before the model: keep only the answers whose quote states the request's subject.
 export function prepareSynthesis(answers: PromptAnswer[], request: string): { relevant: PromptAnswer[]; dropped: number } {

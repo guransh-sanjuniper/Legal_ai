@@ -2,17 +2,7 @@ import { quoteOverlap } from './judgement';
 import { OVERVIEW_POINTS } from './prompts';
 import { NO_SUGGESTION, normaliseMissing, sortByPriority, sortByPriorityOf, type RiskPriority } from './rubric';
 import { limitSupporting, rankPromptAnswers } from './supportingSources';
-import type {
-  AnalysisReport,
-  ClauseProse,
-  MissingProtection,
-  OverviewPoint,
-  VerifiedClause,
-  VerifiedDate,
-  VerifiedObligation,
-  VerifiedPayment,
-  VerifiedRisk,
-} from './types';
+import { NOT_CLEAR_ANSWER, type AnalysisReport, type ClauseProse, type MissingProtection, type OverviewPoint, type VerifiedClause, type VerifiedDate, type VerifiedObligation, type VerifiedPayment, type VerifiedRisk } from './types';
 
 // Pure report model. The screen and the Stage C exports both read from this, so they cannot drift.
 // Everything shown comes from the stored report; nothing here is written by the model.
@@ -26,6 +16,47 @@ export interface Citation {
   quote: string;
   clause: string;
 }
+
+// One sentence of the on-screen Prompt Result answer. Markers are source numbers, in the order the
+// sentence cites them; the same numbers appear in the Sources list and in every renderer.
+export interface PromptResultSentenceView {
+  text: string;
+  style: 'paragraph' | 'bullet';
+  markers: number[];
+  citations: Citation[];
+}
+
+// One part of the answer: the user's own wording when the request had several parts, else null.
+export interface PromptResultPartView {
+  heading: string | null;
+  sentences: PromptResultSentenceView[];
+  notStated: boolean;
+  truncated: boolean;
+  error: string | null;
+}
+
+// A numbered source: the verified quote behind one marker. Unverified quotes never reach this list.
+export interface PromptSourceView {
+  n: number;
+  clause: string;
+  page: number;
+  quote: string;
+  citation: Citation;
+}
+
+export interface PromptResultStatsView {
+  // Distinct verified passages cited by the answer, and the page range they cover.
+  cited: number;
+  pageStart: number | null;
+  pageEnd: number | null;
+  // Verified quotes the guards kept out of the evidence, and how much was read for coverage.
+  excluded: number;
+  readSections: number | null;
+  moreSections: number | null;
+}
+
+export const PROMPT_TRUNCATED_NOTE =
+  'The answer was cut off at the output limit and may be incomplete. Ask again for the remaining points, or split the request into separate questions.';
 
 export interface ClauseRowView {
   label: string;
@@ -105,7 +136,6 @@ export type SectionKey =
   | 'risks'
   | 'inconsistencies'
   | 'coverage';
-
 interface SectionBase<K extends SectionKey> {
   key: K;
   title: string;
@@ -124,10 +154,17 @@ export type ReportSection =
       // Set when the write-up call failed; the quotes are still shown.
       error: string | null;
       // One answer in prose. Sentences cite verified chunk answers.
+      // Kept unchanged: the DOCX and HTML exports render from these three fields.
       answer: { text: string; citations: Citation[] }[];
       // Supporting quotes, grouped by clause. Capped; the uncapped rest is counted in sourcesMore.
       groups: { clause: string; quotes: { quote: string; citation: Citation }[] }[];
       sourcesMore: number;
+      // On-screen layout only. Numbered markers in the text, one numbered source row per quote.
+      // Optional so the export fixture (src/export) stays untouched; the exports never read them.
+      parts?: PromptResultPartView[];
+      sources?: PromptSourceView[];
+      stats?: PromptResultStatsView | null;
+      truncatedNote?: string | null;
       failed: string[];
       chunksDone: number;
       chunksTotal: number;
@@ -497,6 +534,71 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       g.quotes.push({ quote: a.quote, citation: citationOf(a) });
       grouped.set(a.clause, g);
     }
+
+    // On-screen layout: numbered markers in the text and one row per source. Numbering is assigned
+    // once, in code, by first appearance, so every renderer shows the same number for a quote.
+    const sourceById = new Map<string, number>();
+    const sourceRows: PromptSourceView[] = [];
+    const numberFor = (id: string): number | null => {
+      const existing = sourceById.get(id);
+      if (existing) return existing;
+      const a = byId.get(id);
+      if (!a) return null;
+      const n = sourceRows.length + 1;
+      sourceById.set(id, n);
+      sourceRows.push({ n, clause: a.clause, page: a.page, quote: a.quote, citation: citationOf(a) });
+      return n;
+    };
+    const rawParts = pr.parts?.length
+      ? pr.parts
+      : (pr.answer ?? []).length > 0
+        ? [
+            {
+              heading: null,
+              sentences: (pr.answer ?? []).map((s) => ({ text: s.text, cites: s.cites, style: 'paragraph' as const })),
+              notStated: false,
+              truncated: false,
+              error: null,
+            },
+          ]
+        : [];
+    const parts: PromptResultPartView[] = rawParts.map((p) => {
+      const sentences: PromptResultSentenceView[] = p.sentences
+        .map((s) => {
+          const markers = [...new Set(s.cites.map(numberFor).filter((n): n is number => n !== null))];
+          return {
+            text: s.text,
+            style: (s.style === 'bullet' ? 'bullet' : 'paragraph') as 'paragraph' | 'bullet',
+            markers,
+            citations: markers.map((n) => sourceRows[n - 1].citation),
+          };
+        })
+        .filter((s) => s.text.trim().length > 0);
+      // "Not clearly stated" is shown as a muted line, not as a cited sentence.
+      const onlyNotClear = sentences.length > 0 && sentences.every((s) => s.markers.length === 0 && s.text.trim() === NOT_CLEAR_ANSWER);
+      return {
+        heading: p.heading?.trim() || null,
+        sentences: onlyNotClear ? [] : sentences,
+        notStated: Boolean(p.notStated) || onlyNotClear,
+        truncated: Boolean(p.truncated),
+        error: p.error ?? null,
+      };
+    });
+    // Nothing written up: the verified quotes are still listed, ranked, and never capped.
+    if (parts.every((p) => p.sentences.length === 0)) {
+      for (const a of rankPromptAnswers(pr.answers, pr.answer ?? [])) numberFor(a.itemId);
+    }
+    const pages = sourceRows.map((s) => s.page).filter((n) => Number.isFinite(n) && n > 0);
+    const stats: PromptResultStatsView = {
+      cited: sourceRows.length,
+      pageStart: pages.length ? Math.min(...pages) : null,
+      pageEnd: pages.length ? Math.max(...pages) : null,
+      excluded: pr.stats?.excluded ?? 0,
+      readSections: pr.stats?.readSections ?? null,
+      moreSections: pr.stats?.moreSections ?? null,
+    };
+    const truncated = Boolean(pr.truncated) || parts.some((p) => p.truncated);
+
     sections.push({
       key: 'promptResult',
       title: TITLES.promptResult,
@@ -508,13 +610,19 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
           : pr.mode === 'whole'
             ? `Whole-document scan (${pr.chunksTotal} sections).`
             : pr.mode === 'inline'
-              ? 'Answered with the clause analysis, with no extra reading pass.'
+              ? pr.stats?.readSections
+                ? `Answered from the clause analysis, with ${pr.stats.readSections} extra section${pr.stats.readSections === 1 ? '' : 's'} read for coverage.`
+                : 'Answered with the clause analysis, with no extra reading pass.'
               : null,
       canScanWhole: pr.mode === 'retrieval',
       error: pr.error ?? null,
       answer,
       groups: [...grouped.values()],
       sourcesMore: more,
+      parts,
+      sources: sourceRows,
+      stats,
+      truncatedNote: truncated ? PROMPT_TRUNCATED_NOTE : null,
       failed: pr.failedChunks.map((f) => `pages ${f.pages[0]}–${f.pages[1]}: ${f.message ?? f.failureCode ?? 'not completed'}`),
       chunksDone: pr.chunksDone,
       chunksTotal: pr.chunksTotal,

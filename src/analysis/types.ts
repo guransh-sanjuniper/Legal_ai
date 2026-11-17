@@ -140,6 +140,10 @@ export interface PromptAnswer {
   why?: string;
 }
 
+// The line shown when no verified quote supports the request (or one part of it). Kept here so the
+// report model and the UI can read it without importing the synthesis code.
+export const NOT_CLEAR_ANSWER = 'Not clearly stated in the document.';
+
 // One quote the deterministic subject guard rejected, and what the second-chance check decided.
 export interface RelevanceDecision {
   itemId: string;
@@ -167,6 +171,13 @@ export interface PromptResult {
   answers: PromptAnswer[];
   // Synthesis over the verified answers: the final answer in prose, citing answers.
   answer?: { text: string; cites: string[] }[];
+  // Deep Analysis only: the answer split by the user's own question parts. Absent for chat, for
+  // post-report prompts and for reports saved before this existed.
+  parts?: PromptResultPart[];
+  // Deep Analysis only: true when a part's answer was cut off at the output limit.
+  truncated?: boolean;
+  // Deep Analysis only: guards and coverage counts for the small stats line.
+  stats?: PromptResultStats;
   // inline: answered inside the clause call; retrieval: selected chunks; whole: every chunk.
   mode?: 'inline' | 'retrieval' | 'whole';
   selectedChunks?: number;
@@ -177,6 +188,24 @@ export interface PromptResult {
   error?: string;
   // Second-chance check on quotes the deterministic guard rejected. Absent when nothing was rejected.
   relevanceCheck?: AnswerRelevanceStats;
+}
+
+// One part of a Deep Analysis prompt answer. The heading is the user's own wording for that part.
+export interface PromptResultPart {
+  heading: string | null;
+  sentences: { text: string; cites: string[]; style?: 'paragraph' | 'bullet' }[];
+  // No verified quote supports this part: shown as "Not clearly stated in the document."
+  notStated: boolean;
+  truncated: boolean;
+  error: string | null;
+}
+
+export interface PromptResultStats {
+  // Verified quotes the guards kept out of the evidence.
+  excluded: number;
+  // Sections read for coverage beyond the clause analysis, and matching sections left unread.
+  readSections?: number;
+  moreSections?: number;
 }
 
 // Unfilled blanks and reviewer comments found in the source text by code, grouped by clause.

@@ -5,15 +5,92 @@ import {
   REPORT_FOOTER,
   type Citation,
   type ClauseView,
+  type PromptResultSentenceView,
+  type PromptResultStatsView,
   type ReportModel,
   type ReportSection,
   type RiskRow,
 } from '../../analysis/reportModel';
-import { moreSourcesLabel } from '../../analysis/supportingSources';
+import { NOT_CLEAR_ANSWER } from '../../analysis/promptPass';
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const pagesLabel = (start: number, end: number) => (start === end ? `page ${start}` : `pages ${start}–${end}`);
+
+// A marker in the Prompt Result text: jumps to the numbered source row, which opens the page.
+function jumpToSource(n: number) {
+  const el = document.getElementById(`prompt-source-${n}`);
+  if (!el) return;
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.add('ana-source-row--flash');
+  window.setTimeout(() => el.classList.remove('ana-source-row--flash'), 1500);
+}
+
+function SentenceText({ s }: { s: PromptResultSentenceView }) {
+  return (
+    <>
+      {s.text}
+      {s.markers.map((n) => (
+        <button key={n} type="button" className="ana-cite ana-marker" title={`Go to source ${n}`} onClick={() => jumpToSource(n)}>
+          [{n}]
+        </button>
+      ))}
+    </>
+  );
+}
+
+// Paragraphs and bullet lists in the order the answer gives them.
+function PromptSentences({ sentences }: { sentences: PromptResultSentenceView[] }) {
+  const out: ReactNode[] = [];
+  let bullets: PromptResultSentenceView[] = [];
+  const flush = () => {
+    if (bullets.length === 0) return;
+    const items = bullets;
+    out.push(
+      <ul key={`ul-${out.length}`} className="ana-list">
+        {items.map((s, i) => (
+          <li key={i}>
+            <SentenceText s={s} />
+          </li>
+        ))}
+      </ul>,
+    );
+    bullets = [];
+  };
+  for (const s of sentences) {
+    if (s.style === 'bullet') {
+      bullets.push(s);
+      continue;
+    }
+    flush();
+    out.push(
+      <p key={`p-${out.length}`} className="ana-answer">
+        <SentenceText s={s} />
+      </p>,
+    );
+  }
+  flush();
+  return <>{out}</>;
+}
+
+// Small coverage line so the reader can judge how much of the document the answer read.
+export function promptStatsLine(s: PromptResultStatsView): string {
+  const range =
+    s.pageStart === null || s.pageEnd === null
+      ? ''
+      : s.pageStart === s.pageEnd
+        ? ` from page ${s.pageStart}`
+        : ` from pages ${s.pageStart}–${s.pageEnd}`;
+  const lines = [`Based on ${s.cited} passage${s.cited === 1 ? '' : 's'}${range}.`];
+  if (s.excluded > 0) {
+    lines.push(`${s.excluded} quote${s.excluded === 1 ? ' was' : 's were'} not relevant to the request and ${s.excluded === 1 ? 'is' : 'are'} not used.`);
+  }
+  if (s.readSections) {
+    const more = s.moreSections ? `; ${s.moreSections} matching section${s.moreSections === 1 ? '' : 's'} not read` : '';
+    lines.push(`${s.readSections} extra section${s.readSections === 1 ? '' : 's'} read for coverage${more}.`);
+  }
+  return lines.join(' ');
+}
 
 function Cite({ c, onCite }: { c: Citation; onCite: (c: Citation) => void }) {
   return (
@@ -240,38 +317,42 @@ function SectionBody({
               Scan whole document
             </button>
           )}
-          {section.answer.length === 0 ? (
+          {section.truncatedNote && (
+            <div className="app-banner app-banner--notice ana-banner" role="status">
+              {section.truncatedNote}
+            </div>
+          )}
+          {(section.parts ?? []).length === 0 ? (
             section.error ? <p className="app-banner app-banner--error">{section.error}</p> : <p className="app-muted">Not found in this document.</p>
           ) : (
-            <p className="ana-answer">
-              {section.answer.map((a, i) => (
-                <span key={i}>
-                  {a.text}{' '}
-                  {a.citations.map((c, j) => (
-                    <Cite key={j} c={c} onCite={onCite} />
-                  ))}{' '}
-                </span>
-              ))}
-            </p>
+            (section.parts ?? []).map((part, i) => (
+              <div key={i} className="ana-prompt-part">
+                {part.heading && <h4>{part.heading}</h4>}
+                <PromptSentences sentences={part.sentences} />
+                {part.notStated && part.sentences.length === 0 && <p className="app-muted">{NOT_CLEAR_ANSWER}</p>}
+                {part.truncated && <p className="ana-note">This part was cut off at the output limit and may be incomplete.</p>}
+                {part.error && <p className="app-banner app-banner--error">{part.error}</p>}
+              </div>
+            ))
           )}
-          {section.groups.length > 0 && (
-            <>
-              <h4>Supporting quotes</h4>
-              {section.groups.map((g) => (
-                <div key={g.clause} className="ana-point">
-                  <div className="app-muted">Clause {g.clause}</div>
-                  <ul className="ana-quotes">
-                    {g.quotes.map((q, i) => (
-                      <li key={i}>
-                        <blockquote>“{q.quote}”</blockquote>
-                        <Cite c={q.citation} onCite={onCite} />
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-              {section.sourcesMore > 0 && <p className="app-muted">{moreSourcesLabel(section.sourcesMore)}</p>}
-            </>
+          {section.stats && section.stats.cited > 0 && <p className="ana-note">{promptStatsLine(section.stats)}</p>}
+          {(section.sources ?? []).length > 0 && (
+            <div className="ana-prompt-sources">
+              <h4>{(section.parts ?? []).some((p) => p.sentences.length > 0) ? 'Sources' : 'Verified quotes'}</h4>
+              <ol className="ana-source-list">
+                {(section.sources ?? []).map((s) => (
+                  <li key={s.n} id={`prompt-source-${s.n}`} className="ana-source-row">
+                    <span className="ana-source-n">[{s.n}]</span>
+                    <div className="ana-source-body">
+                      <button type="button" className="ana-cite" onClick={() => onCite(s.citation)}>
+                        {s.clause ? `Clause ${s.clause} · p. ${s.page}` : `p. ${s.page}`}
+                      </button>
+                      <blockquote>“{s.quote}”</blockquote>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
           )}
           <p className="app-muted">
             Chunks answered {section.chunksDone} of {section.chunksTotal}.
