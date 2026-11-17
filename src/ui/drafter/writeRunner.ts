@@ -103,11 +103,18 @@ export async function startWriting(
   const emit = (next: Partial<WriteLive>) => {
     live = { ...live, ...next };
     liveByDraft.set(draft.id, live);
-    for (const listener of runner.listeners) listener(live);
+    for (const listener of runner.listeners) {
+      // One UI listener throwing must not leave a stale runner entry behind.
+      try {
+        listener(live);
+      } catch {
+        // The run continues; the next update or a reload will re-sync the page.
+      }
+    }
   };
-  emit({});
 
   try {
+    emit({});
     const { functionsUrl, anonKey } = functionsEndpoint();
     const locked = await runWithDraftLock(draft.id, async () => {
       await runWriting({
@@ -157,7 +164,7 @@ export async function startWriting(
     return { ok: false, message: e instanceof Error ? e.message : String(e) };
   } finally {
     emit({ writing: 0, active: false });
-    runners.delete(draft.id);
-    liveByDraft.delete(draft.id);
+    if (runners.get(draft.id) === runner) runners.delete(draft.id);
+    if (liveByDraft.get(draft.id) === live) liveByDraft.delete(draft.id);
   }
 }

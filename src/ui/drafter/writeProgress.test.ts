@@ -3,7 +3,9 @@ import type { ClauseRecord, OutlineItem } from '../../drafter/types';
 import {
   analyseWriteState,
   decideWriteStart,
+  sourceGate,
   writeProgress,
+  writeStartReason,
   type WriteCounts,
   type WriteStartAction,
   type WriteStartInput,
@@ -135,6 +137,42 @@ describe('write progress', () => {
       label: 'No sections',
       complete: false,
     });
+  });
+});
+
+describe('source gate', () => {
+  it('ignores stale leftover source text when no source is needed', () => {
+    expect(sourceGate(true, true)).toEqual({ stale: false, unconfirmed: false });
+    expect(
+      decision({
+        counts: counts({ done: 4, pending: 6 }),
+        sourcesStale: sourceGate(true, true).stale,
+        sourcesUnconfirmed: sourceGate(true, true).unconfirmed,
+      }),
+    ).toBe('start');
+  });
+
+  it('classifies stale and unconfirmed only when the gate is closed', () => {
+    expect(sourceGate(false, true)).toEqual({ stale: true, unconfirmed: false });
+    expect(sourceGate(false, false)).toEqual({ stale: false, unconfirmed: true });
+  });
+});
+
+describe('write start reasons', () => {
+  it('maps every blocked or wait result to a plain reason', () => {
+    for (const action of ['blocked:outline', 'blocked:sources', 'blocked:lock', 'wait'] as const) {
+      const reason = writeStartReason(action);
+      expect(typeof reason).toBe('string');
+      expect((reason ?? '').length).toBeGreaterThan(10);
+    }
+    expect(writeStartReason('start')).toBeNull();
+    expect(writeStartReason('attach')).toBeNull();
+    expect(writeStartReason('finished')).toBeNull();
+  });
+
+  it('uses the reason that matches a paused or failed wait', () => {
+    expect(writeStartReason('wait', { userStopped: true })).toContain('Resume');
+    expect(writeStartReason('wait', { failed: 2 })).toContain('need attention');
   });
 });
 

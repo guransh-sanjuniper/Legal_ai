@@ -18,7 +18,14 @@ import {
   stopWriting,
   subscribeWriting,
 } from './writeRunner';
-import { analyseWriteState, decideWriteStart, writeProgress } from './writeProgress';
+import {
+  analyseWriteState,
+  decideWriteStart,
+  sourceGate,
+  writeProgress,
+  writeStartReason,
+  type WriteStartAction,
+} from './writeProgress';
 import './drafter.css';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -71,6 +78,7 @@ export function WritePage() {
   const [error, setError] = useState<string | null>(null);
   const [startBlocked, setStartBlocked] = useState<'lock' | 'error' | null>(null);
   const [startCheckDone, setStartCheckDone] = useState(false);
+  const [autoDecision, setAutoDecision] = useState<WriteStartAction | null>(null);
 
   const visitDraftRef = useRef<string | null>(null);
   const autoStartRef = useRef(false);
@@ -177,8 +185,10 @@ export function WritePage() {
     void (async () => {
       try {
         const outlineStale = isOutlineStale(outline, draft);
-        const sourcesStale = sourceTextStale(draft.sourceText, draft);
-        const sourcesUnconfirmed = !sourceTextReady(draft.sourceText, draft) && !sourcesStale;
+        const sourcesReady = sourceTextReady(draft.sourceText, draft);
+        const gate = sourceGate(sourcesReady, sourceTextStale(draft.sourceText, draft));
+        const sourcesStale = gate.stale;
+        const sourcesUnconfirmed = gate.unconfirmed;
         const items = outline.items;
         const state = analyseWriteState(
           items,
@@ -199,6 +209,7 @@ export function WritePage() {
           startedThisVisit: false,
           pendingOnlyStart: true,
         });
+        setAutoDecision(decision);
 
         if (decision === 'start') {
           if (state.pendingIds.length > 0) await start({ onlyItemIds: state.pendingIds });
@@ -241,6 +252,7 @@ export function WritePage() {
     setBusy(true);
     setError(null);
     setStartBlocked(null);
+    setAutoDecision(null);
     setRunning(true);
     setStopping(false);
     setWritingNow(0);
@@ -332,6 +344,16 @@ export function WritePage() {
   const estimate = estimateWriting(draft);
   const canWriteBase = !outlineStale && sourcesReady && items.length > 0;
   const canBatchWrite = canWriteBase && !complete;
+  const autoReason = autoDecision
+    ? writeStartReason(autoDecision, {
+        userStopped: userStoppedRef.current,
+        failed: state.counts.failed,
+      })
+    : null;
+  const reasonCoveredByBanner =
+    (autoDecision === 'blocked:outline' && outlineStale) ||
+    (autoDecision === 'blocked:sources' && !sourcesReady) ||
+    (autoDecision === 'blocked:lock' && startBlocked === 'lock');
 
   const attentionLabel =
     state.counts.failed === 1 ? '1 section needs attention' : `${state.counts.failed} sections need attention`;
@@ -352,7 +374,9 @@ export function WritePage() {
     const started = new Date(run.startedAt).getTime();
     const finished = new Date(run.finishedAt).getTime();
     if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return null;
-    return `Finished in ${formatRunDuration(finished - started)} · ${plural(run.retries, 'retry')}`;
+    return `Finished in ${formatRunDuration(finished - started)} · ${run.retries} ${
+      run.retries === 1 ? 'retry' : 'retries'
+    }`;
   })();
 
   function aliasFor(record: ClauseRecord): string {
@@ -414,6 +438,11 @@ export function WritePage() {
             Check the parts I'll use
           </Link>
         </div>
+      )}
+      {autoReason && !reasonCoveredByBanner && (
+        <p className="drafter-source-note" role="status">
+          {autoReason}
+        </p>
       )}
 
       {items.length === 0 ? (
