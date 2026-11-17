@@ -130,12 +130,26 @@ export interface DetailGroup {
   items: Particular[];
 }
 
-// Every detail still without a value, in one list grouped by kind. Inside a group the required
-// ones come first, in the order the model gave them. An empty group is left out.
+// Which rows the screen shows: a detail still without a value, or one the user has already
+// started typing into this visit, minus the ones set aside with "Leave blank for now".
+// Keeping typed rows here (rather than filtering blanks only) is what stops a row from
+// vanishing on the first keystroke once it has a value.
+export function visibleDetails(
+  particulars: Particular[],
+  keptIds: string[],
+  skipped: string[],
+): Particular[] {
+  return particulars.filter(
+    (item) =>
+      (isBlank(item) || keptIds.includes(item.id)) && !skipped.includes(`particular:${item.id}`),
+  );
+}
+
+// Groups the rows it is given by kind. Inside a group the required ones come first, in the order
+// the model gave them. An empty group is left out.
 export function detailGroups(particulars: Particular[]): DetailGroup[] {
-  const blanks = particulars.filter(isBlank);
   return GROUP_ORDER.map((title) => {
-    const items = blanks.filter((item) => particularGroup(item.kind) === title);
+    const items = particulars.filter((item) => particularGroup(item.kind) === title);
     return {
       title,
       items: [...items.filter((item) => item.required), ...items.filter((item) => !item.required)],

@@ -11,6 +11,7 @@ import {
   referenceRows,
   setParticularValue,
   setReferenceUseMode,
+  visibleDetails,
 } from './planUi';
 
 const docs = buildDocAliases([
@@ -150,7 +151,7 @@ describe('details we need', () => {
   });
 
   it('lists only blanks, grouped by kind, required first inside a group', () => {
-    const groups = detailGroups([
+    const groups = detailGroups(visibleDetails([
       particular({ id: 'p1', label: 'Notice period', kind: 'term', required: false }),
       particular({ id: 'p2', label: 'Tenant name', kind: 'party', required: false }),
       particular({ id: 'p3', label: 'Landlord name', kind: 'party', required: true }),
@@ -158,7 +159,7 @@ describe('details we need', () => {
       particular({ id: 'p5', label: 'Deposit', kind: 'amount', required: true }),
       particular({ id: 'p6', label: 'Premises', kind: 'property', required: false }),
       particular({ id: 'p7', label: 'Blank note', kind: 'other', value: '   ' }),
-    ]);
+    ], [], []));
 
     expect(groups.map((group) => group.title)).toEqual(['People', 'Money', 'Dates', 'Property', 'Other']);
     expect(groups[0].items.map((item) => item.id)).toEqual(['p3', 'p2']);
@@ -168,6 +169,16 @@ describe('details we need', () => {
     expect(groups[4].items.map((item) => item.id)).toEqual(['p7']);
     // A detail with a value is not asked for again.
     expect(groups.flatMap((group) => group.items).some((item) => item.id === 'p4')).toBe(false);
+  });
+
+  it('keeps a row visible once the user has typed into it', () => {
+    const typed = particular({ id: 'p1', value: '1,20,000' });
+    // A detail with a value is not asked for again on a fresh visit.
+    expect(visibleDetails([typed], [], [])).toEqual([]);
+    // But the row the user is typing into must not vanish on the first keystroke.
+    expect(visibleDetails([typed], ['p1'], []).map((item) => item.id)).toEqual(['p1']);
+    // "Leave blank for now" still hides it for this visit.
+    expect(visibleDetails([particular({ id: 'p2' })], [], ['particular:p2'])).toEqual([]);
   });
 
   it('leaves out a group with nothing in it', () => {

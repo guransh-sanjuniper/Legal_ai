@@ -21,10 +21,10 @@ import {
   addParticular,
   answerQuestion,
   detailGroups,
-  isBlank,
   referenceRows,
   setParticularValue,
   setReferenceUseMode,
+  visibleDetails,
 } from './planUi';
 import {
   AddDetailRow,
@@ -399,10 +399,7 @@ export function PlanPage() {
 
   // Blanks are listed, plus anything already typed into this visit so a row never vanishes
   // mid-keystroke. "Leave blank for now" hides a row until "Show them again".
-  const visibleParticulars = particulars.filter(
-    (item) => (isBlank(item) || keptIds.includes(item.id)) && !skipped.includes(`particular:${item.id}`),
-  );
-  const groups = detailGroups(visibleParticulars);
+  const groups = detailGroups(visibleDetails(particulars, keptIds, skipped));
   const openQuestions = questions.filter((text) => !skipped.includes(`question:${text}`));
 
   return (
