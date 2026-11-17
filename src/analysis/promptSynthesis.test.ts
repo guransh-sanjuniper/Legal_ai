@@ -7,6 +7,9 @@ import { synthesiseAnswers } from './promptPass';
 import type { CallRequest, CallResult } from '../tasks/types';
 import type { PromptAnswer } from './types';
 import type { ExecuteContext } from './execute';
+import { promptDepth } from './promptShape';
+import { NOT_CLEAR_ANSWER } from './types';
+import { PROMPT_SYNTHESIS_RETRY_LINE, PROMPT_SYNTHESIS_VERSION_DEEP } from './prompts';
 
 // Fixtures only: no live model, no live Supabase. The stub client only acknowledges result saves.
 
@@ -52,8 +55,18 @@ const answers: PromptAnswer[] = [
 
 const request = 'What is the security deposit and when is it refunded?';
 
-const idsFromInput = (req: CallRequest): string[] =>
-  (JSON.parse(req.input.slice(req.input.indexOf('Verified answers:\n') + 18)) as { id: string }[]).map((a) => a.id);
+const evidenceOf = (req: CallRequest): { id: string }[] => {
+  const marker = 'Verified answers:\n';
+  const at = req.input.indexOf(marker);
+  if (at < 0) return [];
+  const line = req.input.slice(at + marker.length).split('\n')[0];
+  try {
+    return JSON.parse(line) as { id: string }[];
+  } catch {
+    return [];
+  }
+};
+const idsFromInput = (req: CallRequest): string[] => evidenceOf(req).map((a) => a.id);
 
 // The default synthesis answer: one element per verified answer, citing it.
 function scriptedSynthesis(req: CallRequest): string {
@@ -63,6 +76,11 @@ function scriptedSynthesis(req: CallRequest): string {
 
 function result(text: string): CallResult {
   return { text, finishReason: 'stop', provider: 'fake', promptTokens: 10, completionTokens: 10, durationMs: 1 };
+}
+
+// The provider stopped at the output limit: the runner must never accept it as complete.
+function cutOff(text: string): CallResult {
+  return { ...result(text), finishReason: 'length' };
 }
 
 function context(db: HarnessDBHandle, callModel: (req: CallRequest) => Promise<CallResult>): ExecuteContext {
@@ -151,4 +169,329 @@ describe('prompt synthesis (default path, shared with chat)', () => {
     expect(out.numericDropped).toBe(1);
     expect(out.answer).toEqual([{ text: 'Not clearly stated in the document.', cites: [] }]);
   });
+});
+
+// ---------- Deep Analysis path (opt-in) ----------
+
+const depositAnswer: PromptAnswer = {
+  itemId: 'PA1',
+  text: 'The security deposit is Rs. 50,000.',
+  clause: '4',
+  page: 6,
+  quote: 'The security deposit is Rs. 50,000 and is refundable on exit.',
+  verified: true,
+  part: 'answer',
+  why: 'states the security deposit amount',
+};
+
+const terminationAnswer: PromptAnswer = {
+  itemId: 'PA2',
+  text: 'Either party may terminate on sixty days notice.',
+  clause: '9',
+  page: 12,
+  quote: 'Either party may terminate this agreement by giving sixty (60) days written notice.',
+  verified: true,
+  part: 'answer',
+  why: 'states who may terminate and on what notice',
+};
+
+const deepOpts = (prompt: string) => {
+  const depth = promptDepth(prompt);
+  return { opts: { parts: depth.parts, maxAnswerTokens: depth.maxAnswerTokens, structured: true }, depth };
+};
+
+describe('prompt synthesis (deep path)', () => {
+  let db: HarnessDBHandle;
+  beforeEach(async () => {
+    db = await openHarnessDb();
+  });
+
+  it('answers each part separately, with the user wording as the heading', async () => {
+    const prompt = 'What is the security deposit? When may the agreement be terminated?';
+    const { opts, depth } = deepOpts(prompt);
+    const calls: CallRequest[] = [];
+    const ctx = context(db, async (req) => {
+      calls.push(req);
+      const ids = idsFromInput(req);
+      const first = ids[0];
+      return result(
+        JSON.stringify([
+          req.input.includes('When may the agreement be terminated?')
+            ? { text: 'Either party may end it on sixty days notice.', cites: [first], style: 'paragraph' }
+            : { text: 'The deposit is Rs. 50,000.', cites: [first], style: 'paragraph' },
+        ]),
+      );
+    });
+    const runId = `deep-parts-${crypto.randomUUID()}`;
+
+    const out = await synthesiseAnswers({ ctx, runId, doc, prompt, answers: [depositAnswer, terminationAnswer], opts });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].input).toContain('USER REQUEST: What is the security deposit?');
+    expect(calls[1].input).toContain('USER REQUEST: When may the agreement be terminated?');
+    expect(calls[0].prompt).toContain('LENGTH:');
+
+    expect(out.parts).toHaveLength(2);
+    expect(out.parts!.map((p) => p.heading)).toEqual(['What is the security deposit?', 'When may the agreement be terminated?']);
+    expect(out.parts![0].sentences[0].cites).toEqual(['PA1']);
+    expect(out.parts![1].sentences[0].cites).toEqual(['PA2']);
+    expect(out.parts!.every((p) => !p.notStated && !p.truncated && !p.error)).toBe(true);
+    expect(out.answer).toEqual([
+      { text: 'The deposit is Rs. 50,000.', cites: ['PA1'] },
+      { text: 'Either party may end it on sixty days notice.', cites: ['PA2'] },
+    ]);
+    expect(out.truncated).toBe(false);
+
+    for (const [i, suffix] of ['ps', 'ps2'].entries()) {
+      const task = await db.get('tasks', `${runId}:${suffix}`);
+      expect(task).toMatchObject({ promptVersion: PROMPT_SYNTHESIS_VERSION_DEEP, maxTokens: i === 0 ? depth.maxAnswerTokens : depth.maxAnswerTokens });
+      expect(task!.prompt).toContain('LENGTH:');
+      expect(task!.input).toContain('COVERAGE:');
+    }
+  });
+
+  it('shows an unsupported part as not clearly stated without a model call', async () => {
+    const prompt = 'What is the security deposit? Who witnesses the agreement?';
+    const { opts } = deepOpts(prompt);
+    let calls = 0;
+    const ctx = context(db, async (req) => {
+      calls++;
+      return result(JSON.stringify([{ text: 'The deposit is Rs. 50,000.', cites: idsFromInput(req).slice(0, 1), style: 'paragraph' }]));
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-missing-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [depositAnswer],
+      opts,
+    });
+    expect(calls).toBe(1);
+    expect(out.parts![1]).toMatchObject({ heading: 'Who witnesses the agreement?', notStated: true, sentences: [] });
+    expect(out.answer).toContainEqual({ text: NOT_CLEAR_ANSWER, cites: [] });
+  });
+
+  it('retries a cut-off part once at twice the budget and adds the coaching line', async () => {
+    const prompt = 'What is the security deposit?';
+    const { opts } = deepOpts(prompt);
+    const calls: CallRequest[] = [];
+    const ctx = context(db, async (req) => {
+      calls.push(req);
+      if (calls.length === 1) return cutOff('[');
+      return result(JSON.stringify([{ text: 'The deposit is Rs. 50,000.', cites: ['PA1'], style: 'paragraph' }]));
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-retry-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [depositAnswer],
+      opts,
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].maxTokens).toBe(800);
+    expect(calls[1].maxTokens).toBe(1600);
+    expect(calls[1].input).toContain(PROMPT_SYNTHESIS_RETRY_LINE);
+    expect(out.truncated).toBe(false);
+    expect(out.parts![0].truncated).toBe(false);
+    expect(out.parts![0].sentences).toHaveLength(1);
+  });
+
+  it('marks a part truncated when the retry is cut off too, without splitting the evidence', async () => {
+    const prompt = 'What is the security deposit?';
+    const { opts } = deepOpts(prompt);
+    const runId = `deep-truncated-${crypto.randomUUID()}`;
+    let calls = 0;
+    const ctx = context(db, async () => {
+      calls++;
+      return cutOff('[');
+    });
+    const out = await synthesiseAnswers({ ctx, runId, doc, prompt, answers: [depositAnswer], opts });
+
+    expect(calls).toBe(2);
+    expect(out.truncated).toBe(true);
+    expect(out.parts![0].truncated).toBe(true);
+    expect(out.parts![0].sentences).toEqual([]);
+    expect(out.parts![0].error).toMatch(/cut off/);
+    const ids = (await db.getAllFromIndex('tasks', 'byRun', runId)).map((t) => t.id);
+    expect(ids.some((id) => id.includes('/'))).toBe(false);
+  });
+
+  it('keeps the complete cited elements of a cut-off answer', async () => {
+    const prompt = 'What is the security deposit?';
+    const { opts } = deepOpts(prompt);
+    let calls = 0;
+    const ctx = context(db, async () => {
+      calls++;
+      // The provider flags the limit, but the array that came back is complete and valid.
+      return cutOff(JSON.stringify([{ text: 'The deposit is Rs. 50,000.', cites: ['PA1'], style: 'paragraph' }]));
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-partial-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [depositAnswer],
+      opts,
+    });
+    expect(calls).toBe(2);
+    expect(out.truncated).toBe(true);
+    expect(out.parts![0].sentences).toEqual([{ text: 'The deposit is Rs. 50,000.', cites: ['PA1'], style: 'paragraph' }]);
+  });
+
+  it('treats an empty reply as a visible failure, never a silent answer', async () => {
+    const prompt = 'What is the security deposit?';
+    const { opts } = deepOpts(prompt);
+    const ctx = context(db, async () => ({ text: '', finishReason: 'length', provider: 'fake', promptTokens: 1, completionTokens: 0, durationMs: 1 }));
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-empty-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [depositAnswer],
+      opts,
+    });
+    expect(out.answer).toEqual([]);
+    expect(out.parts![0].sentences).toEqual([]);
+    expect(out.parts![0].notStated).toBe(false);
+    expect(out.parts![0].error).toMatch(/could not be written up \(empty_output\)/);
+  });
+
+  it('retries an empty reply once and then answers', async () => {
+    const prompt = 'What is the security deposit?';
+    const { opts } = deepOpts(prompt);
+    let calls = 0;
+    const ctx = context(db, async () => {
+      calls++;
+      if (calls === 1) return result('');
+      return result(JSON.stringify([{ text: 'The deposit is Rs. 50,000.', cites: ['PA1'], style: 'paragraph' }]));
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-empty-retry-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [depositAnswer],
+      opts,
+    });
+    expect(calls).toBe(2);
+    expect(out.parts![0].sentences[0].text).toBe('The deposit is Rs. 50,000.');
+  }, 15_000);
+
+  it('drops an amount that is not in the cited quote', async () => {
+    const prompt = 'What is the security deposit?';
+    const { opts } = deepOpts(prompt);
+    const ctx = context(db, async () =>
+      result(JSON.stringify([{ text: 'The deposit is Rs. 50,000.', cites: ['PA1'], style: 'paragraph' }])),
+    );
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-numeric-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [
+        {
+          itemId: 'PA1',
+          text: 'refundable deposit',
+          clause: '9',
+          page: 9,
+          quote: 'The security deposit is refundable; hardship rates are listed in the table.',
+          verified: true,
+          part: 'support',
+        },
+      ],
+      opts,
+    });
+    expect(out.numericDropped).toBe(1);
+    expect(out.answer).toEqual([{ text: NOT_CLEAR_ANSWER, cites: [] }]);
+  });
+
+  it('still rejects a payment-default notice for a termination request', async () => {
+    const prompt = 'When may the agreement be terminated?';
+    const { opts } = deepOpts(prompt);
+    const calls: CallRequest[] = [];
+    const ctx = context(db, async (req) => {
+      calls.push(req);
+      if (req.prompt.includes('You check whether quotes')) {
+        return result(JSON.stringify([{ id: 'PA1', verdict: 'no', reason: 'it is about late payment, not termination' }]));
+      }
+      return result(JSON.stringify([{ text: 'It may be terminated.', cites: ['PA1'], style: 'paragraph' }]));
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-junk-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [
+        {
+          itemId: 'PA1',
+          text: 'Late payment leads to a default notice.',
+          clause: '5',
+          page: 5,
+          quote: 'Late payment of rent may lead to a notice of default.',
+          verified: true,
+          part: 'support',
+        },
+      ],
+      opts,
+    });
+    // One second-chance call, and no synthesis call: the quote is not evidence for that part.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toContain('You check whether quotes');
+    expect(out.parts![0]).toMatchObject({ notStated: true, sentences: [] });
+    expect(out.answer).toEqual([{ text: NOT_CLEAR_ANSWER, cites: [] }]);
+  });
+
+  it('removes item ids the model wrote into the answer text', async () => {
+    const prompt = 'What is the security deposit?';
+    const { opts } = deepOpts(prompt);
+    const ctx = context(db, async () =>
+      result(JSON.stringify([{ text: 'The deposit is Rs. 50,000 [PA1].', cites: ['PA1'], style: 'paragraph' }])),
+    );
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `deep-ids-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [depositAnswer],
+      opts,
+    });
+    expect(out.parts![0].sentences[0].text).toBe('The deposit is Rs. 50,000.');
+    expect(out.answer[0].text).not.toMatch(/PA1/);
+  });
+
+  it('keeps the default path splitting a cut-off answer as before', async () => {
+    // Chat and the post-report prompt keep the runner's split; only the deep path never splits.
+    const prompt = `What is the security deposit and when is it refunded? ${'The security deposit is refundable. '.repeat(22)}`;
+    const answers: PromptAnswer[] = Array.from({ length: 6 }, (_, i) => ({
+      itemId: `P${i + 1}`,
+      text: `deposit answer ${i + 1}`,
+      clause: '4',
+      page: i + 2,
+      quote: `The security deposit is refundable; detail ${i + 1} ${'x'.repeat(200)}.`,
+      verified: true,
+      part: 'support',
+    }));
+    const runId = `split-default-${crypto.randomUUID()}`;
+    let calls = 0;
+    let synthesisCalls = 0;
+    const ctx = context(db, async (req) => {
+      calls++;
+      if (req.prompt.includes('final answer to a user request')) {
+        synthesisCalls++;
+        // The default path hits the output limit on its first attempt.
+        if (synthesisCalls === 1) return cutOff('[');
+      }
+      const ids = idsFromInput(req);
+      if (ids.length === 0) return result('[]');
+      return result(JSON.stringify([{ text: 'The deposit is refundable.', cites: [ids[0]] }]));
+    });
+    const out = await synthesiseAnswers({ ctx, runId, doc, prompt, answers });
+    expect(out).not.toHaveProperty('parts');
+    const tasks = await db.getAllFromIndex('tasks', 'byRun', runId);
+    expect(tasks.find((t) => t.id === `${runId}:ps`)!.status).toBe('split');
+    expect(tasks.filter((t) => t.id.startsWith(`${runId}:ps/`))).toHaveLength(2);
+    expect(calls).toBeGreaterThan(0);
+  }, 20_000);
 });

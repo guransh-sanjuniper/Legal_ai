@@ -335,7 +335,9 @@ function SectionBody({
               </div>
             ))
           )}
-          {section.stats && section.stats.cited > 0 && <p className="ana-note">{promptStatsLine(section.stats)}</p>}
+          {section.stats && section.stats.cited > 0 && (section.parts ?? []).some((p) => p.sentences.length > 0) && (
+            <p className="ana-note">{promptStatsLine(section.stats)}</p>
+          )}
           {(section.sources ?? []).length > 0 && (
             <div className="ana-prompt-sources">
               <h4>{(section.parts ?? []).some((p) => p.sentences.length > 0) ? 'Sources' : 'Verified quotes'}</h4>

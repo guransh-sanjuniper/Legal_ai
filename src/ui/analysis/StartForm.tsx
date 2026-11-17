@@ -75,9 +75,15 @@ export function StartForm({
         {estimate ? (
           <>
             <strong>Upper-bound estimate:</strong> {estimate.calls} calls ({estimate.clauseCalls} clause, {estimate.otherCalls} missing,
-            overview and section, {estimate.reviewCalls} risk validation, inline prompt (no extra calls)
-            {estimate.synthesisCalls ? ` + ${estimate.synthesisCalls} synthesis` : ''}), about {money(estimate.costUsd)}.
-            {estimate.customCalls === 0 && <span className="app-muted"> The custom pass is not included because the prompt is empty.</span>}
+            overview and section, {estimate.reviewCalls} risk validation
+            {estimate.evidenceCalls
+              ? `, ${estimate.evidenceCalls} custom-prompt coverage reads`
+              : ', inline prompt (no extra calls)'}
+            {estimate.synthesisCalls ? `, ${estimate.synthesisCalls} part answer${estimate.synthesisCalls === 1 ? '' : 's'}` : ''}
+            {estimate.answerRetryCalls ? ` (up to 1 cut-off retry per part)` : ''}), about {money(estimate.costUsd)}.
+            {!estimate.customCalls && !estimate.synthesisCalls && !estimate.evidenceCalls && (
+              <span className="app-muted"> The custom pass is not included because the prompt is empty.</span>
+            )}
           </>
         ) : (
           <span className="app-muted">Estimate unavailable.</span>

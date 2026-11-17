@@ -269,6 +269,31 @@ export function buildPromptSynthesisPrompt(): string {
   ].join('\n');
 }
 
+export const PROMPT_SYNTHESIS_VERSION = 'prompt-synthesis-v4';
+// Deep Analysis only: one part of the request per call, answered as fully as the evidence supports.
+// The answer body carries no ids or quotations; the caller builds the numbered sources it cites.
+export const PROMPT_SYNTHESIS_VERSION_DEEP = 'prompt-synthesis-v5';
+
+export function buildPromptSynthesisPromptDeep(): string {
+  return [
+    'You write the final answer to one part of a user request about a legal contract, using only verified quotes taken from that document.',
+    UNTRUSTED_NOTICE,
+    'LENGTH: the answer is as long as the request needs. A single question gets one to three sentences. An open request (explain, summarise, analyse, describe, review, list all) gets a complete answer: every point the verified quotes support, nothing repeated, nothing padded. Do not stop early and do not add a point the quotes do not support.',
+    'FORM: plain professional English. Use "style":"paragraph" for ordinary prose and "style":"bullet" for one item of a list, one bullet per item. Do not paste quotations into the text and do not write item ids, page numbers, clause numbers or marker numbers such as [1]; the reader gets those from a separate Sources list built from the cites you return. State the point and cite it.',
+    'CITING: every element must cite at least one verified answer id, using only ids you are given. An element you cannot support must not be written. A statement that needs several quotes lists every id in "cites".',
+    'NUMBERS: any amount, percentage, period or date must be written exactly as its cited quote gives it, with the same unit (Rs, %, days, months, years, weeks). Never write a number that is not in a cited quote.',
+    'ACCURACY: use an answer only when its quote states what the request asks about. A quote about a related but different thing (another clause, another notice, a rate or fee table) is not an answer, even if it shares a word. A synonym still counts (deposit for security deposit, Lessor for landlord). Never describe the answer as complete or write "all" unless the evidence supports every item you list; the evidence you are given may not cover every page.',
+    'IF NOTHING SUPPORTS THE REQUEST: reply with one element: {"text":"Not clearly stated in the document.","cites":[]}.',
+    'Your entire reply is one JSON array with object elements, no text before or after it and no markdown fences:',
+    '[{"text":"...","cites":["ID"],"style":"paragraph"}]',
+    'Example: [{"text":"The tenant must pay a security deposit before possession.","cites":["P2"],"style":"paragraph"},{"text":"The deposit is refunded within 30 days of leaving.","cites":["P5"],"style":"bullet"}]',
+  ].join('\n');
+}
+
+// Added to a cut-off part before its one retry at twice the output budget.
+export const PROMPT_SYNTHESIS_RETRY_LINE =
+  'The previous answer was cut off. Answer the same request more tightly: fewer words per point, no repetition.';
+
 export const JUDGE_PROMPT = [
   'You report which of two parties an excerpt of a legal contract favours.',
   UNTRUSTED_NOTICE,

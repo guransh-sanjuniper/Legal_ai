@@ -48,7 +48,9 @@ import {
   statutorySentences,
   type ModelPointSentence,
 } from './overviewPoints';
-import { synthesiseAnswers } from './promptPass';
+import { synthesiseAnswers, runPromptPass } from './promptPass';
+import { evidenceChunkIndexes, selectEvidenceChunks } from './promptEvidence';
+import { promptDepth } from './promptShape';
 import { normalizeQuote } from './verify';
 import {
   applyVerdicts,
@@ -65,6 +67,7 @@ import type {
   CrossClauseResult,
   DropRecord,
   MissingProtection,
+  PromptAnswer,
   PromptResult,
   RiskReviewStats,
   RollupSentence,
@@ -574,20 +577,20 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
       `deduped ${dedupeStats.removed} repeated items`,
   );
 
-  // 2d. Inline custom prompt: verified promptAnswer quotes from the clause calls, then one
-  // synthesis. There is no separate per-chunk prompt pass.
+  // 2d. Inline custom prompt: verified promptAnswer quotes from the clause calls, plus a coverage
+  // pass over extra sections for a broad or list-type request, then one answer per request part.
   let promptResult: PromptResult | undefined;
   if (request.customPrompt) {
     const seenQuote = new Set<string>();
-    const answers = promptLocated
+    const inlineAnswers: PromptAnswer[] = promptLocated
       .filter((v) => {
         const key = `${v.item.page}|${normalizeQuote(v.item.quote)}`;
         if (seenQuote.has(key)) return false;
         seenQuote.add(key);
         return true;
       })
-      .map((v, i) => ({
-        itemId: `PQ${i + 1}`,
+      .map((v) => ({
+        itemId: '',
         text: v.item.quote.trim(),
         clause: v.item.clause,
         page: v.item.page,
@@ -595,25 +598,116 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
         verified: true as const,
         part: 'support' as const,
       }));
-    progress(`custom prompt: ${answers.length} verified quote(s) from the clause calls`);
-    // Retry: the synthesis input changed when clause tasks were re-run, so run it again.
-    const synth = await synthesiseAnswers({ ctx, runId, doc, prompt: request.customPrompt, answers, retry: opts.retryFailed ?? false });
+    const depth = promptDepth(request.customPrompt);
+    progress(`custom prompt: ${inlineAnswers.length} verified quote(s) from the clause calls`);
+
+    // Coverage: broad and list-type requests read extra sections found by search and by the
+    // request's own terms. Every quote is verified and then guarded exactly like the inline ones.
+    let extraAnswers: PromptAnswer[] = [];
+    let coverageFailed: PromptResult['failedChunks'] = [];
+    let readSections: number | null = null;
+    let moreSections: number | null = null;
+    if (depth.breadth > 0) {
+      const byIndex = new Map(chunks.map((c) => [c.index, c]));
+      let selectedIndexes: number[] | null = null;
+      if (opts.retryFailed) {
+        const prior = evidenceChunkIndexes((await db.getAllFromIndex('tasks', 'byRun', runId)).map((t) => t.id));
+        if (prior.length > 0) selectedIndexes = prior.slice(0, depth.breadth);
+      }
+      if (!selectedIndexes) {
+        let hits: SearchHitLite[] = [];
+        try {
+          hits = await opts.docSearch(request.customPrompt, depth.breadth * 2);
+        } catch (e) {
+          log(`coverage search failed: ${String(e)}`);
+        }
+        const selection = selectEvidenceChunks(chunks, hits, request.customPrompt, depth.breadth);
+        selectedIndexes = selection.indexes;
+        moreSections = selection.more;
+      }
+      const selected = selectedIndexes.map((i) => byIndex.get(i)).filter((c): c is AnalysisChunk => Boolean(c));
+      if (selected.length > 0) {
+        progress(`coverage pass: reading ${selected.length} extra section(s) for the custom prompt`);
+        // The custom pass is a non-reasoning call, like the rest of the Prompt Result.
+        const pass = await runPromptPass({
+          ctx: { ...ctx, reasoning: null },
+          runId,
+          doc,
+          chunks: selected,
+          index,
+          defsContext,
+          request: request.customPrompt,
+          reviewingFor: request.reviewingFor,
+          maxTokens: 1200,
+        });
+        for (const r of pass.runs) {
+          addLimits(r);
+          await pauseIfNeeded(r);
+        }
+        extraAnswers = pass.result.answers;
+        coverageFailed = pass.result.failedChunks;
+        readSections = selected.length;
+      } else {
+        readSections = 0;
+      }
+      progress(`custom prompt: ${extraAnswers.length} verified answer(s) from the coverage pass`);
+    }
+
+    // Extra evidence first (it carries a direct answer and a reason), then the clause quotes.
+    const merged: PromptAnswer[] = [];
+    const seenKey = new Set<string>();
+    for (const a of [...extraAnswers, ...inlineAnswers]) {
+      const key = `${a.page}|${normalizeQuote(a.quote)}`;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
+      merged.push({ ...a, itemId: `PA${merged.length + 1}` });
+    }
+
+    // Retry: the answer input changed when the clause tasks were re-run, so run it again.
+    const synth = await synthesiseAnswers({
+      ctx,
+      runId,
+      doc,
+      prompt: request.customPrompt,
+      answers: merged,
+      retry: opts.retryFailed ?? false,
+      opts: {
+        parts: depth.parts,
+        maxAnswerTokens: depth.maxAnswerTokens,
+        structured: true,
+        ...(readSections !== null ? { readSections } : {}),
+        ...(moreSections !== null ? { moreSections } : {}),
+      },
+    });
     for (const r of synth.runs) {
       addLimits(r);
       await pauseIfNeeded(r);
     }
     const failedCodes = [...new Set(synth.runs.flatMap((r) => r.tasks).filter((t) => t.status === 'failed').map((t) => t.failureCode ?? 'failed'))];
+    const parts = synth.parts ?? [];
+    const allPartsFailed = parts.length > 0 && parts.every((p) => p.error);
     promptResult = {
       prompt: request.customPrompt,
       // Only quotes that state the request's subject (or that the second-chance check accepted) are shown.
       answers: synth.answers,
       answer: synth.answer,
+      ...(synth.parts ? { parts: synth.parts } : {}),
+      ...(synth.truncated ? { truncated: true } : {}),
+      ...(readSections !== null || synth.dropped > 0
+        ? {
+            stats: {
+              excluded: synth.dropped,
+              ...(readSections !== null ? { readSections } : {}),
+              ...(moreSections !== null ? { moreSections } : {}),
+            },
+          }
+        : {}),
       ...(synth.relevance && synth.relevance.checked > 0 ? { relevanceCheck: synth.relevance } : {}),
       mode: 'inline',
       chunksTotal: chunks.length,
       chunksDone: chunks.length,
-      failedChunks: [],
-      ...(failedCodes.length
+      failedChunks: coverageFailed,
+      ...(failedCodes.length && (parts.length === 0 || allPartsFailed)
         ? { error: `Answer generation failed (${failedCodes.join(', ')}). The verified quotes are listed below.` }
         : {}),
     };

@@ -18,6 +18,12 @@ export const ANALYSIS_TIMEOUT_MS = 110_000;
 export const CONCURRENCY = Math.max(1, Number((import.meta.env.VITE_CONCURRENCY as string) || 3));
 /// Chunks read by a post-report prompt in retrieval mode.
 export const PROMPT_RETRIEVAL_CHUNKS = Math.max(1, Number((import.meta.env.VITE_PROMPT_RETRIEVAL_CHUNKS as string) || 12));
+// Deep Analysis Prompt Result only: extra sections read for a broad or list-type request.
+export const DEEP_PROMPT_EVIDENCE_CHUNKS = Math.max(0, Number((import.meta.env.VITE_DEEP_PROMPT_EVIDENCE_CHUNKS as string) || 10));
+// Deep Analysis Prompt Result only: the request is answered one part per call, up to this many.
+export const DEEP_PROMPT_MAX_PARTS = 6;
+// A part whose answer is cut off gets one retry at twice the output budget, never above this.
+export const DEEP_PROMPT_MAX_ANSWER_TOKENS = 6000;
 export const INITIAL_MAX_TOKENS = 2600;
 export const BUDGET_FACTOR = 1.5;
 export const MIN_BUDGET_TOKENS = 600;

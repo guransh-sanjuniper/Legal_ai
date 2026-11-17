@@ -82,8 +82,12 @@ export function scriptedModel(req: CallRequest): string {
     const batch = JSON.parse(req.input) as { id: string }[];
     return JSON.stringify(batch.map((r) => ({ id: r.id, verdict: 'keep', reason: 'genuine risk' })));
   }
-  if (req.prompt.includes('final answer to a user request')) {
-    const answers = JSON.parse(req.input.slice(req.input.indexOf('Verified answers:\n') + 18));
+  if (req.prompt.includes('final answer to a user request') || req.prompt.includes('final answer to one part of a user request')) {
+    // The answer input carries the verified answers on one JSON line, followed by a coverage note.
+    const marker = 'Verified answers:\n';
+    const at = req.input.indexOf(marker);
+    const line = at >= 0 ? req.input.slice(at + marker.length).split('\n')[0] : '[]';
+    const answers = JSON.parse(line) as { id: string }[];
     const first = answers[0];
     return JSON.stringify([{ text: 'Clause two states the obligation.', cites: first ? [first.id] : [] }]);
   }
