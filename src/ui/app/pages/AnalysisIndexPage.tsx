@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import { openHarnessDb, type DocumentRecord } from '../../../runner/db';
 import { isPrepared } from '../../library/preparationState';
 import { PageHeader } from './Placeholder';
+import { useDeveloperMode } from '../../devMode';
 
 export function AnalysisIndexPage() {
+  const [devOn] = useDeveloperMode();
   const [docs, setDocs] = useState<DocumentRecord[] | null>(null);
 
   useEffect(() => {
@@ -56,7 +58,7 @@ export function AnalysisIndexPage() {
               <Link to={`/analysis/${doc.id}`} className="app-doc-list-item">
                 <span className="app-doc-list-name">{doc.name}</span>
                 <span className="app-doc-meta">
-                  {doc.pageCount} pages · {doc.chunkCount} chunks
+                  {doc.pageCount} pages{devOn ? ` · ${doc.chunkCount} chunks` : ''}
                 </span>
               </Link>
             </li>

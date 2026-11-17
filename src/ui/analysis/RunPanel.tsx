@@ -1,4 +1,5 @@
 import type { AnalysisMetrics } from '../../analysis/types';
+import { useDeveloperMode } from '../devMode';
 
 export interface RunProgress {
   total: number;
@@ -45,23 +46,28 @@ export function RunPanel({
   onRetry: () => void;
 }) {
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const [devOn] = useDeveloperMode();
   return (
     <div className="ana-run">
       {error && <div className="app-banner app-banner--error">{error}</div>}
-      {status && <p className="app-muted">{status}</p>}
+      {/* While a run is going, the status feed is engine detail. Outcomes stay visible after it. */}
+      {status && (devOn || !running) && <p className="app-muted">{status}</p>}
+      {!devOn && running && <p className="app-muted">Working…</p>}
 
       {progress && (
         <>
           <div className="app-progress" aria-label="Progress">
             <div className="app-progress-bar" style={{ width: `${pct}%` }} />
           </div>
-          <p className="app-muted">
-            {progress.done} of {progress.total} tasks done · {progress.active} active · {progress.failed} failed
-          </p>
+          {devOn && (
+            <p className="app-muted">
+              {progress.done} of {progress.total} tasks done · {progress.active} active · {progress.failed} failed
+            </p>
+          )}
         </>
       )}
 
-      {metrics && (
+      {devOn && metrics && (
         <dl className="ana-metrics">
           <dt>Calls</dt>
           <dd>{metrics.calls}</dd>
@@ -89,7 +95,14 @@ export function RunPanel({
         )}
       </div>
 
-      {failedRows.length > 0 && (
+      {!devOn && failedRows.length > 0 && (
+        <p className="app-muted">
+          {failedRows.length} part{failedRows.length === 1 ? '' : 's'} could not be completed.
+          {canRetry ? ' Use Retry failed only to run them again.' : ''}
+        </p>
+      )}
+
+      {devOn && failedRows.length > 0 && (
         <div className="app-table-wrap">
           <table className="app-table">
             <thead>

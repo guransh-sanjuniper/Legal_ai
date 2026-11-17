@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { supabaseProjectHost, supabaseTarget } from '../../lib/supabase';
+import { useDeveloperMode } from '../devMode';
 import type { Theme } from './theme';
 
 type IconName = 'plus' | 'chat' | 'document' | 'analysis' | 'draft' | 'compare' | 'sun' | 'moon';
@@ -88,6 +89,7 @@ interface SidebarProps {
 
 export function Sidebar({ email, theme, onToggleTheme, onSignOut }: SidebarProps) {
   const initial = email.trim().charAt(0).toUpperCase() || '?';
+  const [devOn, setDevOn] = useDeveloperMode();
   return (
     <aside className="app-sidebar">
       <div className="app-brand">
@@ -121,14 +123,21 @@ export function Sidebar({ email, theme, onToggleTheme, onSignOut }: SidebarProps
 
       <div className="app-sidebar-spacer" />
 
-      <details className="app-dev">
-        <summary>Dev: pipeline pages</summary>
-        <a href="/?page=ingest">Ingest</a>
-        <a href="/?page=search">Search</a>
-        <a href="/?page=analysis">Analysis</a>
-        <a href="/?page=quality">Quality</a>
-        <a href="/?page=test">P1 test</a>
-      </details>
+      <label className="app-dev-mode">
+        <input type="checkbox" checked={devOn} onChange={(e) => setDevOn(e.target.checked)} />
+        <span>Developer mode</span>
+      </label>
+
+      {devOn && (
+        <details className="app-dev">
+          <summary>Dev: pipeline pages</summary>
+          <a href="/?page=ingest">Ingest</a>
+          <a href="/?page=search">Search</a>
+          <a href="/?page=analysis">Analysis</a>
+          <a href="/?page=quality">Quality</a>
+          <a href="/?page=test">P1 test</a>
+        </details>
+      )}
 
       <div className="app-account">
         <div className="app-account-row">
@@ -149,12 +158,16 @@ export function Sidebar({ email, theme, onToggleTheme, onSignOut }: SidebarProps
           </button>
         </div>
         <div className="app-account-meta">
-          <span className={`app-env app-env--${supabaseTarget}`}>
-            {supabaseTarget === 'unknown' ? 'Supabase' : supabaseTarget}
-          </span>
-          <span className="app-account-host" title={supabaseProjectHost}>
-            {supabaseProjectHost}
-          </span>
+          {devOn && (
+            <>
+              <span className={`app-env app-env--${supabaseTarget}`}>
+                {supabaseTarget === 'unknown' ? 'Supabase' : supabaseTarget}
+              </span>
+              <span className="app-account-host" title={supabaseProjectHost}>
+                {supabaseProjectHost}
+              </span>
+            </>
+          )}
           <button type="button" className="app-link-button" onClick={onSignOut}>
             Sign out
           </button>

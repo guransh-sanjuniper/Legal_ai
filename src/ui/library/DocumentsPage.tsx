@@ -12,6 +12,7 @@ import { countWaivedPages, waiveUnresolvedPages } from '../../ingest/review';
 import { getActiveDocId, runPreparation, subscribePreparation } from './prepare';
 import { documentLock, removeDocumentWhenIdle } from './removeDocument';
 import { PageHeader } from '../app/pages/Placeholder';
+import { useDeveloperMode } from '../devMode';
 import {
   clearFinishedImports,
   enqueueFiles,
@@ -107,6 +108,7 @@ interface PreparedCacheEntry {
 
 export function DocumentsPage() {
   const navigate = useNavigate();
+  const [devOn] = useDeveloperMode();
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
   const [reviewCounts, setReviewCounts] = useState<Record<string, number>>({});
@@ -473,15 +475,17 @@ export function DocumentsPage() {
         }
       />
 
-      <div className="app-storage-line">
-        {storageLine}
-        {persisted === false && (
-          <span className="app-storage-warn">
-            Storage is not persistent: the browser may clear documents. Remove unused documents to free space.
-          </span>
-        )}
-        {persisted === true && <span className="app-muted">Storage is protected on this device.</span>}
-      </div>
+      {devOn || persisted !== null ? (
+        <div className="app-storage-line">
+          {devOn && storageLine}
+          {persisted === false && (
+            <span className="app-storage-warn">
+              Storage is not persistent: the browser may clear documents. Remove unused documents to free space.
+            </span>
+          )}
+          {persisted === true && <span className="app-muted">Storage is protected on this device.</span>}
+        </div>
+      ) : null}
       <p className="library-format-hint">
         PDF, Word (.docx), text (.txt or .md) and image (.png or .jpg) files. Files are converted to PDF before
         preparation; page numbers refer to the converted version. Up to {maxFileLabel()} per converted file.
@@ -678,11 +682,11 @@ export function DocumentsPage() {
                   state,
                   reviewPages: reviewCounts[doc.id] ?? 0,
                 });
-                const label = statusLabel(status, reviewCounts[doc.id] ?? 0, state?.stage);
+                const label = statusLabel(status, reviewCounts[doc.id] ?? 0, devOn ? state?.stage : null);
                 const waivedPages = waivedCounts[doc.id] ?? 0;
                 const current = state?.progress;
                 const statusText =
-                  status === 'preparing' && current && current.total > 0
+                  status === 'preparing' && devOn && current && current.total > 0
                     ? `${label} ${current.done}/${current.total}`
                     : status === 'ready'
                       ? readyLabel(waivedPages)
@@ -698,7 +702,7 @@ export function DocumentsPage() {
                       </button>
                       <span className="app-doc-meta">
                         Added {formatDate(doc.createdAt)}
-                        {doc.chunkCount > 0 ? ` · ${doc.chunkCount} chunks` : ''}
+                        {devOn && doc.chunkCount > 0 ? ` · ${doc.chunkCount} chunks` : ''}
                         {status === 'ready' && state?.preparedAt ? ` · Prepared ${formatDate(state.preparedAt)}` : ''}
                       </span>
                       {conversion && (
@@ -718,12 +722,13 @@ export function DocumentsPage() {
                           {conversion.warnings.length > 1 ? ` (+${conversion.warnings.length - 1} more)` : ''}
                         </span>
                       )}
-                      {status === 'preparing' && state?.message && (
+                      {devOn && status === 'preparing' && state?.message && (
                         <span className="app-stage-label">{state.message}</span>
                       )}
                       {status === 'failed' && failed && (
                         <span className="app-row-error">
-                          {stageLabel(failed.stage)}: {failed.message}
+                          {devOn ? `${stageLabel(failed.stage)}: ` : ''}
+                          {failed.message}
                         </span>
                       )}
                       {status === 'preparing' && (

@@ -21,6 +21,7 @@ import { supabase } from '../../../lib/supabase';
 import { StartForm, type StartFormValues } from '../../analysis/StartForm';
 import { RunPanel, type FailedRow, type RunProgress } from '../../analysis/RunPanel';
 import { ReportView } from '../../analysis/ReportView';
+import { useDeveloperMode } from '../../devMode';
 import { CitationPanel } from '../../analysis/CitationPanel';
 import { ExportBar } from '../../analysis/ExportBar';
 import { freshToken, functionsEndpoint, readRunRecord, withDocumentLock, writeRunRecord, taskLabel, type RunRecord } from '../../analysis/runtime';
@@ -41,6 +42,7 @@ const SUMMARY_CHARS_PER_CLAUSE = 300;
 export function AnalysisDocPage() {
   const { docId } = useParams<{ docId: string }>();
   const auth = useAuth();
+  const [devOn] = useDeveloperMode();
   const session = auth.session;
 
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
@@ -293,14 +295,18 @@ export function AnalysisDocPage() {
   }
 
   const status0 = libraryStatusFrom({ doc, prepared, state: prepState, reviewPages: 0 });
-  const label = statusLabel(status0, prepState?.review?.pages ?? 0, prepState?.stage);
+  const label = statusLabel(status0, prepState?.review?.pages ?? 0, devOn ? prepState?.stage : null);
+  // With Developer mode off the counters, metrics and failed-task table are hidden, so an idle
+  // run card can be empty. Hide it rather than leave a blank card. On, it is always shown.
+  const runPanelVisible =
+    devOn || Boolean(running || error || status || progress || canResume || canRetry || failedRows.length > 0);
 
   return (
     <>
       <PageHeader
         eyebrow="Module"
         title={doc.name}
-        description={`${doc.pageCount} pages · ${doc.chunkCount} chunks · prepared on this device`}
+        description={`${doc.pageCount} pages${devOn ? ` · ${doc.chunkCount} chunks` : ''} · prepared on this device`}
         actions={<span className={`app-chip app-chip--${statusTone(status0)}`}>{label}</span>}
       />
 
@@ -308,12 +314,20 @@ export function AnalysisDocPage() {
         <EmptyCard title="This document is not ready yet">
           <p>
             {prepState?.stage === 'failed'
-              ? `Preparation failed at ${stageLabel(prepState.failed?.stage ?? null)}: ${prepState.failed?.message ?? 'unknown error'}`
+              ? devOn
+                ? `Preparation failed at ${stageLabel(prepState.failed?.stage ?? null)}: ${prepState.failed?.message ?? 'unknown error'}`
+                : `Preparation failed: ${prepState.failed?.message ?? 'unknown error'}`
               : 'Finish preparation and page review first. Analysis never runs on pages that are still unresolved.'}
           </p>
-          <a className="app-primary-button" href={`/?page=ingest&doc=${encodeURIComponent(doc.id)}`}>
-            Open preparation page
-          </a>
+          {devOn ? (
+            <a className="app-primary-button" href={`/?page=ingest&doc=${encodeURIComponent(doc.id)}`}>
+              Open preparation page
+            </a>
+          ) : (
+            <Link className="app-primary-button" to="/documents">
+              Go to Documents
+            </Link>
+          )}
         </EmptyCard>
       ) : (
         <>
@@ -333,25 +347,27 @@ export function AnalysisDocPage() {
                 />
               </div>
             </section>
-            <section className="ana-card ana-card--static">
-              <div className="ana-card-head ana-card-head--static">
-                <span className="ana-card-title">Progress and failures</span>
-              </div>
-              <div className="ana-card-body">
-                <RunPanel
-                  running={running}
-                  status={status}
-                  error={error}
-                  progress={progress}
-                  metrics={metrics}
-                  failedRows={failedRows}
-                  canResume={canResume}
-                  canRetry={canRetry}
-                  onResume={() => execute('resume')}
-                  onRetry={() => execute('retry')}
-                />
-              </div>
-            </section>
+            {runPanelVisible && (
+              <section className="ana-card ana-card--static">
+                <div className="ana-card-head ana-card-head--static">
+                  <span className="ana-card-title">Progress and failures</span>
+                </div>
+                <div className="ana-card-body">
+                  <RunPanel
+                    running={running}
+                    status={status}
+                    error={error}
+                    progress={progress}
+                    metrics={metrics}
+                    failedRows={failedRows}
+                    canResume={canResume}
+                    canRetry={canRetry}
+                    onResume={() => execute('resume')}
+                    onRetry={() => execute('retry')}
+                  />
+                </div>
+              </section>
+            )}
           </div>
 
           {model ? (

@@ -12,6 +12,7 @@ import {
   type RiskRow,
 } from '../../analysis/reportModel';
 import { NOT_CLEAR_ANSWER } from '../../analysis/promptPass';
+import { useDeveloperMode } from '../devMode';
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -74,7 +75,9 @@ function PromptSentences({ sentences }: { sentences: PromptResultSentenceView[] 
 }
 
 // Small coverage line so the reader can judge how much of the document the answer read.
-export function promptStatsLine(s: PromptResultStatsView): string {
+// Developer mode adds the internal guard and coverage counts; the passage count and page range are
+// user-facing and always shown.
+export function promptStatsLine(s: PromptResultStatsView, detailed = true): string {
   const range =
     s.pageStart === null || s.pageEnd === null
       ? ''
@@ -82,10 +85,10 @@ export function promptStatsLine(s: PromptResultStatsView): string {
         ? ` from page ${s.pageStart}`
         : ` from pages ${s.pageStart}–${s.pageEnd}`;
   const lines = [`Based on ${s.cited} passage${s.cited === 1 ? '' : 's'}${range}.`];
-  if (s.excluded > 0) {
+  if (detailed && s.excluded > 0) {
     lines.push(`${s.excluded} quote${s.excluded === 1 ? ' was' : 's were'} not relevant to the request and ${s.excluded === 1 ? 'is' : 'are'} not used.`);
   }
-  if (s.readSections) {
+  if (detailed && s.readSections) {
     const more = s.moreSections ? `; ${s.moreSections} matching section${s.moreSections === 1 ? '' : 's'} not read` : '';
     lines.push(`${s.readSections} extra section${s.readSections === 1 ? '' : 's'} read for coverage${more}.`);
   }
@@ -189,12 +192,15 @@ function ClauseTable({ clause, onCite }: { clause: ClauseView; onCite: (c: Citat
 }
 
 function ClauseBreakdown({ clauses, onCite, stats }: { clauses: ClauseView[]; onCite: (c: Citation) => void; stats: ReportModel['merge'] }) {
+  const [devOn] = useDeveloperMode();
   return (
     <>
-      <p className="app-muted">
-        {stats.entries} stored entries → {stats.rows} clause rows. {stats.placed} unnumbered entries placed by their quotes or chunk; {stats.merged} merged
-        into another row; {stats.unmerged} kept separate because they could not be placed.
-      </p>
+      {devOn && (
+        <p className="app-muted">
+          {stats.entries} stored entries → {stats.rows} clause rows. {stats.placed} unnumbered entries placed by their quotes or chunk; {stats.merged} merged
+          into another row; {stats.unmerged} kept separate because they could not be placed.
+        </p>
+      )}
       {clauses.length === 0 && <p className="app-muted">No clauses were analysed.</p>}
       {clauses.map((c) => (
         <Card
@@ -204,8 +210,8 @@ function ClauseBreakdown({ clauses, onCite, stats }: { clauses: ClauseView[]; on
           right={
             <span className="ana-card-chips">
               {c.topPriority && <PriorityChip level={c.topPriority} />}
-              {c.unplaced && <Badge>unplaced entry</Badge>}
-              {c.sourceEntries > 1 && <Badge>merged from {c.sourceEntries}</Badge>}
+              {devOn && c.unplaced && <Badge>unplaced entry</Badge>}
+              {devOn && c.sourceEntries > 1 && <Badge>merged from {c.sourceEntries}</Badge>}
             </span>
           }
           defaultOpen={false}
@@ -280,6 +286,7 @@ function SectionBody({
   model: ReportModel;
   onScanWhole?: () => void;
 }) {
+  const [devOn] = useDeveloperMode();
   switch (section.key) {
     case 'overview':
       return (
@@ -311,7 +318,7 @@ function SectionBody({
       return (
         <>
           <p className="app-muted">Prompt: “{section.prompt}”</p>
-          {section.modeLine && <p className="app-muted">{section.modeLine}</p>}
+          {devOn && section.modeLine && <p className="app-muted">{section.modeLine}</p>}
           {section.canScanWhole && onScanWhole && (
             <button type="button" className="app-link-button" onClick={onScanWhole}>
               Scan whole document
@@ -336,7 +343,7 @@ function SectionBody({
             ))
           )}
           {section.stats && section.stats.cited > 0 && (section.parts ?? []).some((p) => p.sentences.length > 0) && (
-            <p className="ana-note">{promptStatsLine(section.stats)}</p>
+            <p className="ana-note">{promptStatsLine(section.stats, devOn)}</p>
           )}
           {(section.sources ?? []).length > 0 && (
             <div className="ana-prompt-sources">
@@ -356,10 +363,16 @@ function SectionBody({
               </ol>
             </div>
           )}
-          <p className="app-muted">
-            Chunks answered {section.chunksDone} of {section.chunksTotal}.
-            {section.failed.length > 0 && <> Not answered: {section.failed.join('; ')}.</>}
-          </p>
+          {devOn ? (
+            <p className="app-muted">
+              Chunks answered {section.chunksDone} of {section.chunksTotal}.
+              {section.failed.length > 0 && <> Not answered: {section.failed.join('; ')}.</>}
+            </p>
+          ) : (
+            section.failed.length > 0 && (
+              <p className="app-muted">Some sections could not be read, so this answer may be incomplete.</p>
+            )
+          )}
         </>
       );
     case 'clauses':
@@ -449,11 +462,11 @@ function SectionBody({
     case 'risks':
       return (
         <>
-          {section.reviewLine && <p className="app-muted">{section.reviewLine}</p>}
+          {devOn && section.reviewLine && <p className="app-muted">{section.reviewLine}</p>}
           <h4>Risks</h4>
           <RiskTable rows={section.risks} onCite={onCite} />
           <h4>Missing clauses and protections</h4>
-          {section.missingLine && <p className="app-muted">{section.missingLine}</p>}
+          {devOn && section.missingLine && <p className="app-muted">{section.missingLine}</p>}
           <RiskTable rows={section.missing} onCite={onCite} />
           {section.possiblyMissing.length > 0 && (
             <>
@@ -464,7 +477,7 @@ function SectionBody({
               <RiskTable rows={section.possiblyMissing} onCite={onCite} />
             </>
           )}
-          {section.missingDrops.length > 0 && (
+          {devOn && section.missingDrops.length > 0 && (
             <details className="ana-drops">
               <summary>Dropped by search ({section.missingDrops.length})</summary>
               <ul className="ana-list">
@@ -476,7 +489,7 @@ function SectionBody({
               </ul>
             </details>
           )}
-          {section.drops.length > 0 && (
+          {devOn && section.drops.length > 0 && (
             <details className="ana-drops">
               <summary>Validation drops ({section.drops.length})</summary>
               <ul className="ana-list">

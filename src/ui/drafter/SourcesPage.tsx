@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { PageHeader } from '../app/pages/Placeholder';
+import { useDeveloperMode } from '../devMode';
 import { chosenCandidate, resolvePageRange, sourceTextStale } from '../../drafter/resolveRef';
 import { getDraft, openDrafterDb, updateDraft, type DrafterDBHandle } from '../../drafter/store';
 import { syncDraftById } from '../../drafter/sync';
@@ -40,6 +41,7 @@ function hasUsableText(sourceText: SourceText): boolean {
 export function SourcesPage() {
   const { draftId } = useParams();
   const navigate = useNavigate();
+  const [devOn] = useDeveloperMode();
 
   const [db, setDb] = useState<DrafterDBHandle | null>(null);
   const [draft, setDraft] = useState<DraftRecord | null>(null);
@@ -295,7 +297,7 @@ export function SourcesPage() {
                   <h2>
                     {alias} — {binding?.appliesTo || binding?.target.value || 'source'}
                   </h2>
-                  <span className="app-chip app-chip--neutral">{binding?.useMode ?? 'adapt'}</span>
+                  {devOn && <span className="app-chip app-chip--neutral">{binding?.useMode ?? 'adapt'}</span>}
                 </div>
                 <p className="app-muted drafter-source-status">{statusText(resolution)}</p>
                 {resolution.note && <p className="drafter-source-note">{resolution.note}</p>}

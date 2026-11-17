@@ -29,6 +29,7 @@ import { describePass } from '../../../chat/estimate';
 import { scanNote } from '../../../chat/scanFilter';
 import { formatMessageTime } from '../../../chat/format';
 import { CopyButton } from '../../chat/CopyButton';
+import { useDeveloperMode } from '../../devMode';
 import { openHarnessDb, type HarnessDBHandle } from '../../../runner/db';
 import { isPrepared } from '../../library/preparationState';
 import { RetrievalClient } from '../../../retrieval/client';
@@ -567,6 +568,7 @@ function Bubble({
   note?: string;
   onOpenCitation: (docId: string, c: Citation) => void;
 }) {
+  const [devOn] = useDeveloperMode();
   if (message.role === 'user') {
     return (
       <div className="app-chat-msg app-chat-msg--user">
@@ -581,7 +583,8 @@ function Bubble({
     <div className="app-chat-msg app-chat-msg--assistant">
       {message.mode && message.documentName && (
         <p className="app-chat-doc-tag">
-          {message.documentName} · {MODE_LABEL[message.mode]}
+          {message.documentName}
+          {devOn ? ` · ${MODE_LABEL[message.mode]}` : ''}
         </p>
       )}
       <Markdown text={message.content} />

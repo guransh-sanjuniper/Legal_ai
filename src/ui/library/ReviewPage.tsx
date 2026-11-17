@@ -7,6 +7,7 @@ import { startPageOcr } from './ingestRunner';
 import { getActiveDocId, runPreparation } from './prepare';
 import { libraryStatus, readyLabel, statusLabel, statusTone } from './docStatus';
 import { EmptyCard, PageHeader } from '../app/pages/Placeholder';
+import { useDeveloperMode } from '../devMode';
 
 const DECISION_TEXT: Record<ReviewDecision, string> = {
   accept: 'OCR text accepted',
@@ -32,6 +33,7 @@ const reasonLabel = (reason: string | null) =>
 
 export function ReviewPage() {
   const { docId = '' } = useParams();
+  const [devOn] = useDeveloperMode();
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -249,17 +251,25 @@ export function ReviewPage() {
               <h2>
                 Page {page.pageNo} · {pageState(page)}
               </h2>
-              <div className="app-muted">
-                {page.reason ? `${reasonLabel(page.reason)} · ` : ''}
-                {page.dpi ? `OCR ${page.dpi} DPI` : 'no OCR'}
-                {page.ocrPsm ? ` · PSM ${page.ocrPsm}` : ''}
-                {page.ocrConfidence != null ? ` · ${Math.round(page.ocrConfidence)}% confidence` : ''}
-                {page.ocrWords != null ? ` · ${page.ocrWords} words` : ''}
-              </div>
+              {devOn && (
+                <div className="app-muted">
+                  {page.reason ? `${reasonLabel(page.reason)} · ` : ''}
+                  {page.dpi ? `OCR ${page.dpi} DPI` : 'no OCR'}
+                  {page.ocrPsm ? ` · PSM ${page.ocrPsm}` : ''}
+                  {page.ocrConfidence != null ? ` · ${Math.round(page.ocrConfidence)}% confidence` : ''}
+                  {page.ocrWords != null ? ` · ${page.ocrWords} words` : ''}
+                </div>
+              )}
               {page.reason === 'render_decode_failed' && (
                 <div className="app-banner app-banner--error">
-                  The PDF page has images but the rendered canvas is almost blank. Check that <code>/wasm/</code> is served with the
-                  pdf.js wasm files.
+                  {devOn ? (
+                    <>
+                      The PDF page has images but the rendered canvas is almost blank. Check that <code>/wasm/</code> is served with the
+                      pdf.js wasm files.
+                    </>
+                  ) : (
+                    <>This page did not render, so the image may look blank. Retry OCR, or proceed without reviewing.</>
+                  )}
                 </div>
               )}
             </div>

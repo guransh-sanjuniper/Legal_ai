@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../app/pages/Placeholder';
 import { assemble, exportGate } from '../../drafter/assemble';
 import { isOutlineStale } from '../../drafter/outline';
+import { useDeveloperMode } from '../devMode';
 import { sourceTextReady, sourceTextStale } from '../../drafter/resolveRef';
 import { itemFingerprint, renderClauseText } from '../../drafter/write';
 import { estimateWriting } from '../../drafter/writeEstimate';
@@ -62,6 +63,7 @@ function plural(count: number, word: string): string {
 
 export function WritePage() {
   const { draftId } = useParams();
+  const [devOn] = useDeveloperMode();
   const navigate = useNavigate();
 
   const [db, setDb] = useState<DrafterDBHandle | null>(null);
@@ -374,9 +376,8 @@ export function WritePage() {
     const started = new Date(run.startedAt).getTime();
     const finished = new Date(run.finishedAt).getTime();
     if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return null;
-    return `Finished in ${formatRunDuration(finished - started)} · ${run.retries} ${
-      run.retries === 1 ? 'retry' : 'retries'
-    }`;
+    const duration = `Finished in ${formatRunDuration(finished - started)}`;
+    return devOn ? `${duration} · ${run.retries} ${run.retries === 1 ? 'retry' : 'retries'}` : duration;
   })();
 
   function aliasFor(record: ClauseRecord): string {
@@ -459,7 +460,7 @@ export function WritePage() {
                   ? 'All sections written'
                   : 'Progress'}
             </h2>
-            {state.counts.writing > 0 && (
+            {devOn && state.counts.writing > 0 && (
               <span className="app-muted drafter-progress-now">{state.counts.writing} writing now</span>
             )}
           </div>

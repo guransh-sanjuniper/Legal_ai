@@ -4,6 +4,7 @@ import { openHarnessDb, type DocumentRecord } from '../../runner/db';
 import { openPdf, closePdf, type PdfDoc } from '../../ingest/pdfPages';
 import { locateQuote } from '../../analysis/citationLocate';
 import type { Citation } from '../../analysis/reportModel';
+import { useDeveloperMode } from '../devMode';
 
 interface PdfTextItem {
   str: string;
@@ -23,6 +24,7 @@ type State =
 export function CitationPanel({ docId, citation, onClose }: { docId: string; citation: Citation | null; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState<State>({ status: 'loading' });
+  const [devOn] = useDeveloperMode();
 
   useEffect(() => {
     if (!citation) return;
@@ -89,7 +91,11 @@ export function CitationPanel({ docId, citation, onClose }: { docId: string; cit
       {state.status === 'no-pdf' && (
         <p className="ana-note">This document is not stored on this device, so the page cannot be shown. The stored quote is below.</p>
       )}
-      {state.status === 'error' && <p className="ana-note">The page could not be rendered ({state.message}). The stored quote is below.</p>}
+      {state.status === 'error' && (
+        <p className="ana-note">
+          The page could not be rendered{devOn ? ` (${state.message})` : ''}. The stored quote is below.
+        </p>
+      )}
       {state.status === 'ready' && !state.found && (
         <p className="ana-note">The quote could not be located on this page (it may be scanned or reflowed). The stored quote is below.</p>
       )}
