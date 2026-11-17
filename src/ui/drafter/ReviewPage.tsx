@@ -1,7 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageHeader } from '../app/pages/Placeholder';
-import { assemble, draftFileName, exportGate, type DraftBlock, type DraftStats } from '../../drafter/assemble';
+import {
+  assemble,
+  draftFileName,
+  exportGate,
+  headingLabel,
+  type DraftBlock,
+  type DraftStats,
+} from '../../drafter/assemble';
 import { buildDraftDocx } from '../../drafter/export/docx';
 import { getDraft, openDrafterDb, type DrafterDBHandle } from '../../drafter/store';
 import type { DraftRecord } from '../../drafter/types';
@@ -39,7 +46,8 @@ function DocumentView({ blocks }: { blocks: DraftBlock[] }) {
               </p>
             );
           case 'heading': {
-            const label = block.number ? `${block.number} ${block.text}` : block.text;
+            // Same label as the Word file: a schedule number the title repeats is not shown twice.
+            const label = headingLabel(block);
             return block.level === 1 ? (
               <h2 key={index}>{label}</h2>
             ) : (

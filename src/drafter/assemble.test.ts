@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assemble, draftFileName, exportGate } from './assemble';
+import { assemble, draftFileName, exportGate, headingLabel, headingTitle, listLines } from './assemble';
 import { itemFingerprint } from './write';
 import type { ClauseRecord, DraftRecord, OutlineItem, SourcePlan } from './types';
 
@@ -243,6 +243,65 @@ describe('draft assembly', () => {
     expect(draftFileName({ title: '', sourcePlan: null }, new Date('2026-01-02T00:00:00.000Z'))).toBe(
       'Draft 2026-01-02.docx',
     );
+  });
+
+  it('carries the outline kind on each heading block', () => {
+    const items = [
+      item('i1', { title: 'Parties', kind: 'preamble' }),
+      item('i2', { title: 'Grant' }),
+      item('i3', { title: 'Floor Plans', kind: 'schedule' }),
+      item('i4', { title: 'Signature', kind: 'signature' }),
+    ];
+    const draft = withClauses(items, {
+      i1: { text: 'A' },
+      i2: { text: 'B' },
+      i3: { text: 'C' },
+      i4: { text: 'D' },
+    });
+    const headings = assemble(draft).blocks.filter(
+      (block): block is Extract<typeof block, { kind: 'heading' }> => block.kind === 'heading',
+    );
+    expect(headings.map((heading) => heading.sectionKind)).toEqual([
+      'preamble',
+      'clause',
+      'schedule',
+      'signature',
+    ]);
+  });
+
+  it('strips a schedule number the title repeats, and only that', () => {
+    expect(headingTitle({ number: 'Schedule 1', text: 'Schedule 1 - Floor Plans' })).toBe('Floor Plans');
+    expect(headingTitle({ number: 'Schedule 1', text: 'Schedule 1: Floor Plans' })).toBe('Floor Plans');
+    expect(headingTitle({ number: 'Schedule 1', text: 'Schedule 1' })).toBe('');
+    expect(headingTitle({ number: 'Schedule 1', text: 'Schedule 10 - Plans' })).toBe('Schedule 10 - Plans');
+    expect(headingTitle({ number: 'Schedule 1', text: 'Floor Plans' })).toBe('Floor Plans');
+    expect(headingTitle({ number: '1', text: '1 Grant' })).toBe('Grant');
+    expect(headingTitle({ number: '', text: 'Parties' })).toBe('Parties');
+
+    expect(headingLabel({ number: 'Schedule 1', text: 'Schedule 1 - Floor Plans' })).toBe(
+      'Schedule 1 Floor Plans',
+    );
+    expect(headingLabel({ number: '1', text: 'Grant' })).toBe('1 Grant');
+    expect(headingLabel({ number: '', text: 'Parties' })).toBe('Parties');
+  });
+
+  it('classifies list markers without changing the line', () => {
+    const lines = listLines('(a) first\n(i) sub one\n(ii) sub two\n(b) second');
+    expect(lines.map((line) => line.text)).toEqual(['(a) first', '(i) sub one', '(ii) sub two', '(b) second']);
+    expect(lines.map((line) => line.kind)).toEqual(['letter', 'roman', 'roman', 'letter']);
+    expect(lines.map((line) => line.level)).toEqual([1, 2, 2, 1]);
+
+    // A lone (i) is a roman list at the first level, not a nested one.
+    expect(listLines('(i) first\n(ii) second').map((line) => line.level)).toEqual([1, 1]);
+    // (v) is a lettered item, (iv) is roman.
+    expect(listLines('(v) letter item').map((line) => line.kind)).toEqual(['letter']);
+    expect(listLines('(iv) roman item').map((line) => line.kind)).toEqual(['roman']);
+    // Dotted numbers are list items; a year is not.
+    expect(listLines('1.1 Term\n2.3.1 Detail').map((line) => line.level)).toEqual([1, 1]);
+    expect(listLines('2026. The parties agree.').map((line) => line.level)).toEqual([0]);
+    // Body text uses lower case; recitals use (A).
+    expect(listLines('(A) recital').map((line) => line.level)).toEqual([0]);
+    expect(listLines('(A) recital', { recital: true }).map((line) => line.level)).toEqual([1]);
   });
 
   it('handles 150 sections', () => {
