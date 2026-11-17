@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { newPlanId, phraseInInstruction, type DocAlias } from '../../drafter/plan';
 import type {
   BindingTargetType,
@@ -7,7 +8,7 @@ import type {
   SourceBinding,
   UnresolvedRef,
 } from '../../drafter/types';
-import type { MissingDetail, ReferenceRow } from './planUi';
+import type { DetailGroup, ReferenceRow } from './planUi';
 
 const TARGET_LABELS: Record<BindingTargetType, string> = {
   clause: 'Clause',
@@ -443,66 +444,173 @@ export function SimpleReferenceList({
   );
 }
 
-export function MissingDetailsList({
-  details,
-  particulars,
-  answers,
+// Every detail still without a value, grouped under plain headings (People, Money, Dates,
+// Property, Other). Required details come first inside a group and carry a small tag.
+export function DetailsNeeded({
+  groups,
   disabled,
   onValue,
+  onSkip,
+}: {
+  groups: DetailGroup[];
+  disabled?: boolean;
+  onValue: (particular: Particular, value: string) => void;
+  onSkip: (key: string) => void;
+}) {
+  if (groups.length === 0) return <p className="app-muted">Nothing else needed.</p>;
+
+  return (
+    <div className="drafter-detail-groups">
+      {groups.map((group) => (
+        <section key={group.title} className="drafter-detail-group">
+          <h3>{group.title}</h3>
+          <ul className="drafter-details">
+            {group.items.map((item) => (
+              <li key={item.id} className="drafter-detail-row">
+                <label className="app-field drafter-detail-field">
+                  <span>
+                    {item.label}
+                    {item.required && <span className="drafter-detail-needed">needed</span>}
+                  </span>
+                  <input
+                    value={item.value ?? ''}
+                    disabled={disabled}
+                    placeholder="Type the answer"
+                    onChange={(e) => onValue(item, e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="app-link-button"
+                  disabled={disabled}
+                  onClick={() => onSkip(`particular:${item.id}`)}
+                >
+                  Leave blank for now
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+// The open questions the model asked. An answer becomes a detail, as before.
+export function QuestionRows({
+  questions,
+  answers,
+  disabled,
   onAnswerChange,
   onAnswerCommit,
   onSkip,
 }: {
-  details: MissingDetail[];
-  particulars: Particular[];
+  questions: string[];
   answers: Record<string, string>;
   disabled?: boolean;
-  onValue: (detail: Extract<MissingDetail, { kind: 'particular' }>, value: string) => void;
   onAnswerChange: (text: string, value: string) => void;
   onAnswerCommit: (text: string, value: string) => void;
   onSkip: (key: string) => void;
 }) {
-  if (details.length === 0) return <p className="app-muted">Nothing else needed.</p>;
+  if (questions.length === 0) return null;
 
   return (
     <ul className="drafter-details">
-      {details.map((detail) => {
-        const label = detail.kind === 'particular' ? detail.label : detail.text;
-        const value =
-          detail.kind === 'particular'
-            ? (particulars.find((item) => item.id === detail.id)?.value ?? '')
-            : (answers[detail.text] ?? '');
-        return (
-          <li key={detail.key} className="drafter-detail-row">
-            <label className="app-field drafter-detail-field">
-              <span>{label}</span>
-              <input
-                value={value}
-                disabled={disabled}
-                placeholder="Type the answer"
-                onChange={(e) => {
-                  if (detail.kind === 'particular') onValue(detail, e.target.value);
-                  else onAnswerChange(detail.text, e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && detail.kind === 'question') {
-                    e.preventDefault();
-                    onAnswerCommit(detail.text, answers[detail.text] ?? '');
-                  }
-                }}
-              />
-            </label>
-            <button
-              type="button"
-              className="app-link-button"
+      {questions.map((text) => (
+        <li key={text} className="drafter-detail-row">
+          <label className="app-field drafter-detail-field">
+            <span>{text}</span>
+            <input
+              value={answers[text] ?? ''}
               disabled={disabled}
-              onClick={() => onSkip(detail.key)}
-            >
-              Leave blank for now
-            </button>
-          </li>
-        );
-      })}
+              placeholder="Type the answer"
+              onChange={(e) => onAnswerChange(text, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  onAnswerCommit(text, answers[text] ?? '');
+                }
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className="app-link-button"
+            disabled={disabled}
+            onClick={() => onSkip(`question:${text}`)}
+          >
+            Leave blank for now
+          </button>
+        </li>
+      ))}
     </ul>
+  );
+}
+
+// Adds a detail the model did not think of. A blank value keeps it as a placeholder.
+export function AddDetailRow({
+  disabled,
+  onAdd,
+}: {
+  disabled?: boolean;
+  onAdd: (label: string, value: string) => boolean;
+}) {
+  const [label, setLabel] = useState('');
+  const [value, setValue] = useState('');
+  const [note, setNote] = useState<string | null>(null);
+
+  function add() {
+    const name = label.trim();
+    if (!name) return;
+    if (!onAdd(name, value)) return;
+    setNote(`Added “${name}”.`);
+    setLabel('');
+    setValue('');
+  }
+
+  return (
+    <div className="drafter-add-detail">
+      <div className="drafter-add-detail-row">
+        <label className="app-field drafter-detail-field">
+          <span>What else do you need?</span>
+          <input
+            value={label}
+            disabled={disabled}
+            placeholder="e.g. Parking space number"
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                add();
+              }
+            }}
+          />
+        </label>
+        <label className="app-field drafter-detail-field">
+          <span>Value (optional)</span>
+          <input
+            value={value}
+            disabled={disabled}
+            placeholder="Leave empty if you don't know yet"
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                add();
+              }
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          className="app-link-button"
+          disabled={disabled || label.trim() === ''}
+          onClick={add}
+        >
+          Add another detail
+        </button>
+      </div>
+      {note && <p className="app-muted drafter-add-note">{note}</p>}
+    </div>
   );
 }

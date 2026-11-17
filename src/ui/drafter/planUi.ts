@@ -1,5 +1,5 @@
 import { newPlanId, type DocAlias } from '../../drafter/plan';
-import type { BindingUseMode, Particular, SourceBinding } from '../../drafter/types';
+import type { BindingUseMode, Particular, ParticularKind, SourceBinding } from '../../drafter/types';
 
 // Plain-language helpers for the simple Plan view. Pure functions only: the page keeps the
 // state, these decide what the simple controls show and how they change it.
@@ -96,6 +96,75 @@ export function missingDetails(particulars: Particular[], questions: string[]): 
     details.push({ kind: 'question', key: `question:${text}`, text });
   }
   return details;
+}
+
+// ---------- Details we need (D2.2) ----------
+
+export type DetailGroupTitle = 'People' | 'Money' | 'Dates' | 'Property' | 'Other';
+
+const GROUP_ORDER: DetailGroupTitle[] = ['People', 'Money', 'Dates', 'Property', 'Other'];
+
+// Plain headings for a non-lawyer. A term is a length of time, so it sits with dates.
+export function particularGroup(kind: ParticularKind): DetailGroupTitle {
+  switch (kind) {
+    case 'party':
+      return 'People';
+    case 'amount':
+      return 'Money';
+    case 'date':
+    case 'term':
+      return 'Dates';
+    case 'property':
+      return 'Property';
+    default:
+      return 'Other';
+  }
+}
+
+export function isBlank(particular: Particular): boolean {
+  return particular.value === null || particular.value.trim() === '';
+}
+
+export interface DetailGroup {
+  title: DetailGroupTitle;
+  items: Particular[];
+}
+
+// Every detail still without a value, in one list grouped by kind. Inside a group the required
+// ones come first, in the order the model gave them. An empty group is left out.
+export function detailGroups(particulars: Particular[]): DetailGroup[] {
+  const blanks = particulars.filter(isBlank);
+  return GROUP_ORDER.map((title) => {
+    const items = blanks.filter((item) => particularGroup(item.kind) === title);
+    return {
+      title,
+      items: [...items.filter((item) => item.required), ...items.filter((item) => !item.required)],
+    };
+  }).filter((group) => group.items.length > 0);
+}
+
+// A detail the user adds themselves. The label is required; a blank value keeps it as a
+// placeholder they can fill in later, so it appears in the list with the other blanks.
+export function addParticular(
+  particulars: Particular[],
+  label: string,
+  value: string,
+): Particular[] | null {
+  const name = label.trim();
+  if (!name) return null;
+  const text = value.trim();
+  return [
+    ...particulars,
+    {
+      id: newPlanId(),
+      label: name,
+      kind: 'other',
+      value: text === '' ? null : text,
+      source: 'user',
+      required: false,
+      edited: true,
+    },
+  ];
 }
 
 // Typing a value marks it as the user's own. The raw text is kept (a trailing space while

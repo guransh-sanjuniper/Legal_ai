@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_PARTICULARS,
+  PLAN_SYSTEM_PROMPT,
   aliasForIndex,
   buildDocAliases,
   buildPlanInput,
@@ -124,6 +126,18 @@ describe('drafter plan aliases and input', () => {
   });
 });
 
+describe('drafter plan prompt', () => {
+  it('asks for the details the document needs and forbids invented values', () => {
+    expect(PLAN_SYSTEM_PROMPT).toContain('ALWAYS propose the details a document of this kind normally needs');
+    expect(PLAN_SYSTEM_PROMPT).toContain('with "value": null');
+    expect(PLAN_SYSTEM_PROMPT).toContain('Propose at most 15');
+    expect(PLAN_SYSTEM_PROMPT).toContain('Never infer or invent a party, amount, date, address or number');
+    expect(PLAN_SYSTEM_PROMPT).toContain('Particulars should not be empty');
+    // The old line let the model return no details at all.
+    expect(PLAN_SYSTEM_PROMPT).not.toContain('particulars and questions are all valid');
+  });
+});
+
 describe('drafter plan validation', () => {
   it('keeps a valid plan and normalises the page range', () => {
     const parsed = validatePlanOutput(
@@ -165,6 +179,41 @@ describe('drafter plan validation', () => {
     expect(parsed.particulars[0].value).toBe('50,000');
     expect(parsed.particulars[0].source).toBe('instruction');
     expect(parsed.particulars[1].value).toBeNull();
+    expect(parsed.dropped).toBe(0);
+  });
+
+  it('keeps a proposed detail with no value, so the user can fill it in', () => {
+    const parsed = validatePlanOutput(
+      reply({
+        particulars: [
+          { label: "Landlord's name", kind: 'party', value: null, required: true },
+          { label: 'Notice period', kind: 'term', value: null, required: false },
+        ],
+      }),
+      context(),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.particulars.map((item) => [item.label, item.value, item.required])).toEqual([
+      ["Landlord's name", null, true],
+      ['Notice period', null, false],
+    ]);
+    expect(parsed.particulars.every((item) => item.source === 'instruction')).toBe(true);
+  });
+
+  it('keeps at most the particulars cap without counting the extras as dropped', () => {
+    const proposed = Array.from({ length: 20 }, (_, index) => ({
+      label: `Detail ${index + 1}`,
+      kind: 'other',
+      value: null,
+      required: false,
+    }));
+    const parsed = validatePlanOutput(reply({ particulars: proposed }), context());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.particulars).toHaveLength(MAX_PARTICULARS);
+    expect(parsed.particulars[0].label).toBe('Detail 1');
+    expect(parsed.particulars[MAX_PARTICULARS - 1].label).toBe(`Detail ${MAX_PARTICULARS}`);
     expect(parsed.dropped).toBe(0);
   });
 

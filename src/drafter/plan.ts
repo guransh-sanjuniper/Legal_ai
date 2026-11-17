@@ -31,6 +31,9 @@ const TARGET_TYPES: BindingTargetType[] = ['clause', 'topic', 'pages', 'whole'];
 const USE_MODES: BindingUseMode[] = ['verbatim', 'adapt', 'style'];
 const PARTICULAR_KINDS: ParticularKind[] = ['party', 'amount', 'date', 'property', 'term', 'other'];
 export const MAX_QUESTIONS = 8;
+// The model is asked for at most this many details. Extras are ignored, not counted as dropped:
+// a cap is not a parse failure.
+export const MAX_PARTICULARS = 15;
 
 export const PLAN_SYSTEM_PROMPT = `You turn a lawyer's drafting instruction into a source plan for a drafting tool. You do not write the document.
 
@@ -51,9 +54,14 @@ Rules:
   - appliesTo: which part of the NEW document this feeds, in the user's words.
   - phrase: the exact words from the instruction that produced the binding.
 - unresolved: anything the instruction points at that you cannot attach: a document not in the list, an ambiguous document name, a page range outside the document. Give a short reason. Do not guess.
-- particulars: parties, amounts, dates, property details and key terms that matter for drafting. "value" is ONLY a value written in the instruction; use null when the instruction does not state it. Never infer or invent a party, amount, date or address. "required" is true when the draft cannot be completed without it.
+- particulars: ALWAYS propose the details a document of this kind normally needs, worked out from what the instruction asks to draft. Propose the details even when the instruction gives no value: a detail without a stated value is still proposed with "value": null so the user can fill it in before drafting. Propose at most 15.
+  - Cover, where they apply: the name and address of each party; an identifier for a party (registration, GST or similar) only when a document of this kind normally records one; the property or other subject matter; the key money amounts; the key dates; the term or duration; notice periods; the governing jurisdiction or seat.
+  - "label" is a short plain name a non-lawyer recognises, for example "Landlord's name" or "Monthly rent". Never put the value in the label.
+  - "kind" is one of "party", "amount", "date", "property", "term", "other".
+  - "value" is ONLY a value written in the instruction; use null when the instruction does not state it. Never infer or invent a party, amount, date, address or number.
+  - "required" is true only for the details the document cannot be drafted without. Most entries are false.
 - questions: at most 8 short questions the user must answer before drafting. Empty array is fine.
-- Empty bindings, unresolved, particulars and questions are all valid.`;
+- Empty bindings, unresolved and questions are valid. Particulars should not be empty: propose what this kind of document normally needs.`;
 
 export function newPlanId(): string {
   const webCrypto = globalThis.crypto;
@@ -322,6 +330,8 @@ export function validatePlanOutput(raw: string, ctx: PlanContext): PlanParseResu
 
   const particulars: Particular[] = [];
   for (const item of list(parsed.particulars)) {
+    // A cap is not a failure: extras are ignored without counting them as dropped.
+    if (particulars.length >= MAX_PARTICULARS) break;
     if (!isRecord(item)) {
       dropped++;
       continue;

@@ -18,17 +18,20 @@ import { loadDrafterLibrary } from './library';
 import { parsePlanForDraft, planDocsForDraft } from './planRun';
 import { generateOutline } from './outlineRun';
 import {
+  addParticular,
   answerQuestion,
-  missingDetails,
+  detailGroups,
+  isBlank,
   referenceRows,
   setParticularValue,
   setReferenceUseMode,
-  type MissingDetail,
 } from './planUi';
 import {
+  AddDetailRow,
   BindingsTable,
-  MissingDetailsList,
+  DetailsNeeded,
   ParticularsTable,
+  QuestionRows,
   SimpleReferenceList,
   UnresolvedList,
 } from './PlanTables';
@@ -83,7 +86,7 @@ export function PlanPage() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [skipped, setSkipped] = useState<string[]>([]);
   // A detail the user has started typing into stays visible even once it has a value.
-  const [keptDetails, setKeptDetails] = useState<MissingDetail[]>([]);
+  const [keptIds, setKeptIds] = useState<string[]>([]);
 
   function applyPlan(plan: SourcePlan, parts: Particular[] | null) {
     setDocType(plan.docType);
@@ -95,7 +98,7 @@ export function PlanPage() {
     setQuestions(plan.questions);
     setAnswers({});
     setSkipped([]);
-    setKeptDetails([]);
+    setKeptIds([]);
   }
 
   useEffect(() => {
@@ -203,7 +206,7 @@ export function PlanPage() {
       setDraft(saved);
       setParticulars(nextParticulars);
       setQuestions(nextQuestions);
-      setKeptDetails([]);
+      setKeptIds([]);
       void syncDraftById(supabase, db, saved.id);
       setNotice('Saved. This plan is confirmed.');
       return saved;
@@ -302,11 +305,20 @@ export function PlanPage() {
     if (draftId) writeAdvanced(draftId, next);
   }
 
-  function onParticularValue(detail: Extract<MissingDetail, { kind: 'particular' }>, value: string) {
-    setParticulars((current) => setParticularValue(current, detail.id, value));
-    setKeptDetails((current) =>
-      current.some((item) => item.key === detail.key) ? current : [...current, detail],
+  function onParticularValue(particular: Particular, value: string) {
+    setParticulars((current) => setParticularValue(current, particular.id, value));
+    setKeptIds((current) =>
+      current.includes(particular.id) ? current : [...current, particular.id],
     );
+  }
+
+  function onAddDetail(label: string, value: string): boolean {
+    const next = addParticular(particulars, label, value);
+    if (!next) return false;
+    const added = next[next.length - 1];
+    setParticulars(next);
+    setKeptIds((current) => (current.includes(added.id) ? current : [...current, added.id]));
+    return true;
   }
 
   function commitAnswer(text: string, answer: string) {
@@ -385,11 +397,13 @@ export function PlanPage() {
 
   const refRows = referenceRows(docs, bindings);
 
-  const liveDetails = missingDetails(particulars, questions);
-  const byKey = new Map<string, MissingDetail>();
-  for (const detail of liveDetails) byKey.set(detail.key, detail);
-  for (const detail of keptDetails) if (!byKey.has(detail.key)) byKey.set(detail.key, detail);
-  const details = [...byKey.values()].filter((detail) => !skipped.includes(detail.key));
+  // Blanks are listed, plus anything already typed into this visit so a row never vanishes
+  // mid-keystroke. "Leave blank for now" hides a row until "Show them again".
+  const visibleParticulars = particulars.filter(
+    (item) => (isBlank(item) || keptIds.includes(item.id)) && !skipped.includes(`particular:${item.id}`),
+  );
+  const groups = detailGroups(visibleParticulars);
+  const openQuestions = questions.filter((text) => !skipped.includes(`question:${text}`));
 
   return (
     <>
@@ -447,18 +461,28 @@ export function PlanPage() {
       <section className="drafter-plan-section">
         <h2>Details we need</h2>
         <p className="app-muted drafter-section-help">
-          Fill in what you know. Anything left blank becomes a placeholder.
+          Fill in what you know. Anything left blank will appear as a highlighted [●] you can complete later.
         </p>
-        <MissingDetailsList
-          details={details}
-          particulars={particulars}
-          answers={answers}
+        <DetailsNeeded
+          groups={groups}
           disabled={busy !== null}
           onValue={onParticularValue}
-          onAnswerChange={(text, value) => setAnswers((current) => ({ ...current, [text]: value }))}
-          onAnswerCommit={commitAnswer}
           onSkip={(key) => setSkipped((current) => (current.includes(key) ? current : [...current, key]))}
         />
+        {openQuestions.length > 0 && (
+          <div className="drafter-detail-group">
+            <h3>Questions</h3>
+            <QuestionRows
+              questions={openQuestions}
+              answers={answers}
+              disabled={busy !== null}
+              onAnswerChange={(text, value) => setAnswers((current) => ({ ...current, [text]: value }))}
+              onAnswerCommit={commitAnswer}
+              onSkip={(key) => setSkipped((current) => (current.includes(key) ? current : [...current, key]))}
+            />
+          </div>
+        )}
+        <AddDetailRow disabled={busy !== null} onAdd={onAddDetail} />
         {skipped.length > 0 && (
           <button type="button" className="app-link-button" onClick={() => setSkipped([])}>
             Show them again

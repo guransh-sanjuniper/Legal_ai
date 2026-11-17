@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { buildDocAliases } from '../../drafter/plan';
 import type { Particular, SourceBinding } from '../../drafter/types';
 import {
+  addParticular,
   answerQuestion,
+  detailGroups,
+  isBlank,
   missingDetails,
+  particularGroup,
   referenceRows,
   setParticularValue,
   setReferenceUseMode,
@@ -132,6 +136,70 @@ describe('details we need', () => {
     expect(next[0].source).toBe('user');
     expect(next[0].edited).toBe(true);
     expect(setParticularValue([particular()], 'p1', '   ')[0].value).toBeNull();
+  });
+});
+
+describe('details we need', () => {
+  it('puts each detail under a plain heading', () => {
+    expect(particularGroup('party')).toBe('People');
+    expect(particularGroup('amount')).toBe('Money');
+    expect(particularGroup('date')).toBe('Dates');
+    expect(particularGroup('term')).toBe('Dates');
+    expect(particularGroup('property')).toBe('Property');
+    expect(particularGroup('other')).toBe('Other');
+  });
+
+  it('lists only blanks, grouped by kind, required first inside a group', () => {
+    const groups = detailGroups([
+      particular({ id: 'p1', label: 'Notice period', kind: 'term', required: false }),
+      particular({ id: 'p2', label: 'Tenant name', kind: 'party', required: false }),
+      particular({ id: 'p3', label: 'Landlord name', kind: 'party', required: true }),
+      particular({ id: 'p4', label: 'Rent', kind: 'amount', value: '1,20,000' }),
+      particular({ id: 'p5', label: 'Deposit', kind: 'amount', required: true }),
+      particular({ id: 'p6', label: 'Premises', kind: 'property', required: false }),
+      particular({ id: 'p7', label: 'Blank note', kind: 'other', value: '   ' }),
+    ]);
+
+    expect(groups.map((group) => group.title)).toEqual(['People', 'Money', 'Dates', 'Property', 'Other']);
+    expect(groups[0].items.map((item) => item.id)).toEqual(['p3', 'p2']);
+    expect(groups[1].items.map((item) => item.id)).toEqual(['p5']);
+    expect(groups[2].items.map((item) => item.id)).toEqual(['p1']);
+    expect(groups[3].items.map((item) => item.id)).toEqual(['p6']);
+    expect(groups[4].items.map((item) => item.id)).toEqual(['p7']);
+    // A detail with a value is not asked for again.
+    expect(groups.flatMap((group) => group.items).some((item) => item.id === 'p4')).toBe(false);
+  });
+
+  it('leaves out a group with nothing in it', () => {
+    const groups = detailGroups([particular({ id: 'p1', kind: 'party' })]);
+    expect(groups.map((group) => group.title)).toEqual(['People']);
+  });
+
+  it('treats a missing or whitespace value as blank', () => {
+    expect(isBlank(particular({ value: null }))).toBe(true);
+    expect(isBlank(particular({ value: '   ' }))).toBe(true);
+    expect(isBlank(particular({ value: 'x' }))).toBe(false);
+  });
+
+  it('adds a detail the user typed, as their own', () => {
+    const next = addParticular([particular({ id: 'p1' })], '  Parking bay  ', '  B-14 ');
+    expect(next).not.toBeNull();
+    const added = next![1];
+    expect(added).toMatchObject({
+      label: 'Parking bay',
+      kind: 'other',
+      value: 'B-14',
+      source: 'user',
+      required: false,
+      edited: true,
+    });
+
+    // A label on its own keeps the placeholder, so it shows up with the other blanks.
+    const blank = addParticular([], 'Parking bay', '   ');
+    expect(blank![0].value).toBeNull();
+    expect(isBlank(blank![0])).toBe(true);
+
+    expect(addParticular([], '   ', 'B-14')).toBeNull();
   });
 });
 
