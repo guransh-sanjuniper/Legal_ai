@@ -22,6 +22,7 @@ import { StartForm, type StartFormValues } from '../../analysis/StartForm';
 import { RunPanel, type FailedRow, type RunProgress } from '../../analysis/RunPanel';
 import { ReportView } from '../../analysis/ReportView';
 import { useDeveloperMode } from '../../devMode';
+import { KeepTabOpen } from '../../KeepTabOpen';
 import { CitationPanel } from '../../analysis/CitationPanel';
 import { ExportBar } from '../../analysis/ExportBar';
 import { freshToken, functionsEndpoint, readRunRecord, withDocumentLock, writeRunRecord, taskLabel, type RunRecord } from '../../analysis/runtime';
@@ -365,6 +366,7 @@ export function AnalysisDocPage() {
                     onResume={() => execute('resume')}
                     onRetry={() => execute('retry')}
                   />
+                  <KeepTabOpen show={running} />
                 </div>
               </section>
             )}

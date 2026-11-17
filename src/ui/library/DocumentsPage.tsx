@@ -13,6 +13,8 @@ import { getActiveDocId, runPreparation, subscribePreparation } from './prepare'
 import { documentLock, removeDocumentWhenIdle } from './removeDocument';
 import { PageHeader } from '../app/pages/Placeholder';
 import { useDeveloperMode } from '../devMode';
+import { KeepTabOpen } from '../KeepTabOpen';
+import { helpSection } from '../help/helpContent';
 import {
   clearFinishedImports,
   enqueueFiles,
@@ -443,6 +445,8 @@ export function DocumentsPage() {
         eyebrow="Library"
         title="Documents"
         description="PDFs, Word files, text and images are prepared once on this device, then used by every module. They are never uploaded to Supabase."
+        whenToUse={helpSection('documents').whenToUse}
+        helpHref="/help#documents"
         actions={
           <>
             <label className="app-select-label">
@@ -498,6 +502,13 @@ export function DocumentsPage() {
       )}
       {notice && <div className="app-banner app-banner--notice">{notice}</div>}
       {queueNotice && <div className="app-banner app-banner--notice">{queueNotice}</div>}
+
+      <KeepTabOpen
+        show={
+          busyDocId !== null ||
+          queueEntries.some((entry) => entry.status === 'converting' || entry.status === 'preparing')
+        }
+      />
 
       {queueEntries.length > 0 && (
         <section className="library-queue" aria-label="Import queue">

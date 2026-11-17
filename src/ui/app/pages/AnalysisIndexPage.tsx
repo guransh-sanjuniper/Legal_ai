@@ -3,7 +3,11 @@ import { Link } from 'react-router-dom';
 import { openHarnessDb, type DocumentRecord } from '../../../runner/db';
 import { isPrepared } from '../../library/preparationState';
 import { PageHeader } from './Placeholder';
+import { pickWhenToUse } from '../../help/helpContent';
 import { useDeveloperMode } from '../../devMode';
+
+const DESCRIPTION =
+  'Clause-by-clause analysis with verified quotes, section summaries, an overview and a coverage ledger.';
 
 export function AnalysisIndexPage() {
   const [devOn] = useDeveloperMode();
@@ -34,7 +38,8 @@ export function AnalysisIndexPage() {
       <PageHeader
         eyebrow="Module"
         title="Deep Analysis"
-        description="Clause-by-clause analysis with verified quotes, section summaries, an overview and a coverage ledger."
+        whenToUse={pickWhenToUse(DESCRIPTION, 'deep-analysis')}
+        helpHref="/help#deep-analysis"
       />
       {docs === null ? (
         <p className="app-muted">Loading documents…</p>

@@ -29,7 +29,8 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 
 ## App shell (routes)
 - `/` redirects to `/chat`; the app shell owns the router. The harness pages stay at `/?page=...`.
-- `/chat` and `/chat/:sessionId` are general chat (see "Chat" below). `/compare` is a placeholder.
+- `/chat` and `/chat/:sessionId` are general chat (see "Chat" below). `/compare` is a placeholder; its sidebar entry is hidden but the route stays reachable.
+- `/help` is the plain-language Help page (see "Help page and guidance" below). Its sidebar entry sits below the module entries, above the sidebar footer.
 - `/draft` lists drafts; `/draft/new` and `/draft/:draftId` are the Brief form, `/draft/:draftId/plan` is the plan, `/draft/:draftId/outline` is the structure, `/draft/:draftId/sources` checks the bound sources, `/draft/:draftId/write` writes the document, `/draft/:draftId/review` reviews and downloads it (see "Drafter" below).
 - `/documents` lists IndexedDB documents, imports PDF/Word/text/image files (multiple files, or drag-and-drop) and runs the whole preparation (ingestion, embeddings, index, definitions) one file at a time, removes a document from this device.
 - `/documents/:docId/review` is the in-app review screen (page image beside OCR text, decisions, Retry OCR, Recheck, Proceed without reviewing). Needs-review rows and the Review action open it; the harness page is not linked from the library.
@@ -38,6 +39,13 @@ Throwaway test harness for a large-document (500-1000 page) legal AI pipeline. R
 - Login: Supabase Auth email+password. The app shell and the harness pages share one persisted session (same project URL, same localStorage key).
 - "Remove from this device" deletes the document, pages, chunks, OCR decisions, embeddings, definitions, analysis reports/state, tasks and run state for that document. It refuses while a preparation or analysis lock is held. Supabase reports are kept.
 - Theme: light/dark, scoped to the app shell; the harness pages keep their look.
+
+## Help page and guidance
+- `/help` is one readable column: the "Before you start" intro, then Documents, Deep Analysis, Chat and Drafter sections with anchors `#documents`, `#deep-analysis`, `#chat`, `#drafter`. Content comes from one file, `src/ui/help/helpContent.ts` (typed sections: id, title, whenToUse, steps, tip). Anchors scroll into view on arrival.
+- The four module list pages (Documents, Deep Analysis, Chat, Drafter) show one muted "When to use this" line linking to the matching Help anchor. Where an existing description says the same thing, the shorter of the two is shown and the duplicate is hidden. Sub-screens have no line.
+- `src/ui/KeepTabOpen.tsx` renders "Keep this tab open until this finishes. You can use other tabs or apps." only while a job is active: Documents (a document is preparing or a queue file is converting/preparing), Deep Analysis (`running`), and Drafter Write (`running`). It adds no state.
+- Behaviour behind the reminder: document preparation and the Drafter writer are module-level and keep running when the user moves to another app page; Deep Analysis does not and needs its page kept open (leaving disposes the retrieval worker the run still uses). Closing or reloading the tab stops any of them; saved progress can be resumed.
+- The sidebar list is `src/ui/app/navItems.ts`: Documents, Deep Analysis, Drafter, then Help. Comparator is not listed, but `/compare` and its page are unchanged.
 
 ## Developer mode
 - The sidebar footer has a small "Developer mode" switch (`src/ui/devMode.tsx`). It is off by default, stored per browser (`localStorage` key `legal-app.developerMode`) and synced across tabs; an unavailable `localStorage` reads as off. It is render-only: when off, technical diagnostics are hidden; when on, every screen looks and behaves exactly as before. Nothing is stored, computed or exported differently, and the DOCX/HTML reports are unchanged.
@@ -100,7 +108,7 @@ Library documents are **device-wide, not per-user**: `pipeline-harness` has no u
 
 ## Pages (dev)
 - `/` the app shell (sign-in, Documents, Chat, Deep Analysis, Drafter, Comparator)
-- `/chat`, `/documents`, `/analysis`, `/analysis/:docId`, `/draft`, `/compare` the app routes
+- `/chat`, `/documents`, `/analysis`, `/analysis/:docId`, `/draft`, `/compare`, `/help` the app routes
 - `/?page=test` the Prompt 1 task test page
 - `/?page=ingest` the ingestion page (upload PDF, OCR language, Start/resume, Recheck, review, chunks). `&doc=<id>` opens a document directly.
 - `/?page=search` embedding progress, hybrid document search, law stand-in search, definitions sheet

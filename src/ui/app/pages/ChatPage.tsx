@@ -7,6 +7,7 @@ import { CitationPanel } from '../../analysis/CitationPanel';
 import '../../analysis/analysis.css';
 import { Markdown } from '../../chat/Markdown';
 import { PageHeader } from './Placeholder';
+import { pickWhenToUse } from '../../help/helpContent';
 import { CHAT_MAX_TOKENS, CHAT_MODEL } from '../../../chat/config';
 import { describeChatError } from '../../../chat/errors';
 import { ChatError, streamChat } from '../../../chat/stream';
@@ -34,6 +35,8 @@ import { openHarnessDb, type HarnessDBHandle } from '../../../runner/db';
 import { isPrepared } from '../../library/preparationState';
 import { RetrievalClient } from '../../../retrieval/client';
 import type { Citation } from '../../../analysis/reportModel';
+
+const DESCRIPTION = 'Ask general legal questions, or choose a prepared document to ask about it.';
 
 type Pending =
   | { status: 'streaming'; content: string }
@@ -453,7 +456,8 @@ export function ChatPage() {
       <PageHeader
         eyebrow="Module"
         title="Chat"
-        description="Ask general legal questions, or choose a prepared document to ask about it."
+        whenToUse={pickWhenToUse(DESCRIPTION, 'chat')}
+        helpHref="/help#chat"
       />
       <div className="app-chat-layout">
         <aside className="app-chat-list" aria-label="Chat sessions">

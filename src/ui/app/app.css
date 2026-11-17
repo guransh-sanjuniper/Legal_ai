@@ -539,6 +539,28 @@
   font-size: 13px;
 }
 
+.app-when-to-use {
+  margin: 4px 0 0;
+  max-width: 660px;
+  color: var(--app-text-muted);
+  font-size: 12.5px;
+}
+
+.app-when-to-use a {
+  color: var(--app-text-muted);
+  text-decoration: underline;
+}
+
+.app-when-to-use a:hover {
+  color: var(--app-accent);
+}
+
+.app-keep-tab-open {
+  margin: 8px 0 0;
+  color: var(--app-text-muted);
+  font-size: 12.5px;
+}
+
 .app-page-actions {
   display: flex;
   align-items: flex-end;

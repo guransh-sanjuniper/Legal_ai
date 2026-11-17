@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../app/AuthProvider';
 import { PageHeader } from '../app/pages/Placeholder';
+import { pickWhenToUse } from '../help/helpContent';
 import { draftStatusText } from './statusLabel';
 import { listDrafts, openDrafterDb, type DrafterDBHandle } from '../../drafter/store';
 import { removeDraftEverywhere, syncDrafts } from '../../drafter/sync';
@@ -100,7 +101,11 @@ export function DraftsPage() {
       <PageHeader
         eyebrow="Module"
         title="Drafter"
-        description="Describe the document you need in your own words, optionally pointing at prepared documents. The brief is saved on this device and in your account."
+        whenToUse={pickWhenToUse(
+          'Describe the document you need in your own words, optionally pointing at prepared documents. The brief is saved on this device and in your account.',
+          'drafter',
+        )}
+        helpHref="/help#drafter"
         actions={
           <Link className="app-primary-button" to="/draft/new">
             New draft

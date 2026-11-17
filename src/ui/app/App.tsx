@@ -16,6 +16,7 @@ import { SourcesPage } from '../drafter/SourcesPage';
 import { WritePage } from '../drafter/WritePage';
 import { DraftReviewPage } from '../drafter/ReviewPage';
 import { ComparePage } from './pages/ComparePage';
+import { HelpPage } from '../help/HelpPage';
 import './app.css';
 
 function Boot({ theme }: { theme: Theme }) {
@@ -69,6 +70,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
         <Route path="/draft/:draftId/write" element={<WritePage />} />
         <Route path="/draft/:draftId/review" element={<DraftReviewPage />} />
         <Route path="/compare" element={<ComparePage />} />
+        <Route path="/help" element={<HelpPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </AppShell>

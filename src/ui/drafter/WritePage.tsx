@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../app/pages/Placeholder';
+import { KeepTabOpen } from '../KeepTabOpen';
 import { assemble, exportGate } from '../../drafter/assemble';
 import { isOutlineStale } from '../../drafter/outline';
 import { useDeveloperMode } from '../devMode';
@@ -477,6 +478,7 @@ export function WritePage() {
             {progress.label}
             {state.counts.failed > 0 ? ` · ${attentionLabel}` : ''}
           </p>
+          <KeepTabOpen show={running} />
           {!complete && (running || (canWriteBase && state.pendingIds.length > 0)) && (
             <p className="app-muted drafter-progress-note">
               {plural(items.length, 'section')}

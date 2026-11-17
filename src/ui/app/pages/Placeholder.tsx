@@ -1,14 +1,19 @@
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 
 export function PageHeader({
   eyebrow,
   title,
   description,
+  whenToUse,
+  helpHref,
   actions,
 }: {
   eyebrow?: string;
   title: string;
   description?: string;
+  whenToUse?: string;
+  helpHref?: string;
   actions?: ReactNode;
 }) {
   return (
@@ -17,6 +22,17 @@ export function PageHeader({
         {eyebrow && <div className="app-eyebrow">{eyebrow}</div>}
         <h1>{title}</h1>
         {description && <p className="app-page-description">{description}</p>}
+        {whenToUse && (
+          <p className="app-when-to-use">
+            When to use this: {whenToUse}
+            {helpHref && (
+              <>
+                {' · '}
+                <Link to={helpHref}>See Help</Link>
+              </>
+            )}
+          </p>
+        )}
       </div>
       {actions && <div className="app-page-actions">{actions}</div>}
     </header>

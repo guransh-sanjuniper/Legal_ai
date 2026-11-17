@@ -1,9 +1,10 @@
 import { NavLink } from 'react-router-dom';
 import { supabaseProjectHost, supabaseTarget } from '../../lib/supabase';
 import { useDeveloperMode } from '../devMode';
+import { HELP_ITEM, WORKSPACE_ITEMS } from './navItems';
 import type { Theme } from './theme';
 
-type IconName = 'plus' | 'chat' | 'document' | 'analysis' | 'draft' | 'compare' | 'sun' | 'moon';
+type IconName = 'plus' | 'chat' | 'document' | 'analysis' | 'draft' | 'compare' | 'help' | 'sun' | 'moon';
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -57,6 +58,14 @@ function Icon({ name }: { name: IconName }) {
           <path d="M5 4h5v16H5zM14 4h5v16h-5z" />
         </svg>
       );
+    case 'help':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.5 9a2.5 2.5 0 0 1 4.9 1c0 1.7-2.4 2-2.4 3.5" />
+          <path d="M12 17h.01" />
+        </svg>
+      );
     case 'sun':
       return (
         <svg {...common}>
@@ -73,12 +82,7 @@ function Icon({ name }: { name: IconName }) {
   }
 }
 
-const WORKSPACE = [
-  { to: '/documents', label: 'Documents', icon: 'document' as const },
-  { to: '/analysis', label: 'Deep Analysis', icon: 'analysis' as const },
-  { to: '/draft', label: 'Drafter', icon: 'draft' as const },
-  { to: '/compare', label: 'Comparator', icon: 'compare' as const },
-];
+const NAV_ITEMS = [...WORKSPACE_ITEMS, HELP_ITEM];
 
 interface SidebarProps {
   email: string;
@@ -109,7 +113,7 @@ export function Sidebar({ email, theme, onToggleTheme, onSignOut }: SidebarProps
 
       <nav className="app-nav" aria-label="Workspace">
         <div className="app-sidebar-label">Workspace</div>
-        {WORKSPACE.map((item) => (
+        {NAV_ITEMS.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
