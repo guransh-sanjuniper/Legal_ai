@@ -73,13 +73,15 @@ export function AnalysisDocPage() {
   const retrieval = useRef<RetrievalClient | null>(null);
   const planRef = useRef<Plan | null>(null);
   planRef.current = plan;
-  const reportRef = useRef<HTMLElement | null>(null);
+  const reportRef = useRef<HTMLDivElement | null>(null);
   // True only when a run started on this page has just produced a report. Loading or
   // restoring a saved report never sets it, so those never scroll.
   const finishedThisVisitRef = useRef(false);
 
   // A run finished in this visit: wait one frame for layout to settle, then scroll the
-  // report into view once. Only a report whose top is still below the viewport moves.
+  // export bar and report into view once. The ref wraps both, so the Export buttons are
+  // fully visible above the report title. Only content whose top is still below the
+  // viewport moves.
   useEffect(() => {
     if (running || !model || !finishedThisVisitRef.current) return;
     const frame = requestAnimationFrame(() => {
@@ -420,10 +422,10 @@ export function AnalysisDocPage() {
           </div>
 
           {model ? (
-            <>
+            <div ref={reportRef}>
               <ExportBar model={model} documentName={doc.name} />
-              <ReportView model={model} onCite={setCitation} reportRef={reportRef} />
-            </>
+              <ReportView model={model} onCite={setCitation} />
+            </div>
           ) : (
             <p className="app-muted">No report yet. Start an analysis above.</p>
           )}

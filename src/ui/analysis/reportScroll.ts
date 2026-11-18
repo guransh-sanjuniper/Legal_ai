@@ -1,8 +1,9 @@
-// Pure decisions for scrolling to the Deep Analysis report after a run finishes.
-// The page reports "finished in this visit" itself; nothing here reads storage or the DOM.
+// Pure decisions for scrolling to the finished Deep Analysis report block (the export
+// bar followed by the report). The page reports "finished in this visit" itself;
+// nothing here reads storage or the DOM.
 
-// A report whose top is at or above this line is already where the user is looking.
-// Negative values mean the user has scrolled past the top of the report.
+// A block whose top is at or above this line is already where the user is looking.
+// Negative values mean the user has scrolled past the top of the block.
 export const REPORT_TOP_SKIP = 100;
 export const REPORT_SCROLL_OFFSET = 24;
 
