@@ -24,28 +24,28 @@ export function PageHeader({
 }) {
   return (
     <header className="app-page-header">
-      <div>
-        {eyebrow && <div className="app-eyebrow">{eyebrow}</div>}
+      {eyebrow && <div className="app-eyebrow">{eyebrow}</div>}
+      <div className="app-page-title-row">
         <h1>{title}</h1>
-        {description && <p className="app-page-description">{description}</p>}
-        {whenToUse && (
-          <p className="app-when-to-use">
-            When to use this: {whenToUse}
-            {helpHref && (
-              <>
-                {' · '}
-                <Link to={helpHref}>See Help</Link>
-              </>
-            )}
-          </p>
+        {helpPageId && (
+          <div className="app-page-help">
+            <HowToUse pageId={helpPageId} title={helpTitle} />
+          </div>
         )}
       </div>
-      {(helpPageId || actions) && (
-        <div className="app-page-actions">
-          {helpPageId && <HowToUse pageId={helpPageId} title={helpTitle} />}
-          {actions}
-        </div>
+      {description && <p className="app-page-description">{description}</p>}
+      {whenToUse && (
+        <p className="app-when-to-use">
+          When to use this: {whenToUse}
+          {helpHref && (
+            <>
+              {' · '}
+              <Link to={helpHref}>See Help</Link>
+            </>
+          )}
+        </p>
       )}
+      {actions && <div className="app-page-actions">{actions}</div>}
     </header>
   );
 }
