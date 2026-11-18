@@ -37,6 +37,12 @@
   font-size: 12px;
 }
 
+.library-format-hint-note {
+  display: inline-block;
+  margin-top: 4px;
+  text-decoration: underline;
+}
+
 .library-queue {
   margin: 0 0 18px;
   padding: 14px 16px;
