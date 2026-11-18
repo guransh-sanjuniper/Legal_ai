@@ -92,6 +92,10 @@ export function promptStatsLine(s: PromptResultStatsView, detailed = true): stri
     const more = s.moreSections ? `; ${s.moreSections} matching section${s.moreSections === 1 ? '' : 's'} not read` : '';
     lines.push(`${s.readSections} extra section${s.readSections === 1 ? '' : 's'} read for coverage${more}.`);
   }
+  // A large evidence set is capped, and a capped set is always stated.
+  if (s.moreFindings) {
+    lines.push(`${s.moreFindings} more verified finding${s.moreFindings === 1 ? '' : 's'} were not included.`);
+  }
   return lines.join(' ');
 }
 
@@ -336,7 +340,9 @@ function SectionBody({
               <div key={i} className="ana-prompt-part">
                 {part.heading && <h4>{part.heading}</h4>}
                 <PromptSentences sentences={part.sentences} />
-                {part.notStated && part.sentences.length === 0 && <p className="app-muted">{NOT_CLEAR_ANSWER}</p>}
+                {part.notStated && part.sentences.length === 0 && (
+                  <p className="app-muted">{part.notStatedText ?? NOT_CLEAR_ANSWER}</p>
+                )}
                 {part.truncated && <p className="ana-note">This part was cut off at the output limit and may be incomplete.</p>}
                 {part.error && <p className="app-banner app-banner--error">{part.error}</p>}
               </div>

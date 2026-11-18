@@ -29,7 +29,7 @@ import {
   SUMMARY_POINT,
 } from './prompts';
 import { computeMetrics, createRun, executeTasks, type ExecuteContext, type ExecuteResult, type TaskPlan } from './execute';
-import { INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
+import { DEEP_PROMPT_EVIDENCE_CHUNKS, DEEP_PROMPT_REPORT_FINDINGS, INITIAL_MAX_TOKENS, ANALYSIS_TIMEOUT_MS, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
 import { normaliseRequest, OVERVIEW_SENTENCES_PER_POINT, type AnalysisRequestInput } from './request';
 import type { MissingStats, SummaryStats } from './types';
 import { NO_SUGGESTION, guardPriority, lawKey, normaliseLaws, normaliseMissing, normaliseProse, riskBasisOf } from './rubric';
@@ -49,8 +49,9 @@ import {
   type ModelPointSentence,
 } from './overviewPoints';
 import { synthesiseAnswers, runPromptPass } from './promptPass';
-import { evidenceChunkIndexes, selectEvidenceChunks } from './promptEvidence';
+import { evidenceChunkIndexes, reportPromptAnswers, selectEvidenceChunks } from './promptEvidence';
 import { promptDepth } from './promptShape';
+import { interpretPromptRequest, PROMPT_BROAD_NOT_FOUND, PROMPT_INTERPRET_FAILED } from './promptInterpret';
 import { normalizeQuote } from './verify';
 import {
   applyVerdicts,
@@ -601,116 +602,159 @@ export async function runAnalysis(opts: AnalysisOptions): Promise<AnalysisReport
     const depth = promptDepth(request.customPrompt);
     progress(`custom prompt: ${inlineAnswers.length} verified quote(s) from the clause calls`);
 
-    // Coverage: broad and list-type requests read extra sections found by search and by the
-    // request's own terms. Every quote is verified and then guarded exactly like the inline ones.
-    let extraAnswers: PromptAnswer[] = [];
-    let coverageFailed: PromptResult['failedChunks'] = [];
-    let readSections: number | null = null;
-    let moreSections: number | null = null;
-    if (depth.breadth > 0) {
-      const byIndex = new Map(chunks.map((c) => [c.index, c]));
-      let selectedIndexes: number[] | null = null;
-      if (opts.retryFailed) {
-        const prior = evidenceChunkIndexes((await db.getAllFromIndex('tasks', 'byRun', runId)).map((t) => t.id));
-        if (prior.length > 0) selectedIndexes = prior.slice(0, depth.breadth);
-      }
-      if (!selectedIndexes) {
-        let hits: SearchHitLite[] = [];
-        try {
-          hits = await opts.docSearch(request.customPrompt, depth.breadth * 2);
-        } catch (e) {
-          log(`coverage search failed: ${String(e)}`);
-        }
-        const selection = selectEvidenceChunks(chunks, hits, request.customPrompt, depth.breadth);
-        selectedIndexes = selection.indexes;
-        moreSections = selection.more;
-      }
-      const selected = selectedIndexes.map((i) => byIndex.get(i)).filter((c): c is AnalysisChunk => Boolean(c));
-      if (selected.length > 0) {
-        progress(`coverage pass: reading ${selected.length} extra section(s) for the custom prompt`);
-        // The custom pass is a non-reasoning call, like the rest of the Prompt Result.
-        const pass = await runPromptPass({
-          ctx: { ...ctx, reasoning: null },
-          runId,
-          doc,
-          chunks: selected,
-          index,
-          defsContext,
-          request: request.customPrompt,
-          reviewingFor: request.reviewingFor,
-          maxTokens: 1200,
-        });
-        for (const r of pass.runs) {
-          addLimits(r);
-          await pauseIfNeeded(r);
-        }
-        extraAnswers = pass.result.answers;
-        coverageFailed = pass.result.failedChunks;
-        readSections = selected.length;
-      } else {
-        readSections = 0;
-      }
-      progress(`custom prompt: ${extraAnswers.length} verified answer(s) from the coverage pass`);
-    }
-
-    // Extra evidence first (it carries a direct answer and a reason), then the clause quotes.
-    const merged: PromptAnswer[] = [];
-    const seenKey = new Set<string>();
-    for (const a of [...extraAnswers, ...inlineAnswers]) {
-      const key = `${a.page}|${normalizeQuote(a.quote)}`;
-      if (seenKey.has(key)) continue;
-      seenKey.add(key);
-      merged.push({ ...a, itemId: `PA${merged.length + 1}` });
-    }
-
-    // Retry: the answer input changed when the clause tasks were re-run, so run it again.
-    const synth = await synthesiseAnswers({
+    // One small request check says what the prompt is about (whole document, risk, subjects) and
+    // which parties it names. It replaces word-list guessing; a failed check is shown plainly.
+    const requestCheck = await interpretPromptRequest({
       ctx,
       runId,
       doc,
-      prompt: request.customPrompt,
-      answers: merged,
-      retry: opts.retryFailed ?? false,
-      opts: {
-        parts: depth.parts,
-        maxAnswerTokens: depth.maxAnswerTokens,
-        structured: true,
-        ...(readSections !== null ? { readSections } : {}),
-        ...(moreSections !== null ? { moreSections } : {}),
-      },
+      request: request.customPrompt,
+      documentTerms: [...sheet.parties.map((p) => p.name), ...sheet.defined_terms.map((t) => t.term)],
     });
-    for (const r of synth.runs) {
-      addLimits(r);
-      await pauseIfNeeded(r);
-    }
-    const failedCodes = [...new Set(synth.runs.flatMap((r) => r.tasks).filter((t) => t.status === 'failed').map((t) => t.failureCode ?? 'failed'))];
-    const parts = synth.parts ?? [];
-    const allPartsFailed = parts.length > 0 && parts.every((p) => p.error);
-    promptResult = {
-      prompt: request.customPrompt,
-      // Only quotes that state the request's subject (or that the second-chance check accepted) are shown.
-      answers: synth.answers,
-      answer: synth.answer,
-      ...(synth.parts ? { parts: synth.parts } : {}),
-      ...(synth.truncated ? { truncated: true } : {}),
-      ...(readSections !== null || synth.dropped > 0
-        ? {
-            stats: {
-              excluded: synth.dropped,
-              ...(readSections !== null ? { readSections } : {}),
-              ...(moreSections !== null ? { moreSections } : {}),
-            },
+    if (!requestCheck.ok) {
+      promptResult = {
+        prompt: request.customPrompt,
+        answers: [],
+        answer: [],
+        mode: 'inline',
+        chunksTotal: chunks.length,
+        chunksDone: chunks.length,
+        failedChunks: [],
+        error: PROMPT_INTERPRET_FAILED,
+      };
+    } else {
+      const plan = requestCheck.plan;
+      const broad = plan.wholeDocument || plan.wantsRisk;
+      const breadth = broad ? DEEP_PROMPT_EVIDENCE_CHUNKS : depth.breadth;
+
+      // Coverage: broad requests (and list-type prompts) read extra sections found by search and
+      // by the request's own terms. Every quote is verified and then guarded.
+      let extraAnswers: PromptAnswer[] = [];
+      let coverageFailed: PromptResult['failedChunks'] = [];
+      let readSections: number | null = null;
+      let moreSections: number | null = null;
+      if (breadth > 0) {
+        const byIndex = new Map(chunks.map((c) => [c.index, c]));
+        let selectedIndexes: number[] | null = null;
+        if (opts.retryFailed) {
+          const prior = evidenceChunkIndexes((await db.getAllFromIndex('tasks', 'byRun', runId)).map((t) => t.id));
+          if (prior.length > 0) selectedIndexes = prior.slice(0, breadth);
+        }
+        if (!selectedIndexes) {
+          let hits: SearchHitLite[] = [];
+          try {
+            hits = await opts.docSearch(request.customPrompt, breadth * 2);
+          } catch (e) {
+            log(`coverage search failed: ${String(e)}`);
           }
-        : {}),
-      ...(synth.relevance && synth.relevance.checked > 0 ? { relevanceCheck: synth.relevance } : {}),
-      mode: 'inline',
-      chunksTotal: chunks.length,
-      chunksDone: chunks.length,
-      failedChunks: coverageFailed,
-      ...(failedCodes.length && (parts.length === 0 || allPartsFailed)
-        ? { error: `Answer generation failed (${failedCodes.join(', ')}). The verified quotes are listed below.` }
-        : {}),
-    };
+          const selection = selectEvidenceChunks(chunks, hits, request.customPrompt, breadth);
+          selectedIndexes = selection.indexes;
+          moreSections = selection.more;
+        }
+        const selected = selectedIndexes.map((i) => byIndex.get(i)).filter((c): c is AnalysisChunk => Boolean(c));
+        if (selected.length > 0) {
+          progress(`coverage pass: reading ${selected.length} extra section(s) for the custom prompt`);
+          // The custom pass is a non-reasoning call, like the rest of the Prompt Result.
+          const pass = await runPromptPass({
+            ctx: { ...ctx, reasoning: null },
+            runId,
+            doc,
+            chunks: selected,
+            index,
+            defsContext,
+            request: request.customPrompt,
+            reviewingFor: request.reviewingFor,
+            maxTokens: 1200,
+          });
+          for (const r of pass.runs) {
+            addLimits(r);
+            await pauseIfNeeded(r);
+          }
+          extraAnswers = pass.result.answers;
+          coverageFailed = pass.result.failedChunks;
+          readSections = selected.length;
+        } else {
+          readSections = 0;
+        }
+        progress(`custom prompt: ${extraAnswers.length} verified answer(s) from the coverage pass`);
+      }
+
+      // Verified findings from this run (risk register, obligations, payments, dates) are evidence
+      // for a whole-document or risk request; they are offered as answers, not re-judged.
+      const reportEvidence = broad
+        ? reportPromptAnswers({ clauses: verifiedClauses, limit: DEEP_PROMPT_REPORT_FINDINGS })
+        : { answers: [], more: 0 };
+
+      // Coverage evidence first (it carries a direct answer and a reason), then the clause quotes.
+      const merged: PromptAnswer[] = [];
+      const seenKey = new Set<string>();
+      for (const a of [...extraAnswers, ...inlineAnswers]) {
+        const key = `${a.page}|${normalizeQuote(a.quote)}`;
+        if (seenKey.has(key)) continue;
+        seenKey.add(key);
+        merged.push({ ...a, itemId: `PA${merged.length + 1}` });
+      }
+
+      // Retry: the answer input changed when the clause tasks were re-run, so run it again.
+      const synth = await synthesiseAnswers({
+        ctx,
+        runId,
+        doc,
+        prompt: request.customPrompt,
+        answers: merged,
+        retry: opts.retryFailed ?? false,
+        opts: {
+          parts: depth.parts,
+          maxAnswerTokens: depth.maxAnswerTokens,
+          structured: true,
+          ...(readSections !== null ? { readSections } : {}),
+          ...(moreSections !== null ? { moreSections } : {}),
+          ...(broad
+            ? {
+                broad: {
+                  groups: plan.groups,
+                  subjectPhrase: plan.subjectPhrase,
+                  reportAnswers: reportEvidence.answers,
+                  notFoundMessage: PROMPT_BROAD_NOT_FOUND,
+                },
+              }
+            : {}),
+        },
+      });
+      for (const r of synth.runs) {
+        addLimits(r);
+        await pauseIfNeeded(r);
+      }
+      const failedCodes = [...new Set(synth.runs.flatMap((r) => r.tasks).filter((t) => t.status === 'failed').map((t) => t.failureCode ?? 'failed'))];
+      const parts = synth.parts ?? [];
+      const allPartsFailed = parts.length > 0 && parts.every((p) => p.error);
+      promptResult = {
+        prompt: request.customPrompt,
+        // Only quotes that state the request's subject (or that the second-chance check accepted) are shown.
+        answers: synth.answers,
+        answer: synth.answer,
+        ...(synth.parts ? { parts: synth.parts } : {}),
+        ...(synth.truncated ? { truncated: true } : {}),
+        ...(readSections !== null || synth.dropped > 0 || reportEvidence.more > 0
+          ? {
+              stats: {
+                excluded: synth.dropped,
+                ...(readSections !== null ? { readSections } : {}),
+                ...(moreSections !== null ? { moreSections } : {}),
+                ...(reportEvidence.more > 0 ? { moreFindings: reportEvidence.more } : {}),
+              },
+            }
+          : {}),
+        ...(synth.relevance && synth.relevance.checked > 0 ? { relevanceCheck: synth.relevance } : {}),
+        mode: 'inline',
+        chunksTotal: chunks.length,
+        chunksDone: chunks.length,
+        failedChunks: coverageFailed,
+        ...(failedCodes.length && (parts.length === 0 || allPartsFailed)
+          ? { error: `Answer generation failed (${failedCodes.join(', ')}). The verified quotes are listed below.` }
+          : {}),
+      };
+    }
   }
 
   // 3a. Risk validation: a batched review of High and Medium risks, plus duplicate removal.

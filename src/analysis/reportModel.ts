@@ -31,6 +31,8 @@ export interface PromptResultPartView {
   heading: string | null;
   sentences: PromptResultSentenceView[];
   notStated: boolean;
+  // Plain reason shown instead of the generic "Not clearly stated" line.
+  notStatedText?: string;
   truncated: boolean;
   error: string | null;
 }
@@ -53,6 +55,7 @@ export interface PromptResultStatsView {
   excluded: number;
   readSections: number | null;
   moreSections: number | null;
+  moreFindings?: number | null;
 }
 
 export const PROMPT_TRUNCATED_NOTE =
@@ -574,12 +577,19 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
           };
         })
         .filter((s) => s.text.trim().length > 0);
-      // "Not clearly stated" is shown as a muted line, not as a cited sentence.
-      const onlyNotClear = sentences.length > 0 && sentences.every((s) => s.markers.length === 0 && s.text.trim() === NOT_CLEAR_ANSWER);
+      // "Not clearly stated" (or a plain reason for a broad request) is a muted line, not a
+      // cited sentence.
+      const notStatedText = p.notStatedText?.trim() || null;
+      const onlyNotClear =
+        sentences.length > 0 &&
+        sentences.every(
+          (s) => s.markers.length === 0 && (s.text.trim() === NOT_CLEAR_ANSWER || (notStatedText !== null && s.text.trim() === notStatedText)),
+        );
       return {
         heading: p.heading?.trim() || null,
         sentences: onlyNotClear ? [] : sentences,
         notStated: Boolean(p.notStated) || onlyNotClear,
+        ...(notStatedText ? { notStatedText } : {}),
         truncated: Boolean(p.truncated),
         error: p.error ?? null,
       };
@@ -596,6 +606,7 @@ export function buildReportModel(report: AnalysisReport): ReportModel {
       excluded: pr.stats?.excluded ?? 0,
       readSections: pr.stats?.readSections ?? null,
       moreSections: pr.stats?.moreSections ?? null,
+      moreFindings: pr.stats?.moreFindings ?? null,
     };
     const truncated = Boolean(pr.truncated) || parts.some((p) => p.truncated);
 

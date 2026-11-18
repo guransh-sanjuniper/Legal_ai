@@ -772,6 +772,36 @@ describe('report model', () => {
     expect(pr.truncatedNote).toBeNull();
   });
 
+  it('shows a broad request\'s plain reason instead of the generic line', () => {
+    const reason = 'I could not find passages that clearly answer this request.';
+    const model = buildReportModel(
+      report([], {
+        promptResult: {
+          prompt: 'Generate a comprehensive report of the uploaded document.',
+          answers: [{ itemId: 'PA1', text: 'q', clause: '4', page: 6, quote: 'a verified quote', verified: true }],
+          answer: [{ text: reason, cites: [] }],
+          parts: [
+            {
+              heading: null,
+              sentences: [{ text: reason, cites: [] }],
+              notStated: true,
+              notStatedText: reason,
+              truncated: false,
+              error: null,
+            },
+          ],
+          stats: { excluded: 0, moreFindings: 3 },
+          chunksTotal: 1,
+          chunksDone: 1,
+          failedChunks: [],
+        },
+      }),
+    );
+    const pr = model.sections.find((s) => s.key === 'promptResult') as Extract<(typeof model.sections)[number], { key: 'promptResult' }>;
+    expect(pr.parts![0]).toMatchObject({ notStated: true, sentences: [], notStatedText: reason });
+    expect(pr.stats).toMatchObject({ moreFindings: 3 });
+  });
+
   it('shows the truncation notice when a part was cut off', () => {
     const model = buildReportModel(
       report([], {

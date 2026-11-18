@@ -196,6 +196,8 @@ export interface PromptResultPart {
   sentences: { text: string; cites: string[]; style?: 'paragraph' | 'bullet' }[];
   // No verified quote supports this part: shown as "Not clearly stated in the document."
   notStated: boolean;
+  // Plain reason shown instead of the generic line (a broad request with no supporting evidence).
+  notStatedText?: string;
   truncated: boolean;
   error: string | null;
 }
@@ -206,6 +208,8 @@ export interface PromptResultStats {
   // Sections read for coverage beyond the clause analysis, and matching sections left unread.
   readSections?: number;
   moreSections?: number;
+  // Verified report findings left out because the evidence cap was reached.
+  moreFindings?: number;
 }
 
 // Unfilled blanks and reviewer comments found in the source text by code, grouped by clause.

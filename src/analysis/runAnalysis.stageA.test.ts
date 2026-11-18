@@ -5,6 +5,7 @@ import { runAnalysis, restoreReportFromSupabase } from './runAnalysis';
 import type { CallRequest, CallResult } from '../tasks/types';
 import { STATUTORY_POINT } from './prompts';
 import { signIn, seedDocument, scriptedModel } from './testSupport';
+import { PROMPT_INTERPRET_FAILED } from './promptInterpret';
 
 it('runs the general analysis, custom pass, missing pass and overview points; restores the report', async () => {
   const db = await openHarnessDb();
@@ -99,4 +100,71 @@ it('runs the general analysis, custom pass, missing pass and overview points; re
   expect(JSON.stringify(general.clauses)).toEqual(JSON.stringify(withPrompt.clauses));
   expect(JSON.stringify(general.overviewPoints)).toEqual(JSON.stringify(withPrompt.overviewPoints));
   expect(general.overviewPoints!.map((p) => p.sentences.length)).toEqual(withPrompt.overviewPoints!.map((p) => p.sentences.length));
+}, 180_000);
+
+it('answers a whole-document prompt from the report findings instead of "not clearly stated"', async () => {
+  const db = await openHarnessDb();
+  const { sb, token, userId, url, anon } = await signIn();
+  const docId = 'broad-prompt-test';
+  await seedDocument(db, docId, 'broad-v1');
+
+  const opts = {
+    db, supabase: sb, accessToken: token, userId,
+    functionsUrl: `${url}/functions/v1`, anonKey: anon, docId, model: 'fake', fallbackModel: null,
+    reasoning: { effort: 'minimal' as const }, maxTokens: 2000, autoReduceConcurrency: false,
+    lawSearch: async () => [],
+    docSearch: async () => [{ pageStart: 1, pageEnd: 1, fused: 1 / 61 }],
+    callModel: async (req: CallRequest): Promise<CallResult> => ({
+      text: scriptedModel(req), finishReason: 'stop', provider: 'fake', promptTokens: 10, completionTokens: 10, durationMs: 1,
+    }),
+  };
+
+  const report = await runAnalysis({
+    ...opts,
+    request: { customPrompt: 'Generate a comprehensive, highly detailed legal analysis report of the uploaded document and if it is risky for the operator.' },
+  });
+
+  expect(report.promptResult).toBeDefined();
+  expect(report.promptResult!.error).toBeUndefined();
+  const answer = report.promptResult!.answer ?? [];
+  expect(answer.length).toBeGreaterThan(0);
+  expect(answer[0].text).not.toMatch(/Not clearly stated|I could not find passages/);
+  expect(answer[0].cites.length).toBeGreaterThan(0);
+  expect(report.promptResult!.parts?.[0].notStated).toBe(false);
+  expect(report.promptResult!.parts?.[0].sentences[0].cites.length).toBeGreaterThan(0);
+  expect(report.promptResult!.answers.length).toBeGreaterThan(0);
+
+  const tasks = await db.getAllFromIndex('tasks', 'byRun', report.runId);
+  const check = tasks.find((t) => t.id.endsWith(':pi'));
+  expect(check?.status).toBe('done');
+  expect(check?.model).toBeTruthy();
+}, 180_000);
+
+
+it('shows a plain message and a retryable failed task when the request cannot be read', async () => {
+  const db = await openHarnessDb();
+  const { sb, token, userId, url, anon } = await signIn();
+  const docId = 'broad-unreadable-test';
+  await seedDocument(db, docId, 'broad-unreadable-v1');
+
+  const report = await runAnalysis({
+    db, supabase: sb, accessToken: token, userId,
+    functionsUrl: `${url}/functions/v1`, anonKey: anon, docId, model: 'fake', fallbackModel: null,
+    reasoning: { effort: 'minimal' as const }, maxTokens: 2000, autoReduceConcurrency: false,
+    lawSearch: async () => [],
+    docSearch: async () => [],
+    request: { customPrompt: 'Generate a comprehensive, highly detailed legal analysis report of the uploaded document.' },
+    callModel: async (req: CallRequest): Promise<CallResult> => ({
+      text: req.prompt.includes('You read one user request about a legal document') ? 'I think it is about the document.' : scriptedModel(req),
+      finishReason: 'stop', provider: 'fake', promptTokens: 10, completionTokens: 10, durationMs: 1,
+    }),
+  });
+
+  expect(report.promptResult?.error).toBe(PROMPT_INTERPRET_FAILED);
+  expect(report.promptResult?.answer).toEqual([]);
+  expect(report.promptResult?.parts).toBeUndefined();
+  const tasks = await db.getAllFromIndex('tasks', 'byRun', report.runId);
+  const check = tasks.find((t) => t.id.endsWith(':pi'));
+  expect(check?.status).toBe('failed');
+  expect(check?.failureCode).toBe('bad_json');
 }, 180_000);

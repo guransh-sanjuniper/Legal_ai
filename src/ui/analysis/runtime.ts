@@ -70,6 +70,7 @@ export function taskLabel(taskId: string): string {
     es: 'Executive summary',
     laws: 'Statutory laws',
     rq: 'Risk validation',
+    pi: 'Prompt request check',
     ps: 'Prompt synthesis',
     s: 'Section summary',
   };

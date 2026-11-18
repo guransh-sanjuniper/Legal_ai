@@ -46,14 +46,16 @@ describe('cost estimate', () => {
     // Inline prompt: no separate per-chunk pass, one answer call plus its cut-off retry and the
     // coverage reads a list-type request needs.
     expect(withPrompt.customCalls).toBe(0);
+    expect(withPrompt.requestCheckCalls).toBe(1);
     expect(withPrompt.answerRetryCalls).toBe(1);
     expect(withPrompt.evidenceCalls).toBe(10);
-    expect(withPrompt.calls).toBe(without.calls + 12);
+    expect(withPrompt.calls).toBe(without.calls + 13);
     expect(withPrompt.costUsd).toBeGreaterThan(without.costUsd);
   });
 
   it('adds no coverage reads for a narrow question and one answer call per part', () => {
     const narrow = estimateRun({ ...base, customPrompt: 'Who may terminate the agreement on notice?' });
+    expect(narrow.requestCheckCalls).toBe(1);
     expect(narrow.evidenceCalls).toBe(0);
     expect(narrow.synthesisCalls).toBe(1);
     expect(narrow.answerRetryCalls).toBe(1);
@@ -67,6 +69,7 @@ describe('cost estimate', () => {
     expect(estimateRun({ ...base, customPrompt: '   ' }).customCalls).toBe(0);
     expect(estimateRun({ ...base, customPrompt: '   ' }).synthesisCalls).toBe(0);
     expect(estimateRun({ ...base, customPrompt: '   ' }).evidenceCalls).toBe(0);
+    expect(estimateRun({ ...base, customPrompt: '   ' }).requestCheckCalls).toBe(0);
   });
 
   it('grows with the output budget and is zero-cost for an empty document', () => {

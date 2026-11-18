@@ -46,8 +46,25 @@ export async function seedDocument(db: HarnessDBHandle, docId: string, prepFinge
 // Answers each pass by its prompt. Quotes are copied from the synthetic pages above.
 export function scriptedModel(req: CallRequest): string {
   const itemsFromInput = () => JSON.parse(req.input.slice(req.input.indexOf('Items:\n') + 7));
+  if (req.prompt.includes('You read one user request about a legal document')) {
+    // Request check for the Prompt Result: a whole-document or risk request is broad.
+    const text = req.input.toLowerCase();
+    if (text.includes('comprehensive') || text.includes('full report') || text.includes('whole document')) {
+      return JSON.stringify({ subjects: [], wholeDocument: true, parties: ['operator'], wantsRisk: true });
+    }
+    return JSON.stringify({ subjects: ['developer', 'perform'], wholeDocument: false, parties: [], wantsRisk: false });
+  }
   if (req.prompt.includes('USER REQUEST:')) {
-    return JSON.stringify([{ text: 'Clause two states the obligation.', page: 2, quote: 'The Developer shall perform obligation 2.', clause_no: '2' }]);
+    // The custom prompt pass needs its quote, page and a one-line reason.
+    return JSON.stringify([
+      {
+        text: 'The Developer must perform its obligations.',
+        page: 1,
+        quote: 'The Developer shall perform obligation 1.',
+        clause_no: '1',
+        why: 'states what the developer must perform',
+      },
+    ]);
   }
   if (req.prompt.includes('Return exactly ONE item')) {
     const nums = /CLAUSE NUMBERS IN THIS EXCERPT: ([^\n]+)/.exec(req.input)![1].split(', ');

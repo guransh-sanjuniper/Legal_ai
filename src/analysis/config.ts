@@ -22,8 +22,17 @@ export const PROMPT_RETRIEVAL_CHUNKS = Math.max(1, Number((import.meta.env.VITE_
 export const DEEP_PROMPT_EVIDENCE_CHUNKS = Math.max(0, Number((import.meta.env.VITE_DEEP_PROMPT_EVIDENCE_CHUNKS as string) || 10));
 // Deep Analysis Prompt Result only: the request is answered one part per call, up to this many.
 export const DEEP_PROMPT_MAX_PARTS = 6;
+// Deep Analysis Prompt Result only: verified report findings offered as evidence for a broad request.
+export const DEEP_PROMPT_REPORT_FINDINGS = 120;
 // A part whose answer is cut off gets one retry at twice the output budget, never above this.
 export const DEEP_PROMPT_MAX_ANSWER_TOKENS = 6000;
+// One small non-reasoning call reads the user's prompt for the Prompt Result (what it is about).
+// Cheapest available: the search/definitions model unless a dedicated one is configured.
+export const PROMPT_INTERPRET_MODEL =
+  (import.meta.env.VITE_PROMPT_INTERPRET_MODEL as string) ||
+  (import.meta.env.VITE_SEARCH_MODEL as string) ||
+  'openai/gpt-4o-mini';
+export const PROMPT_INTERPRET_MAX_TOKENS = 300;
 export const INITIAL_MAX_TOKENS = 2600;
 export const BUDGET_FACTOR = 1.5;
 export const MIN_BUDGET_TOKENS = 600;

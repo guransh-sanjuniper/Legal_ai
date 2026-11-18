@@ -33,6 +33,7 @@ import {
 import { normalizeQuote, verifyQuotedItems, type Located } from './verify';
 import { NOT_CLEAR_ANSWER, type AnswerRelevanceStats, type PromptAnswer, type PromptResult, type PromptResultPart } from './types';
 import { partForQuote, stripAnswerIds, type PromptPartRef } from './promptShape';
+import { quoteCoversAnyGroup } from './promptInterpret';
 import { DEEP_PROMPT_MAX_ANSWER_TOKENS } from './config';
 
 export { NOT_CLEAR_ANSWER };
@@ -260,6 +261,17 @@ async function requeueSynthesis(ctx: ExecuteContext, runId: string): Promise<voi
 
 // A request is answered one part per call. Only the Deep Analysis call site sets this; every other
 // caller (chat, the post-report prompt) leaves it out and gets the single default answer unchanged.
+export interface BroadPromptOptions {
+  // Subject groups the request asks about. A quote must carry one of them; when there is none,
+  // the request has no subject to check and no quote is rejected.
+  groups: string[][];
+  // The validated subjects, used by the second-chance check instead of the raw request.
+  subjectPhrase: string;
+  // Verified findings from this run, offered as evidence for a whole-document or risk request.
+  reportAnswers: PromptAnswer[];
+  notFoundMessage: string;
+}
+
 export interface PromptResultOptions {
   parts: PromptPartRef[];
   maxAnswerTokens: number;
@@ -267,6 +279,8 @@ export interface PromptResultOptions {
   structured: boolean;
   readSections?: number;
   moreSections?: number;
+  // Present only for a broad/list request read by the request-check call.
+  broad?: BroadPromptOptions;
 }
 
 interface SynthesisItem {
@@ -475,8 +489,16 @@ export async function checkRelevanceByPart(args: {
   answers: PromptAnswer[];
   parts: PromptPartRef[];
   ask: (partIndex: number, batches: PromptAnswer[][]) => Promise<unknown[]>;
+  // Broad requests pass only a subject group. Everything else keeps today's strict check.
+  guard?: { groups: string[][] };
 }): Promise<{ partAnswers: PromptAnswer[][]; relevant: PromptAnswer[]; dropped: number; relevance: AnswerRelevanceStats }> {
-  const passByPart = args.parts.map((part) => answersAboutQuestion(args.answers, part.text));
+  const passByPart = args.parts.map((part) =>
+    args.guard
+      ? args.guard.groups.length === 0
+        ? [...args.answers]
+        : args.answers.filter((a) => quoteCoversAnyGroup(a.quote, args.guard!.groups))
+      : answersAboutQuestion(args.answers, part.text),
+  );
   const passSet = new Set(passByPart.flat());
   const groups = new Map<number, PromptAnswer[]>();
   for (const a of args.answers.filter((item) => !passSet.has(item))) {
@@ -532,12 +554,18 @@ async function synthesiseDeepAnswers(
   relevance?: AnswerRelevanceStats;
 }> {
   const parts = opts.parts.length > 0 ? opts.parts : [{ heading: null, text: args.prompt }];
+  const broad = opts.broad;
+  const reportAnswers = broad?.reportAnswers ?? [];
+  const notFound = broad?.notFoundMessage ?? NOT_CLEAR_ANSWER;
   const relevanceRuns: ExecuteResult[] = [];
   const checked = await checkRelevanceByPart({
     answers: args.answers,
     parts,
+    ...(broad ? { guard: { groups: broad.groups } } : {}),
     ask: async (partIndex, batches) => {
       const tag = partIndex === 0 ? '' : `p${partIndex + 1}`;
+      // A broad request has no single sentence to judge against: use its validated subjects.
+      const request = broad ? broad.subjectPhrase : parts[partIndex].text;
       const run = await executeTasks(
         args.ctx,
         args.runId,
@@ -546,7 +574,7 @@ async function synthesiseDeepAnswers(
           suffix: `rj${tag}${i === 0 ? '' : `b${i + 1}`}`,
           promptVersion: RELEVANCE_PROMPT_VERSION,
           prompt: buildRelevancePrompt(),
-          input: buildRelevanceInput(parts[partIndex].text, b),
+          input: buildRelevanceInput(request, b),
           maxTokens: RELEVANCE_MAX_TOKENS,
           validate: isValidRelevanceVerdict,
         })),
@@ -555,6 +583,20 @@ async function synthesiseDeepAnswers(
       return run.collected.flatMap((c) => c.items);
     },
   });
+  // Report findings are evidence by construction for a broad request: they are verified quotes
+  // from this run's own analysis. They lead the sources and skip the quote-level subject check.
+  const partAnswers = parts.map((_, i) => {
+    const local = new Set<string>();
+    return [...reportAnswers, ...checked.partAnswers[i]].filter((a) => {
+      const key = `${a.itemId}|${a.page}|${a.quote}`;
+      if (local.has(key)) return false;
+      local.add(key);
+      return true;
+    });
+  });
+  const relevant = [...reportAnswers, ...checked.relevant].filter(
+    (a, i, all) => all.findIndex((b) => b.itemId === a.itemId) === i,
+  );
   const { relevance } = checked;
   if (relevance.checked > 0) {
     args.ctx.onLog?.(
@@ -562,10 +604,17 @@ async function synthesiseDeepAnswers(
     );
   }
 
-  if (checked.relevant.length === 0) {
+  if (relevant.length === 0) {
     return {
-      answer: [{ text: NOT_CLEAR_ANSWER, cites: [] }],
-      parts: parts.map((part) => ({ heading: part.heading, sentences: [], notStated: true, truncated: false, error: null })),
+      answer: [{ text: notFound, cites: [] }],
+      parts: parts.map((part) => ({
+        heading: part.heading,
+        sentences: [],
+        notStated: true,
+        ...(broad ? { notStatedText: notFound } : {}),
+        truncated: false,
+        error: null,
+      })),
       truncated: false,
       runs: relevanceRuns,
       dropped: checked.dropped,
@@ -581,10 +630,17 @@ async function synthesiseDeepAnswers(
   let numericDropped = 0;
   let truncated = false;
   for (let i = 0; i < parts.length; i++) {
-    const evidence = checked.partAnswers[i];
+    const evidence = partAnswers[i];
     if (evidence.length === 0) {
-      outParts.push({ heading: parts[i].heading, sentences: [], notStated: true, truncated: false, error: null });
-      flat.push({ text: NOT_CLEAR_ANSWER, cites: [] });
+      outParts.push({
+        heading: parts[i].heading,
+        sentences: [],
+        notStated: true,
+        ...(broad ? { notStatedText: notFound } : {}),
+        truncated: false,
+        error: null,
+      });
+      flat.push({ text: notFound, cites: [] });
       continue;
     }
     const outcome = await runDeepPart({
@@ -605,14 +661,22 @@ async function synthesiseDeepAnswers(
         ? 'This part was cut off at the output limit before it could be completed.'
         : `This part could not be written up (${outcome.failureCode ?? 'failed'}). Use Retry failed only to run it again.`
       : null;
+    // A broad request that the model answers with "not clearly stated" gets the plain reason line.
+    const unanswered =
+      !outcome.failed &&
+      outcome.sentences.length === 1 &&
+      outcome.sentences[0].text.trim() === NOT_CLEAR_ANSWER &&
+      Boolean(broad);
     outParts.push({
       heading: parts[i].heading,
-      sentences: outcome.sentences,
-      notStated: outcome.sentences.length === 0 && !outcome.failed,
+      sentences: unanswered ? [] : outcome.sentences,
+      notStated: unanswered || (outcome.sentences.length === 0 && !outcome.failed),
+      ...(unanswered ? { notStatedText: notFound } : {}),
       truncated: outcome.truncated,
       error,
     });
-    for (const s of outcome.sentences) flat.push({ text: s.text, cites: s.cites });
+    if (unanswered) flat.push({ text: notFound, cites: [] });
+    else for (const s of outcome.sentences) flat.push({ text: s.text, cites: s.cites });
   }
   return {
     answer: flat,
@@ -621,7 +685,7 @@ async function synthesiseDeepAnswers(
     runs,
     dropped: checked.dropped,
     numericDropped,
-    answers: checked.relevant,
+    answers: relevant,
     relevance,
   };
 }

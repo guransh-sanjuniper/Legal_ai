@@ -1,4 +1,4 @@
-import { estimateCost, OVERVIEW_TOKENS_PER_SENTENCE } from './config';
+import { DEEP_PROMPT_REPORT_FINDINGS, estimateCost, OVERVIEW_TOKENS_PER_SENTENCE, PROMPT_INTERPRET_MAX_TOKENS } from './config';
 import { estimateInputTokens } from '../tasks/limits';
 import {
   buildMissingPrompt,
@@ -33,6 +33,8 @@ export interface RunEstimate {
   otherCalls: number;
   // Risk validation (batched) and the Prompt Result answer.
   reviewCalls: number;
+  // One small call reads the custom prompt (what it is about).
+  requestCheckCalls: number;
   // One answer call per part of the custom prompt.
   synthesisCalls: number;
   // A part whose answer is cut off gets one retry at twice the budget.
@@ -56,6 +58,10 @@ const CLAUSES_PER_MISSING_GROUP = 60;
 // Each clause call can return up to five short quotes for the custom prompt.
 const CUSTOM_QUOTES_PER_CLAUSE = 5;
 const CUSTOM_QUOTE_CHARS = 220;
+// Rough input for one request check: its instructions, the prompt and a short JSON reply.
+const REQUEST_CHECK_INPUT_TOKENS = 400;
+// Rough input one verified report finding adds to a broad answer (its text, quote and JSON).
+const REPORT_FINDING_TOKENS = 90;
 
 export function estimateRun(i: EstimateInput): RunEstimate {
   const clauseIn = i.chunkTexts.map((t) => estimateInputTokens(`${i.clausePrompt}\n${i.defsContext}\n${t}`));
@@ -97,12 +103,21 @@ export function estimateRun(i: EstimateInput): RunEstimate {
 
   // Deep Analysis prompt: coverage reads, one answer call per part, and up to one cut-off retry each.
   const depth = ask ? promptDepth(ask) : null;
+  const requestCheckCalls = ask ? 1 : 0;
   const synthesisCalls = depth ? depth.parts.length : 0;
   const answerRetryCalls = synthesisCalls;
   const evidenceCalls = depth ? depth.breadth : 0;
+  if (requestCheckCalls) {
+    promptTokens += REQUEST_CHECK_INPUT_TOKENS;
+    completionTokens += PROMPT_INTERPRET_MAX_TOKENS;
+  }
   if (depth && synthesisCalls > 0) {
     const answerPromptTokens = estimateInputTokens(buildPromptSynthesisPromptDeep()) + defsTokens;
-    const evidenceTokens = Math.ceil((i.clauseCount * CUSTOM_QUOTES_PER_CLAUSE * CUSTOM_QUOTE_CHARS) / 4);
+    // Upper bound: the request check may mark any prompt broad, so every run allows for the
+    // verified findings the report can offer.
+    const evidenceTokens =
+      Math.ceil((i.clauseCount * CUSTOM_QUOTES_PER_CLAUSE * CUSTOM_QUOTE_CHARS) / 4) +
+      DEEP_PROMPT_REPORT_FINDINGS * REPORT_FINDING_TOKENS;
     promptTokens += synthesisCalls * (answerPromptTokens + evidenceTokens);
     completionTokens += synthesisCalls * depth.maxAnswerTokens;
     // Worst case for the single retry: twice the budget, never above the hard ceiling.
@@ -115,12 +130,13 @@ export function estimateRun(i: EstimateInput): RunEstimate {
     completionTokens += evidenceCalls * CUSTOM_ANSWER_CAP;
   }
 
-  const calls = clauseCalls + otherCalls + customCalls + reviewCalls + synthesisCalls + answerRetryCalls + evidenceCalls;
+  const calls = clauseCalls + otherCalls + customCalls + reviewCalls + requestCheckCalls + synthesisCalls + answerRetryCalls + evidenceCalls;
   return {
     clauseCalls,
     customCalls,
     otherCalls,
     reviewCalls,
+    requestCheckCalls,
     synthesisCalls,
     answerRetryCalls,
     evidenceCalls,

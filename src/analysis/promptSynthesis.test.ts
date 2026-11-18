@@ -10,6 +10,7 @@ import type { ExecuteContext } from './execute';
 import { promptDepth } from './promptShape';
 import { NOT_CLEAR_ANSWER } from './types';
 import { PROMPT_SYNTHESIS_RETRY_LINE, PROMPT_SYNTHESIS_VERSION_DEEP } from './prompts';
+import { PROMPT_BROAD_NOT_FOUND } from './promptInterpret';
 
 // Fixtures only: no live model, no live Supabase. The stub client only acknowledges result saves.
 
@@ -494,4 +495,160 @@ describe('prompt synthesis (deep path)', () => {
     expect(tasks.filter((t) => t.id.startsWith(`${runId}:ps/`))).toHaveLength(2);
     expect(calls).toBeGreaterThan(0);
   }, 20_000);
+});
+
+describe('prompt synthesis (broad request)', () => {
+  let db: HarnessDBHandle;
+  beforeEach(async () => {
+    db = await openHarnessDb();
+  });
+
+  const reportAnswer: PromptAnswer = {
+    itemId: 'PR1',
+    text: 'The deposit is forfeited on any breach.',
+    clause: '4',
+    page: 6,
+    quote: 'The security deposit shall stand forfeited on any breach of this Agreement.',
+    verified: true,
+    part: 'answer',
+    why: 'risk finding (high)',
+  };
+
+  const coverageAnswer: PromptAnswer = {
+    itemId: 'PA1',
+    text: 'The Developer must perform its obligations.',
+    clause: '1',
+    page: 1,
+    quote: 'The Developer shall perform obligation 1.',
+    verified: true,
+    part: 'answer',
+    why: 'states what the developer must perform',
+  };
+
+  const broadOptions = (over: Partial<{ groups: string[][]; subjectPhrase: string; reportAnswers: PromptAnswer[] }> = {}) => ({
+    opts: {
+      parts: promptDepth('Generate a comprehensive report of the whole document.').parts,
+      maxAnswerTokens: 3000,
+      structured: true,
+      broad: {
+        groups: over.groups ?? [],
+        subjectPhrase: over.subjectPhrase ?? '',
+        reportAnswers: over.reportAnswers ?? [],
+        notFoundMessage: PROMPT_BROAD_NOT_FOUND,
+      },
+    },
+  });
+
+  it('answers a whole-document request from the report findings, with citations', async () => {
+    const prompt = 'Generate a comprehensive, highly detailed legal analysis report of the uploaded document and if it is risky for the operator.';
+    const { opts } = broadOptions({ reportAnswers: [reportAnswer] });
+    const calls: CallRequest[] = [];
+    const ctx = context(db, async (req) => {
+      calls.push(req);
+      const ids = idsFromInput(req);
+      return result(JSON.stringify([{ text: 'The deposit is forfeited on any breach.', cites: [ids[0]], style: 'paragraph' }]));
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `broad-ok-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [coverageAnswer],
+      opts,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(out.answer).toEqual([{ text: 'The deposit is forfeited on any breach.', cites: ['PR1'] }]);
+    expect(out.parts![0].notStated).toBe(false);
+    expect(out.parts![0].sentences[0].cites).toEqual(['PR1']);
+    // The verified report finding is part of the stored evidence.
+    expect(out.answers.map((a) => a.itemId)).toEqual(['PR1', 'PA1']);
+    expect(out.relevance?.checked).toBe(0);
+  });
+
+  it('judges a rejected quote against the validated subjects, not the raw request', async () => {
+    const prompt = 'Explain the termination terms of the uploaded document.';
+    const { opts } = broadOptions({ groups: [['concept:ending']], subjectPhrase: 'termination rights', reportAnswers: [] });
+    const calls: CallRequest[] = [];
+    const ctx = context(db, async (req) => {
+      calls.push(req);
+      if (req.prompt.includes('You check whether quotes')) {
+        return result(JSON.stringify([{ id: 'PA1', verdict: 'yes', reason: 'the clause ends the agreement' }]));
+      }
+      return result(JSON.stringify([{ text: 'Either party may end it.', cites: idsFromInput(req).slice(0, 1), style: 'paragraph' }]));
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `broad-subject-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [
+        {
+          itemId: 'PA1',
+          text: 'Late payment leads to a default notice.',
+          clause: '5',
+          page: 5,
+          quote: 'Late payment of rent may lead to a notice of default.',
+          verified: true,
+          part: 'support',
+        },
+      ],
+      opts,
+    });
+
+    const relevance = calls.find((c) => c.prompt.includes('You check whether quotes'));
+    expect(relevance?.input).toContain('USER REQUEST: termination rights');
+    expect(relevance?.input).not.toContain('Explain the termination terms of the uploaded document.');
+    expect(out.answer[0].cites).toEqual(['PA1']);
+  });
+
+  it('keeps a broad request fail-closed and says plainly when nothing supports it', async () => {
+    const prompt = 'Explain the termination terms of the uploaded document.';
+    const { opts } = broadOptions({ groups: [['concept:ending']], subjectPhrase: 'termination rights', reportAnswers: [] });
+    const ctx = context(db, async (req) => {
+      if (req.prompt.includes('You check whether quotes')) {
+        return result(JSON.stringify([{ id: 'PA1', verdict: 'no', reason: 'it is about a payment default' }]));
+      }
+      return result('[]');
+    });
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `broad-none-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [
+        {
+          itemId: 'PA1',
+          text: 'Late payment leads to a default notice.',
+          clause: '5',
+          page: 5,
+          quote: 'Late payment of rent may lead to a notice of default.',
+          verified: true,
+          part: 'support',
+        },
+      ],
+      opts,
+    });
+
+    expect(out.answer).toEqual([{ text: PROMPT_BROAD_NOT_FOUND, cites: [] }]);
+    expect(out.parts![0].notStated).toBe(true);
+    expect(out.parts![0].notStatedText).toBe(PROMPT_BROAD_NOT_FOUND);
+    expect(out.answers).toEqual([]);
+  });
+
+  it('replaces a bare "not clearly stated" with the plain reason for a broad request', async () => {
+    const prompt = 'Generate a comprehensive report of the whole document.';
+    const { opts } = broadOptions({ reportAnswers: [reportAnswer] });
+    const ctx = context(db, async () => result('[]'));
+    const out = await synthesiseAnswers({
+      ctx,
+      runId: `broad-empty-${crypto.randomUUID()}`,
+      doc,
+      prompt,
+      answers: [coverageAnswer],
+      opts,
+    });
+    expect(out.answer).toEqual([{ text: PROMPT_BROAD_NOT_FOUND, cites: [] }]);
+    expect(out.parts![0]).toMatchObject({ notStated: true, sentences: [], notStatedText: PROMPT_BROAD_NOT_FOUND });
+  });
 });

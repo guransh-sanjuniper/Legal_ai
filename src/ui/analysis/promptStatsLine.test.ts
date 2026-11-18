@@ -12,6 +12,12 @@ describe('prompt stats line', () => {
     );
   });
 
+  it('states a capped evidence set in both modes', () => {
+    const stats = { cited: 5, pageStart: 2, pageEnd: 9, excluded: 0, readSections: null, moreSections: null, moreFindings: 2 };
+    expect(promptStatsLine(stats, false)).toBe('Based on 5 passages from pages 2–9. 2 more verified findings were not included.');
+    expect(promptStatsLine(stats, true)).toContain('2 more verified findings were not included.');
+  });
+
   it('says how many quotes the guards left out and how much was read for coverage', () => {
     expect(promptStatsLine({ cited: 3, pageStart: 2, pageEnd: 9, excluded: 2, readSections: 10, moreSections: 4 })).toBe(
       'Based on 3 passages from pages 2–9. 2 quotes were not relevant to the request and are not used. 10 extra sections read for coverage; 4 matching sections not read.',
