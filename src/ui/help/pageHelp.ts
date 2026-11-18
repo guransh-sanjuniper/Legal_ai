@@ -28,7 +28,7 @@ export const PAGE_HELP: Record<PageHelpId, PageHelp> = {
       'Press "Import documents" and choose your files. You can choose many at once.',
       'Wait until each file says "Ready".',
       'If a file says "Needs review", open it and check the pages shown.',
-      'Keep this page open while files are being prepared.',
+      'Keep this tab open while files are being prepared.',
     ],
   },
   'analysis-list': {
@@ -107,7 +107,7 @@ export const PAGE_HELP: Record<PageHelpId, PageHelp> = {
     helpAnchor: 'drafter',
     steps: [
       'Writing starts by itself.',
-      'Keep this page open until all sections show "Done".',
+      'Keep this tab open until all sections show "Done".',
       'If something fails, press "Try again" beside it.',
       'When finished, press "Review and download".',
     ],

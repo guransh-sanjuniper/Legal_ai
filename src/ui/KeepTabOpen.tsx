@@ -3,7 +3,7 @@ export function KeepTabOpen({ show, prominent }: { show: boolean; prominent?: bo
   if (!show) return null;
   return (
     <p className={`app-keep-tab-open${prominent ? ' app-keep-tab-open--prominent' : ''}`}>
-      Keep this page open until this finishes. You may use other tabs or programs.
+      Keep this tab open until this finishes. You may use other tabs or programs.
     </p>
   );
 }

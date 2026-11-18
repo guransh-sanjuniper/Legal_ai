@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../app/pages/Placeholder';
 import { KeepTabOpen } from '../KeepTabOpen';
+import { useLeaveGuard } from '../useLeaveGuard';
 import { assemble, exportGate } from '../../drafter/assemble';
 import { isOutlineStale } from '../../drafter/outline';
 import { useDeveloperMode } from '../devMode';
@@ -82,6 +83,8 @@ export function WritePage() {
   const [startBlocked, setStartBlocked] = useState<'lock' | 'error' | null>(null);
   const [startCheckDone, setStartCheckDone] = useState(false);
   const [autoDecision, setAutoDecision] = useState<WriteStartAction | null>(null);
+
+  const leaveGuard = useLeaveGuard({ active: running && !stopping, job: 'drafter' });
 
   const visitDraftRef = useRef<string | null>(null);
   const autoStartRef = useRef(false);
@@ -650,6 +653,7 @@ export function WritePage() {
           </Link>
         </div>
       </div>
+      {leaveGuard.dialog}
     </>
   );
 }

@@ -10,7 +10,7 @@ export interface HelpSection {
 
 export const HELP_INTRO = `Add your documents first. Everything else in the app works on documents you've added. AI can make mistakes, so check important points against the original document, and have a lawyer review everything before relying on it.
 
-Long jobs (preparing documents, running a Deep Analysis, writing a draft) run in your browser tab. Keep that tab open until the job finishes, and stay on that page. You can use other tabs or applications in the meantime. If the tab is closed or reloaded, the job stops, but your progress is saved and you can resume it.`;
+Long jobs (preparing documents, running a Deep Analysis, writing a draft) run in your browser tab. Keep that tab open until the job finishes; if the tab is closed or reloaded, the job stops, but your progress is saved and you can resume it. For a Deep Analysis, stay on the analysis page until the report is ready: going to another page stops or may fail the run. Preparing documents and writing a draft keep going if you open another page of this app. You can use other tabs or applications in the meantime.`;
 
 export const HELP_SECTIONS: readonly HelpSection[] = [
   {

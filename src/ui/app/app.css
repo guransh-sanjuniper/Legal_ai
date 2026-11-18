@@ -721,6 +721,22 @@
   border-color: var(--app-accent);
 }
 
+.app-leave-text {
+  margin: 10px 0 0;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.app-leave-actions {
+  margin-top: 18px;
+}
+
+.app-leave-button {
+  min-height: 46px;
+  padding: 12px 18px;
+  font-size: 15px;
+}
+
 .app-page-actions {
   display: flex;
   align-items: center;

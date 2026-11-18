@@ -23,6 +23,7 @@ import { RunPanel, type FailedRow, type RunProgress } from '../../analysis/RunPa
 import { ReportView } from '../../analysis/ReportView';
 import { useDeveloperMode } from '../../devMode';
 import { KeepTabOpen } from '../../KeepTabOpen';
+import { useLeaveGuard } from '../../useLeaveGuard';
 import { CitationPanel } from '../../analysis/CitationPanel';
 import { ExportBar } from '../../analysis/ExportBar';
 import { freshToken, functionsEndpoint, readRunRecord, withDocumentLock, writeRunRecord, taskLabel, type RunRecord } from '../../analysis/runtime';
@@ -65,6 +66,8 @@ export function AnalysisDocPage() {
   const [error, setError] = useState<string | null>(null);
   const [citation, setCitation] = useState<Citation | null>(null);
   const [startNoticeOpen, setStartNoticeOpen] = useState(false);
+
+  const leaveGuard = useLeaveGuard({ active: running, job: 'analysis' });
 
   const retrieval = useRef<RetrievalClient | null>(null);
   const planRef = useRef<Plan | null>(null);
@@ -409,6 +412,7 @@ export function AnalysisDocPage() {
       <p className="app-back-link">
         <Link to="/documents">← Back to documents</Link>
       </p>
+      {leaveGuard.dialog}
     </>
   );
 }

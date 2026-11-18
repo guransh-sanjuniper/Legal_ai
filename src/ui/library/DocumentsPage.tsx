@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   openHarnessDb,
   type DocumentRecord,
@@ -14,6 +13,7 @@ import { documentLock, removeDocumentWhenIdle } from './removeDocument';
 import { PageHeader } from '../app/pages/Placeholder';
 import { useDeveloperMode } from '../devMode';
 import { KeepTabOpen } from '../KeepTabOpen';
+import { useLeaveGuard } from '../useLeaveGuard';
 import { helpSection } from '../help/helpContent';
 import {
   clearFinishedImports,
@@ -109,7 +109,6 @@ interface PreparedCacheEntry {
 }
 
 export function DocumentsPage() {
-  const navigate = useNavigate();
   const [devOn] = useDeveloperMode();
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
@@ -129,6 +128,15 @@ export function DocumentsPage() {
   const [storage, setStorage] = useState<StorageReport | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [ocrLangs, setOcrLangs] = useState('eng');
+
+  const queueActive = queueEntries.some(
+    (entry) => entry.status === 'converting' || entry.status === 'preparing',
+  );
+  const leaveGuard = useLeaveGuard({
+    active: busyDocId !== null || queueActive,
+    job: 'preparation',
+  });
+  const navigate = leaveGuard.navigate;
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
@@ -494,6 +502,11 @@ export function DocumentsPage() {
       <p className="library-format-hint">
         PDF, Word (.docx), text (.txt or .md) and image (.png or .jpg) files. Files are converted to PDF before
         preparation; page numbers refer to the converted version. Up to {maxFileLabel()} per converted file.
+        <br />
+        <span className="library-format-hint-note">
+          Large documents may take some time to process as each and every clause and text is being extracted and
+          processed.
+        </span>
       </p>
 
       {error && (
@@ -839,6 +852,7 @@ export function DocumentsPage() {
           </table>
         </div>
       )}
+      {leaveGuard.dialog}
     </div>
   );
 }
