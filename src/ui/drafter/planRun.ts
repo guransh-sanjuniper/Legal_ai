@@ -3,6 +3,7 @@ import { freshToken, functionsEndpoint } from '../analysis/runtime';
 import { DRAFTER_PLAN_MAX_TOKENS, DRAFTER_PLAN_MODEL } from '../../drafter/config';
 import { buildDocAliases, type DocAlias, type PlanDoc } from '../../drafter/plan';
 import { runPlanCall } from '../../drafter/planCall';
+import { runPlanAttempts, shouldRetryPlanCall } from './planRetry';
 import { updateDraft, type DrafterDBHandle } from '../../drafter/store';
 import { syncDraftById } from '../../drafter/sync';
 import type { LibraryEntry } from '../../drafter/references';
@@ -51,10 +52,14 @@ export interface ParseOutcome {
   message?: string;
   dropped: number;
   raw: string;
+  // How many calls were made: 2 when the one automatic retry for bad_json/empty_output ran.
+  attempts: number;
 }
 
 // Runs the parse and, on success, replaces the stored plan and particulars. The status stays
 // 'brief' (a re-parse invalidates an earlier confirmation). Failures leave the draft untouched.
+// A reply that is not JSON, or is empty, is tried once more with the identical input
+// (`planRetry.ts`); every other failure is returned straight away.
 export async function parsePlanForDraft(
   db: DrafterDBHandle,
   draft: DraftRecord,
@@ -62,20 +67,25 @@ export async function parsePlanForDraft(
 ): Promise<ParseOutcome> {
   const docs = planDocsForDraft(draft, library);
   const { functionsUrl, anonKey } = functionsEndpoint();
-  const result = await runPlanCall(
-    {
-      functionsUrl,
-      anonKey,
-      getToken: freshToken,
-      model: DRAFTER_PLAN_MODEL,
-      maxTokens: DRAFTER_PLAN_MAX_TOKENS,
-    },
-    draft,
-    docs,
+  const { result, attempts } = await runPlanAttempts(
+    () =>
+      runPlanCall(
+        {
+          functionsUrl,
+          anonKey,
+          getToken: freshToken,
+          model: DRAFTER_PLAN_MODEL,
+          maxTokens: DRAFTER_PLAN_MAX_TOKENS,
+        },
+        draft,
+        docs,
+      ),
+    (outcome) => !outcome.ok && shouldRetryPlanCall(outcome.code),
   );
+  // The final attempt's reply: the successful one, or the one the error refers to.
   savePlanRaw(draft.id, result.raw);
   if (!result.ok) {
-    return { ok: false, code: result.code, message: result.message, dropped: 0, raw: result.raw };
+    return { ok: false, code: result.code, message: result.message, dropped: 0, raw: result.raw, attempts };
   }
   await updateDraft(db, draft.id, {
     sourcePlan: result.plan,
@@ -83,5 +93,5 @@ export async function parsePlanForDraft(
     status: 'brief',
   });
   void syncDraftById(supabase, db, draft.id);
-  return { ok: true, dropped: result.dropped, raw: result.raw };
+  return { ok: true, dropped: result.dropped, raw: result.raw, attempts };
 }

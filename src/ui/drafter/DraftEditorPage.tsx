@@ -15,6 +15,8 @@ import { parsePlanForDraft } from './planRun';
 import { decideBriefContinue } from './briefContinue';
 import { ReferencePicker } from './ReferencePicker';
 import { SIDE_OPTIONS } from '../sideLabels';
+import { useDeveloperMode } from '../devMode';
+import { attemptPreview } from './planRetry';
 import './drafter.css';
 
 const INSTRUCTION_MAX = 20000;
@@ -35,6 +37,7 @@ export function DraftEditorPage() {
   const navigate = useNavigate();
   const { session } = useAuth();
   const userId = session?.user.id ?? '';
+  const [devOn] = useDeveloperMode();
 
   const [db, setDb] = useState<DrafterDBHandle | null>(null);
   const [draft, setDraft] = useState<DraftRecord | null>(null);
@@ -45,6 +48,8 @@ export function DraftEditorPage() {
   const [parsing, setParsing] = useState(false);
   const [parseFailed, setParseFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The raw reply behind a failed read, shown only with Developer mode on.
+  const [failureRaw, setFailureRaw] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
   // An untouched title field means "derive from the instruction", so a rewrite of the
@@ -193,6 +198,7 @@ export function DraftEditorPage() {
 
     setError(null);
     setParseFailed(false);
+    setFailureRaw(null);
 
     let saved = draft;
     if (action === 'create-and-read' || action === 'save-and-read' || action === 'save-and-navigate') {
@@ -211,6 +217,7 @@ export function DraftEditorPage() {
       const outcome = await parsePlanForDraft(db, saved, library);
       if (!outcome.ok) {
         setParseFailed(true);
+        setFailureRaw(outcome.raw);
         setError(outcome.message ?? 'I could not read the instructions. Try again.');
         return;
       }
@@ -265,6 +272,11 @@ export function DraftEditorPage() {
       {error && (
         <div className="app-banner app-banner--error" role="alert">
           {error}
+        </div>
+      )}
+      {devOn && parseFailed && attemptPreview(failureRaw) && (
+        <div className="drafter-raw">
+          <pre>{attemptPreview(failureRaw)}</pre>
         </div>
       )}
       {hasPlan && (savedPlanStale || formPlanStale) && (
@@ -326,7 +338,7 @@ export function DraftEditorPage() {
 
         <div className="drafter-actions">
           <button type="submit" className="app-primary-button" disabled={!db || busy}>
-            {parsing ? 'Reading…' : saving ? 'Saving…' : parseFailed ? 'Try again' : 'Continue'}
+            {parsing ? 'Reading your instructions…' : saving ? 'Saving…' : parseFailed ? 'Try again' : 'Continue'}
           </button>
           <button
             type="button"
