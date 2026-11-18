@@ -253,6 +253,7 @@ export function DraftEditorPage() {
         eyebrow="Drafter"
         title={draft ? 'Brief' : 'New draft'}
         description="Write what you need drafted. Continue saves it and reads it before showing the plan."
+        helpPageId="drafter-brief"
         actions={
           <Link className="app-link-button" to="/draft">
             Back to drafts

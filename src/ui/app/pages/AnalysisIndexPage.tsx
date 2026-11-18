@@ -40,6 +40,7 @@ export function AnalysisIndexPage() {
         title="Deep Analysis"
         whenToUse={pickWhenToUse(DESCRIPTION, 'deep-analysis')}
         helpHref="/help#deep-analysis"
+        helpPageId="analysis-list"
       />
       {docs === null ? (
         <p className="app-muted">Loading documents…</p>

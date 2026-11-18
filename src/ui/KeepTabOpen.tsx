@@ -1,7 +1,9 @@
 // Shared on-screen reminder for long jobs that run in this browser tab.
-export function KeepTabOpen({ show }: { show: boolean }) {
+export function KeepTabOpen({ show, prominent }: { show: boolean; prominent?: boolean }) {
   if (!show) return null;
   return (
-    <p className="app-keep-tab-open">Keep this tab open until this finishes. You can use other tabs or apps.</p>
+    <p className={`app-keep-tab-open${prominent ? ' app-keep-tab-open--prominent' : ''}`}>
+      Keep this page open until this finishes. You may use other tabs or programs.
+    </p>
   );
 }

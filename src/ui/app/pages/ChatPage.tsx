@@ -458,6 +458,7 @@ export function ChatPage() {
         title="Chat"
         whenToUse={pickWhenToUse(DESCRIPTION, 'chat')}
         helpHref="/help#chat"
+        helpPageId="chat"
       />
       <div className="app-chat-layout">
         <aside className="app-chat-list" aria-label="Chat sessions">

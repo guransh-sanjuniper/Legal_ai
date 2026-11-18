@@ -26,6 +26,8 @@ import { KeepTabOpen } from '../../KeepTabOpen';
 import { CitationPanel } from '../../analysis/CitationPanel';
 import { ExportBar } from '../../analysis/ExportBar';
 import { freshToken, functionsEndpoint, readRunRecord, withDocumentLock, writeRunRecord, taskLabel, type RunRecord } from '../../analysis/runtime';
+import { StartNotice } from '../../analysis/StartNotice';
+import { readHideStartNotice } from '../../analysis/startNotice';
 import '../../analysis/analysis.css';
 
 interface Plan {
@@ -62,6 +64,7 @@ export function AnalysisDocPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [citation, setCitation] = useState<Citation | null>(null);
+  const [startNoticeOpen, setStartNoticeOpen] = useState(false);
 
   const retrieval = useRef<RetrievalClient | null>(null);
   const planRef = useRef<Plan | null>(null);
@@ -192,6 +195,15 @@ export function AnalysisDocPage() {
   const canResume = Boolean(record) && !running && (!report || report.runId !== record?.runId);
   const canRetry = Boolean(record) && !running && failedRows.length > 0 && report?.runId === record?.runId;
 
+  // The start pop-up only gates the call to execute(); it changes nothing inside it.
+  function requestStart() {
+    if (readHideStartNotice()) {
+      void execute('start');
+      return;
+    }
+    setStartNoticeOpen(true);
+  }
+
   async function execute(mode: 'start' | 'resume' | 'retry') {
     if (!db || !doc || !docId) return;
     if (!supabase || !session) {
@@ -308,6 +320,7 @@ export function AnalysisDocPage() {
         eyebrow="Module"
         title={doc.name}
         description={`${doc.pageCount} pages${devOn ? ` · ${doc.chunkCount} chunks` : ''} · prepared on this device`}
+        helpPageId={model ? 'analysis-report' : 'analysis-list'}
         actions={<span className={`app-chip app-chip--${statusTone(status0)}`}>{label}</span>}
       />
 
@@ -343,7 +356,7 @@ export function AnalysisDocPage() {
                   onChange={setForm}
                   estimate={estimate}
                   disabled={running || !plan}
-                  onStart={() => execute('start')}
+                  onStart={requestStart}
                   startLabel={report ? 'Start a new analysis' : 'Start analysis'}
                 />
               </div>
@@ -366,7 +379,7 @@ export function AnalysisDocPage() {
                     onResume={() => execute('resume')}
                     onRetry={() => execute('retry')}
                   />
-                  <KeepTabOpen show={running} />
+                  <KeepTabOpen prominent show={running} />
                 </div>
               </section>
             )}
@@ -384,6 +397,15 @@ export function AnalysisDocPage() {
       )}
 
       <CitationPanel docId={doc.id} citation={citation} onClose={() => setCitation(null)} />
+      {startNoticeOpen && (
+        <StartNotice
+          onStart={() => {
+            setStartNoticeOpen(false);
+            void execute('start');
+          }}
+          onClose={() => setStartNoticeOpen(false)}
+        />
+      )}
       <p className="app-back-link">
         <Link to="/documents">← Back to documents</Link>
       </p>

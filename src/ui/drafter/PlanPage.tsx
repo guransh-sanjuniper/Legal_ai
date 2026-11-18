@@ -408,6 +408,7 @@ export function PlanPage() {
         eyebrow="Drafter"
         title="Here's what I understood"
         description="Check this is right, then continue. You can change anything below."
+        helpPageId="drafter-plan"
       />
 
       {error && (

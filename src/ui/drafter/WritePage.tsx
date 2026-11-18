@@ -418,6 +418,7 @@ export function WritePage() {
         eyebrow="Drafter"
         title="Writing your draft"
         description="Writing starts automatically for the sections that still need it. Your work is saved as it goes."
+        helpPageId="drafter-write"
       />
 
       {error && (
@@ -478,7 +479,7 @@ export function WritePage() {
             {progress.label}
             {state.counts.failed > 0 ? ` · ${attentionLabel}` : ''}
           </p>
-          <KeepTabOpen show={running} />
+          <KeepTabOpen prominent show={running} />
           {!complete && (running || (canWriteBase && state.pendingIds.length > 0)) && (
             <p className="app-muted drafter-progress-note">
               {plural(items.length, 'section')}

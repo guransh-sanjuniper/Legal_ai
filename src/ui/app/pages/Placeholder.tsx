@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { HowToUse } from '../../HowToUse';
+import type { PageHelpId } from '../../help/pageHelp';
 
 export function PageHeader({
   eyebrow,
@@ -7,6 +9,8 @@ export function PageHeader({
   description,
   whenToUse,
   helpHref,
+  helpPageId,
+  helpTitle,
   actions,
 }: {
   eyebrow?: string;
@@ -14,6 +18,8 @@ export function PageHeader({
   description?: string;
   whenToUse?: string;
   helpHref?: string;
+  helpPageId?: PageHelpId;
+  helpTitle?: string;
   actions?: ReactNode;
 }) {
   return (
@@ -34,7 +40,12 @@ export function PageHeader({
           </p>
         )}
       </div>
-      {actions && <div className="app-page-actions">{actions}</div>}
+      {(helpPageId || actions) && (
+        <div className="app-page-actions">
+          {helpPageId && <HowToUse pageId={helpPageId} title={helpTitle} />}
+          {actions}
+        </div>
+      )}
     </header>
   );
 }

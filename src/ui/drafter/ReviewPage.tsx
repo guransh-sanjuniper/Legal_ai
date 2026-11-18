@@ -210,6 +210,7 @@ export function DraftReviewPage() {
         eyebrow="Drafter"
         title="Review your draft"
         description="Read it through. Download it when it looks right."
+        helpPageId="drafter-review"
       />
 
       {error && (

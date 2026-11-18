@@ -561,6 +561,148 @@
   font-size: 12.5px;
 }
 
+/* Prominent reminder shown while a long job runs. */
+.app-keep-tab-open--prominent {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--app-accent);
+  border-left: 4px solid var(--app-accent);
+  border-radius: 9px;
+  background: var(--app-accent-soft);
+  color: var(--app-text);
+  font-size: 13.5px;
+  font-weight: 550;
+}
+
+/* ---------- How-to-use button and pop-up ---------- */
+
+/* Prominent reminder directly above the Deep Analysis Start button. */
+.ana-keep-open {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--app-accent);
+  border-left: 4px solid var(--app-accent);
+  border-radius: 9px;
+  background: var(--app-accent-soft);
+  color: var(--app-text);
+  font-size: 13.5px;
+  font-weight: 550;
+  line-height: 1.55;
+}
+
+.app-how-to-use {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid var(--app-accent);
+  border-radius: 9px;
+  background: var(--app-accent-soft);
+  color: var(--app-accent-strong);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-how-to-use:hover {
+  background: var(--app-accent);
+  color: #fff;
+}
+
+.app-root[data-theme='dark'] .app-how-to-use:hover {
+  color: #0f1f18;
+}
+
+.app-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow-y: auto;
+  background: rgba(20, 20, 18, 0.55);
+}
+
+.app-modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  padding: 22px 24px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  background: var(--app-surface);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow);
+}
+
+.app-modal h2 {
+  margin: 0 0 14px;
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.app-modal-steps {
+  margin: 0 0 18px;
+  padding-left: 24px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.app-modal-steps li {
+  margin: 0 0 10px;
+  padding-left: 4px;
+}
+
+.app-modal-notice {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-accent);
+  border-left: 4px solid var(--app-accent);
+  border-radius: 9px;
+  background: var(--app-accent-soft);
+  color: var(--app-text);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.app-modal-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.app-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.app-modal-link {
+  margin-right: auto;
+  font-size: 14px;
+}
+
+.app-modal-secondary {
+  padding: 9px 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+  background: var(--app-surface-2);
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-modal-secondary:hover {
+  border-color: var(--app-accent);
+}
+
 .app-page-actions {
   display: flex;
   align-items: flex-end;

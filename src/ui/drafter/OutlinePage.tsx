@@ -303,6 +303,7 @@ export function OutlinePage() {
         eyebrow="Drafter"
         title="Here's the structure I propose"
         description="Rearrange, rename or remove anything. Nothing is written until you continue."
+        helpPageId="drafter-outline"
       />
 
       {error && (

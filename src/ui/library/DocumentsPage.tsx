@@ -447,6 +447,7 @@ export function DocumentsPage() {
         description="PDFs, Word files, text and images are prepared once on this device, then used by every module. They are never uploaded to Supabase."
         whenToUse={helpSection('documents').whenToUse}
         helpHref="/help#documents"
+        helpPageId="documents"
         actions={
           <>
             <label className="app-select-label">
@@ -504,6 +505,7 @@ export function DocumentsPage() {
       {queueNotice && <div className="app-banner app-banner--notice">{queueNotice}</div>}
 
       <KeepTabOpen
+        prominent
         show={
           busyDocId !== null ||
           queueEntries.some((entry) => entry.status === 'converting' || entry.status === 'preparing')

@@ -1,5 +1,6 @@
 import type { DetailLevel, ReviewingFor } from '../../analysis/types';
 import type { RunEstimate } from '../../analysis/costEstimate';
+import { KEEP_OPEN_NOTICE } from './startNotice';
 
 export interface StartFormValues {
   matter: string;
@@ -90,6 +91,7 @@ export function StartForm({
           <span className="app-muted">Estimate unavailable.</span>
         )}
       </div>
+      <p className="ana-keep-open">{KEEP_OPEN_NOTICE}</p>
       <button type="submit" className="app-primary-button" disabled={disabled}>
         {startLabel}
       </button>

@@ -106,6 +106,8 @@ export function DraftsPage() {
           'drafter',
         )}
         helpHref="/help#drafter"
+        helpPageId="drafter-brief"
+        helpTitle="Drafter"
         actions={
           <Link className="app-primary-button" to="/draft/new">
             New draft

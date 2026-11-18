@@ -264,6 +264,7 @@ export function SourcesPage() {
         eyebrow="Drafter"
         title="Check the parts I'll use"
         description="I only use a source once you confirm it. Nothing is written on this screen."
+        helpPageId="drafter-sources"
       />
 
       {error && (
