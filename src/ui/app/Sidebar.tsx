@@ -1,10 +1,21 @@
 import { NavLink } from 'react-router-dom';
 import { supabaseProjectHost, supabaseTarget } from '../../lib/supabase';
 import { useDeveloperMode } from '../devMode';
-import { HELP_ITEM, WORKSPACE_ITEMS } from './navItems';
+import { ComparatorEntry } from './ComparatorEntry';
+import { comparatorItem, isComparatorItem, sidebarEntries } from './navItems';
 import type { Theme } from './theme';
 
-type IconName = 'plus' | 'chat' | 'document' | 'analysis' | 'draft' | 'compare' | 'help' | 'sun' | 'moon';
+type IconName =
+  | 'plus'
+  | 'chat'
+  | 'document'
+  | 'analysis'
+  | 'draft'
+  | 'compare'
+  | 'help'
+  | 'external'
+  | 'sun'
+  | 'moon';
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -66,6 +77,14 @@ function Icon({ name }: { name: IconName }) {
           <path d="M12 17h.01" />
         </svg>
       );
+    case 'external':
+      return (
+        <svg {...common} width={12} height={12}>
+          <path d="M14 4h6v6" />
+          <path d="M20 4 10 14" />
+          <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+        </svg>
+      );
     case 'sun':
       return (
         <svg {...common}>
@@ -82,7 +101,9 @@ function Icon({ name }: { name: IconName }) {
   }
 }
 
-const NAV_ITEMS = [...WORKSPACE_ITEMS, HELP_ITEM];
+const NAV_ITEMS = sidebarEntries({
+  comparator: comparatorItem(import.meta.env.VITE_COMPARATOR_URL as string | undefined),
+});
 
 interface SidebarProps {
   email: string;
@@ -113,16 +134,25 @@ export function Sidebar({ email, theme, onToggleTheme, onSignOut }: SidebarProps
 
       <nav className="app-nav" aria-label="Workspace">
         <div className="app-sidebar-label">Workspace</div>
-        {NAV_ITEMS.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}
-          >
-            <Icon name={item.icon} />
-            {item.label}
-          </NavLink>
-        ))}
+        {NAV_ITEMS.map((item) =>
+          isComparatorItem(item) ? (
+            <ComparatorEntry
+              key="comparator"
+              item={item}
+              icon={<Icon name={item.icon} />}
+              externalIcon={<Icon name="external" />}
+            />
+          ) : (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}
+            >
+              <Icon name={item.icon} />
+              {item.label}
+            </NavLink>
+          ),
+        )}
       </nav>
 
       <div className="app-sidebar-spacer" />

@@ -213,6 +213,24 @@
   font-weight: 600;
 }
 
+/* Comparator: a button, not a route, so it looks like the other entries but never
+   shows as active. It opens a notice instead of changing the page. */
+.app-nav-external {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-nav-external-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--app-text-muted);
+}
+
 .app-sidebar-spacer {
   flex: 1;
 }
@@ -724,6 +742,12 @@
 .app-leave-text {
   margin: 10px 0 0;
   font-size: 15px;
+  line-height: 1.6;
+}
+
+.app-comparator-text {
+  margin: 0 0 18px;
+  font-size: 16px;
   line-height: 1.6;
 }
 
