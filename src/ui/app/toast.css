@@ -1,0 +1,132 @@
+/* Completion notices. One small non-blocking toast: bottom-right on wide screens, a
+   full-width bottom bar on narrow ones, above a mobile browser bar. The host never
+   catches clicks while empty, and the toast is below the modal layer (200). */
+
+.app-toast-host {
+  position: fixed;
+  z-index: 150;
+  right: 24px;
+  bottom: 24px;
+  left: auto;
+  display: flex;
+  justify-content: flex-end;
+  width: auto;
+  max-width: min(380px, calc(100vw - 48px));
+  pointer-events: none;
+}
+
+.app-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 14px 14px 16px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  background: var(--app-surface);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow);
+  pointer-events: auto;
+  overflow-wrap: anywhere;
+  animation: app-toast-in 160ms ease-out;
+}
+
+.app-toast-text {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.app-toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.app-toast-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--app-accent);
+  border-radius: 9px;
+  background: var(--app-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none !important;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.app-root[data-theme='dark'] .app-toast-action {
+  color: #0f1f18;
+}
+
+.app-toast-action:hover {
+  background: var(--app-accent-strong);
+  border-color: var(--app-accent-strong);
+}
+
+.app-toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--app-text-muted);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.app-toast-close:hover {
+  background: var(--app-surface-2);
+  color: var(--app-text);
+}
+
+@keyframes app-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Narrow screens: a full-width bar that clears a mobile browser bar. */
+@media (max-width: 640px) {
+  .app-toast-host {
+    right: 12px;
+    left: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    max-width: none;
+    justify-content: stretch;
+  }
+
+  .app-toast {
+    align-items: center;
+  }
+
+  .app-toast-text {
+    font-size: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-toast {
+    animation: none;
+  }
+}

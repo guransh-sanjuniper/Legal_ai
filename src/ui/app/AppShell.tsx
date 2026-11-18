@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Sidebar } from './Sidebar';
+import { ToastHost } from './ToastHost';
 import type { Theme } from './theme';
 
 interface AppShellProps {
@@ -19,6 +20,7 @@ export function AppShell({ email, theme, onToggleTheme, onSignOut, children }: A
         <main className="app-content">{children}</main>
         <footer className="app-disclaimer">AI-assisted, requires lawyer review.</footer>
       </div>
+      <ToastHost />
     </div>
   );
 }

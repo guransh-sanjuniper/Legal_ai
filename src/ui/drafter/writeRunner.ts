@@ -61,6 +61,20 @@ export function subscribeWriting(draftId: string, listener: Listener): () => voi
   };
 }
 
+// Shell-level view of every run in this tab, used by the completion notice. It only
+// forwards the updates the per-draft listeners already get; it never replays a stored
+// state, so a page load or a reopened draft hears nothing.
+export type AnyWriteListener = (draftId: string, live: WriteLive) => void;
+
+const anyListeners = new Set<AnyWriteListener>();
+
+export function subscribeAnyWriting(listener: AnyWriteListener): () => void {
+  anyListeners.add(listener);
+  return () => {
+    anyListeners.delete(listener);
+  };
+}
+
 export function stopWriting(draftId: string): void {
   const runner = runners.get(draftId);
   if (runner) runner.stop.stopped = true;
@@ -109,6 +123,13 @@ export async function startWriting(
         listener(live);
       } catch {
         // The run continues; the next update or a reload will re-sync the page.
+      }
+    }
+    for (const listener of anyListeners) {
+      try {
+        listener(draft.id, live);
+      } catch {
+        // A shell listener can never disturb the run.
       }
     }
   };

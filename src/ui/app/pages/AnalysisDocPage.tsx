@@ -30,6 +30,7 @@ import { freshToken, functionsEndpoint, readRunRecord, withDocumentLock, writeRu
 import { StartNotice } from '../../analysis/StartNotice';
 import { readHideStartNotice } from '../../analysis/startNotice';
 import { reportScrollBehavior, reportScrollTop, shouldScrollToReport } from '../../analysis/reportScroll';
+import { ANALYSIS_TOAST_ACTION, ANALYSIS_TOAST_TEXT, publishToast, shouldToastAnalysis } from '../toast';
 import '../../analysis/analysis.css';
 
 interface Plan {
@@ -78,6 +79,18 @@ export function AnalysisDocPage() {
   // restoring a saved report never sets it, so those never scroll.
   const finishedThisVisitRef = useRef(false);
 
+  // The export bar and report block. Used by the finish scroll and by the notice's
+  // "View report" button; the block is already laid out when the button is pressed.
+  function scrollToReport() {
+    const element = reportRef.current;
+    if (!element) return;
+    const reportTop = element.getBoundingClientRect().top;
+    window.scrollTo({
+      top: reportScrollTop(reportTop, window.scrollY),
+      behavior: reportScrollBehavior(window.matchMedia('(prefers-reduced-motion: reduce)').matches),
+    });
+  }
+
   // A run finished in this visit: wait one frame for layout to settle, then scroll the
   // export bar and report into view once. The ref wraps both, so the Export buttons are
   // fully visible above the report title. Only content whose top is still below the
@@ -91,10 +104,7 @@ export function AnalysisDocPage() {
       const reportTop = element ? element.getBoundingClientRect().top : null;
       if (!element || reportTop === null) return;
       if (!shouldScrollToReport({ finishedThisVisit: true, reportShown: Boolean(model), reportTop })) return;
-      window.scrollTo({
-        top: reportScrollTop(reportTop, window.scrollY),
-        behavior: reportScrollBehavior(window.matchMedia('(prefers-reduced-motion: reduce)').matches),
-      });
+      scrollToReport();
     });
     return () => cancelAnimationFrame(frame);
   }, [running, model]);
@@ -293,9 +303,18 @@ export function AnalysisDocPage() {
         return;
       }
       const saved = lock.value;
+      const nextModel = buildReportModel(saved);
       setReport(saved);
-      setModel(buildReportModel(saved));
+      setModel(nextModel);
       finishedThisVisitRef.current = true;
+      // A report shown after a run that finished here: the only place a notice is posted.
+      if (shouldToastAnalysis({ finishedThisVisit: true, reportShown: Boolean(nextModel) })) {
+        publishToast({
+          text: ANALYSIS_TOAST_TEXT,
+          actionLabel: ANALYSIS_TOAST_ACTION,
+          onAction: scrollToReport,
+        });
+      }
       const left = (await db.getAllFromIndex('tasks', 'byRun', saved.runId)).filter((t) => t.status === 'failed').length;
       if (left === 0) {
         writeRunRecord(docId, null);
