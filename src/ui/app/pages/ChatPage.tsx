@@ -30,6 +30,7 @@ import { describePass } from '../../../chat/estimate';
 import { scanNote } from '../../../chat/scanFilter';
 import { formatMessageTime } from '../../../chat/format';
 import { CopyButton } from '../../chat/CopyButton';
+import { WHOLE_DOC_MAX_PAGES, wholeModeAllowed } from '../../chat/wholeMode';
 import { useDeveloperMode } from '../../devMode';
 import { openHarnessDb, type HarnessDBHandle } from '../../../runner/db';
 import { isPrepared } from '../../library/preparationState';
@@ -173,6 +174,13 @@ export function ChatPage() {
   // The whole-scan estimate depends on the draft: the sections it reads come from its terms.
   const estimates = useMemo(() => (docCtx ? estimatesFor(docCtx, draft) : null), [docCtx, draft]);
 
+  // A whole scan is only offered for short documents. When a long document's page count arrives,
+  // clear a pending scan so the question falls back to saved/retrieval with the plain notice.
+  useEffect(() => {
+    if (!docId || !docCtx || docCtx.doc.id !== docId) return;
+    if (!wholeModeAllowed(docCtx.doc.pageCount, WHOLE_DOC_MAX_PAGES)) setScanWhole(false);
+  }, [docId, docCtx]);
+
   useEffect(() => {
     if (!sessionId) {
       threadRef.current = null;
@@ -273,7 +281,8 @@ export function ChatPage() {
       const token = await freshToken();
       if (!token) throw new Error('Sign in again to ask about a document.');
       const { functionsUrl, anonKey } = functionsEndpoint();
-      const out = await answerFromDocument(turn.question, turn.ctx, turn.scanWhole, {
+      const scan = turn.scanWhole && wholeModeAllowed(turn.ctx.doc.pageCount, WHOLE_DOC_MAX_PAGES);
+      const out = await answerFromDocument(turn.question, turn.ctx, scan, {
         db,
         supabase,
         accessToken: token,
@@ -331,7 +340,8 @@ export function ChatPage() {
       const userMsg = await appendMessage(supabase, sid, 'user', content, meta);
       if (threadRef.current === sid) setSaved((prev) => [...prev, userMsg]);
       if (ctx) {
-        await runDocumentReply({ sid, question: content, ctx, scanWhole });
+        const whole = scanWhole && wholeModeAllowed(ctx.doc.pageCount, WHOLE_DOC_MAX_PAGES);
+        await runDocumentReply({ sid, question: content, ctx, scanWhole: whole });
       } else {
         await runReply(sid, [...(threadRef.current === sid ? saved : []), userMsg]);
       }
@@ -383,11 +393,15 @@ export function ChatPage() {
 
   // The document the composer targets is loaded before a message can be sent about it.
   const docReady = !docId || docCtx?.doc.id === docId;
+  // Whole mode is offered and used only for a known, short page count.
+  const wholeAllowed = Boolean(docReady && docCtx && wholeModeAllowed(docCtx.doc.pageCount, WHOLE_DOC_MAX_PAGES));
+  const wholeActive = Boolean(docId && wholeAllowed && scanWhole);
+  const wholeTooLong = Boolean(docId && docReady && !wholeAllowed);
 
   const hint = (() => {
     if (!docId) return null;
     if (!docReady || !estimates) return 'Loading document…';
-    if (scanWhole) {
+    if (wholeActive) {
       return `${describePass('Whole-document scan', estimates.whole)} ${scanNote(estimates.scan)} Starts when you press Send.`;
     }
     const label = docCtx?.report
@@ -523,16 +537,23 @@ export function ChatPage() {
                 ))}
               </select>
             </label>
-            <label className="app-chat-scan">
-              <input
-                type="checkbox"
-                checked={scanWhole}
-                disabled={busy || !docId}
-                onChange={(e) => setScanWhole(e.target.checked)}
-              />
-              Scan whole document
-            </label>
+            {(!docId || !docReady || wholeAllowed) && (
+              <label className="app-chat-scan">
+                <input
+                  type="checkbox"
+                  checked={scanWhole}
+                  disabled={busy || !docId || !docReady}
+                  onChange={(e) => setScanWhole(e.target.checked)}
+                />
+                Scan whole document
+              </label>
+            )}
           </div>
+          {wholeTooLong && (
+            <p className="app-chat-estimate">
+              This document is long. Ask a specific question here, or use Deep Analysis for a full review.
+            </p>
+          )}
           {hint && <p className="app-chat-estimate">{hint}</p>}
           <form className="app-composer app-chat-composer" onSubmit={onSubmit}>
             <textarea
@@ -548,7 +569,7 @@ export function ChatPage() {
               className="app-primary-button"
               disabled={busy || !draft.trim() || !docReady}
             >
-              {scanWhole && docId ? 'Scan' : 'Send'}
+              {wholeActive ? 'Scan' : 'Send'}
             </button>
           </form>
         </section>
