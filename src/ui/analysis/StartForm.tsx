@@ -1,6 +1,7 @@
 import type { DetailLevel, ReviewingFor } from '../../analysis/types';
 import type { RunEstimate } from '../../analysis/costEstimate';
 import { KEEP_OPEN_NOTICE } from './startNotice';
+import { SIDE_OPTIONS } from '../sideLabels';
 
 export interface StartFormValues {
   matter: string;
@@ -53,9 +54,11 @@ export function StartForm({
       <label className="app-field">
         <span>Reviewing for</span>
         <select value={values.reviewingFor} onChange={(e) => set('reviewingFor', e.target.value as ReviewingFor)}>
-          <option value="neutral">Neutral</option>
-          <option value="licensor">Licensor</option>
-          <option value="licensee">Licensee</option>
+          {SIDE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
       </label>
       <label className="app-field">

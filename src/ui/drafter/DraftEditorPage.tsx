@@ -14,6 +14,7 @@ import { loadDrafterLibrary } from './library';
 import { parsePlanForDraft } from './planRun';
 import { decideBriefContinue } from './briefContinue';
 import { ReferencePicker } from './ReferencePicker';
+import { SIDE_OPTIONS } from '../sideLabels';
 import './drafter.css';
 
 const INSTRUCTION_MAX = 20000;
@@ -315,9 +316,11 @@ export function DraftEditorPage() {
             disabled={busy}
             onChange={(e) => setReviewingFor(e.target.value as ReviewingFor)}
           >
-            <option value="neutral">Neutral</option>
-            <option value="licensor">Landlord (licensor)</option>
-            <option value="licensee">Tenant (licensee)</option>
+            {SIDE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
         </label>
 
