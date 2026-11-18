@@ -29,6 +29,7 @@ import { ExportBar } from '../../analysis/ExportBar';
 import { freshToken, functionsEndpoint, readRunRecord, withDocumentLock, writeRunRecord, taskLabel, type RunRecord } from '../../analysis/runtime';
 import { StartNotice } from '../../analysis/StartNotice';
 import { readHideStartNotice } from '../../analysis/startNotice';
+import { reportScrollBehavior, reportScrollTop, shouldScrollToReport } from '../../analysis/reportScroll';
 import '../../analysis/analysis.css';
 
 interface Plan {
@@ -72,6 +73,34 @@ export function AnalysisDocPage() {
   const retrieval = useRef<RetrievalClient | null>(null);
   const planRef = useRef<Plan | null>(null);
   planRef.current = plan;
+  const reportRef = useRef<HTMLElement | null>(null);
+  // True only when a run started on this page has just produced a report. Loading or
+  // restoring a saved report never sets it, so those never scroll.
+  const finishedThisVisitRef = useRef(false);
+
+  // A run finished in this visit: wait one frame for layout to settle, then scroll the
+  // report into view once. Only a report whose top is still below the viewport moves.
+  useEffect(() => {
+    if (running || !model || !finishedThisVisitRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      if (!finishedThisVisitRef.current) return;
+      finishedThisVisitRef.current = false;
+      const element = reportRef.current;
+      const reportTop = element ? element.getBoundingClientRect().top : null;
+      if (!element || reportTop === null) return;
+      if (!shouldScrollToReport({ finishedThisVisit: true, reportShown: Boolean(model), reportTop })) return;
+      window.scrollTo({
+        top: reportScrollTop(reportTop, window.scrollY),
+        behavior: reportScrollBehavior(window.matchMedia('(prefers-reduced-motion: reduce)').matches),
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [running, model]);
+
+  // A different document, or leaving the page, drops any pending scroll attempt.
+  useEffect(() => () => {
+    finishedThisVisitRef.current = false;
+  }, [docId]);
 
   useEffect(() => {
     const client = new RetrievalClient();
@@ -220,6 +249,7 @@ export function AnalysisDocPage() {
     }
     const request = current?.request ?? normaliseRequest({ ...form });
     let activeRunId: string | null = current?.runId ?? null;
+    finishedThisVisitRef.current = false;
     setRunning(true);
     setError(null);
     setStatus(mode === 'start' ? 'Starting…' : 'Resuming…');
@@ -263,6 +293,7 @@ export function AnalysisDocPage() {
       const saved = lock.value;
       setReport(saved);
       setModel(buildReportModel(saved));
+      finishedThisVisitRef.current = true;
       const left = (await db.getAllFromIndex('tasks', 'byRun', saved.runId)).filter((t) => t.status === 'failed').length;
       if (left === 0) {
         writeRunRecord(docId, null);
@@ -391,7 +422,7 @@ export function AnalysisDocPage() {
           {model ? (
             <>
               <ExportBar model={model} documentName={doc.name} />
-              <ReportView model={model} onCite={setCitation} />
+              <ReportView model={model} onCite={setCitation} reportRef={reportRef} />
             </>
           ) : (
             <p className="app-muted">No report yet. Start an analysis above.</p>

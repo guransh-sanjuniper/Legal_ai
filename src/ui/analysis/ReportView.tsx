@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, type RefObject } from 'react';
 import {
   LAW_LABEL,
   NOT_STATED,
@@ -541,14 +541,16 @@ export function ReportView({
   model,
   onCite,
   onScanWhole,
+  reportRef,
 }: {
   model: ReportModel;
   onCite: (c: Citation) => void;
   onScanWhole?: () => void;
+  reportRef?: RefObject<HTMLElement | null>;
 }) {
   const t = model.title;
   return (
-    <article className="ana-report">
+    <article className="ana-report" ref={reportRef}>
       <header className="ana-title-block">
         <h2>Deep Analysis Report</h2>
         <dl className="ana-title-grid">
