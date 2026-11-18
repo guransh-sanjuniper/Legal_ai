@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { openHarnessDb, type DocumentRecord, type HarnessDBHandle, type OcrDecision, type PageRecord } from '../../runner/db';
 import { closePdf, openPdf, renderPageInto, type PdfDoc } from '../../ingest/pdfPages';
 import { saveReviewDecision, waiveUnresolvedPages, type ReviewDecision } from '../../ingest/review';
-import { startPageOcr } from './ingestRunner';
 import { getActiveDocId, runPreparation } from './prepare';
 import { libraryStatus, readyLabel, statusLabel, statusTone } from './docStatus';
+import { allPagesResolved, needsDecision, reviewDecisionFor } from './reviewPageLogic';
 import { EmptyCard, PageHeader } from '../app/pages/Placeholder';
 import { useDeveloperMode } from '../devMode';
 
@@ -18,7 +18,6 @@ const DECISION_TEXT: Record<ReviewDecision, string> = {
 
 // A page needs a person when the pipeline could not decide it, or when it was proceeded
 // without review. Pages a person already decided are shown for reference.
-const isPending = (p: PageRecord) => p.status === 'review' || p.source === 'waived';
 
 function pageState(p: PageRecord): string {
   if (p.source === 'waived') return 'not reviewed';
@@ -33,6 +32,7 @@ const reasonLabel = (reason: string | null) =>
 
 export function ReviewPage() {
   const { docId = '' } = useParams();
+  const navigate = useNavigate();
   const [devOn] = useDeveloperMode();
   const [db, setDb] = useState<HarnessDBHandle | null>(null);
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
@@ -43,27 +43,30 @@ export function ReviewPage() {
   const [currentNo, setCurrentNo] = useState<number | null>(null);
   const [correction, setCorrection] = useState('');
   const [saving, setSaving] = useState(false);
-  const [ocrBusy, setOcrBusy] = useState(false);
   const [pdfReady, setPdfReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pdfRef = useRef<PdfDoc | null>(null);
+  const decidingRef = useRef(false);
+  const returningRef = useRef(false);
 
   useEffect(() => {
     openHarnessDb().then(setDb).catch((e) => setError(`Could not open local storage: ${String(e)}`));
   }, []);
 
   const load = useCallback(async () => {
-    if (!db) return;
+    if (!db) return null;
     const record = await db.get('documents', docId);
     setDoc(record ?? null);
     setLoaded(true);
     const range = IDBKeyRange.bound([docId, 0], [docId, Number.MAX_SAFE_INTEGER]);
-    setPages((await db.getAll('pages', range)).sort((a, b) => a.pageNo - b.pageNo));
+    const freshPages = (await db.getAll('pages', range)).sort((a, b) => a.pageNo - b.pageNo);
+    setPages(freshPages);
     const decided = await db.getAll('ocr_decisions', range);
     setDecisions(new Map(decided.map((d) => [d.pageNo, d])));
     setRunning(getActiveDocId() === docId);
+    return freshPages;
   }, [db, docId]);
 
   // Polled like the harness page: the preparation runs outside this component.
@@ -97,13 +100,13 @@ export function ReviewPage() {
     };
   }, [db, docId]);
 
-  const list = pages.filter((p) => isPending(p) || decisions.has(p.pageNo));
-  const pending = list.filter(isPending);
+  const list = pages.filter((p) => needsDecision(p) || decisions.has(p.pageNo));
+  const pending = list.filter(needsDecision);
   const page = list.find((p) => p.pageNo === currentNo) ?? pending[0] ?? list[0] ?? null;
   const pageNo = page?.pageNo ?? null;
   const index = page ? list.findIndex((p) => p.pageNo === page.pageNo) : -1;
   const waivedCount = pages.filter((p) => p.source === 'waived').length;
-  const blocked = !db || running || saving || ocrBusy;
+  const blocked = !db || running || saving;
 
   useEffect(() => {
     if (!pdfReady || pageNo === null || !canvasRef.current || !pdfRef.current) return;
@@ -117,53 +120,65 @@ export function ReviewPage() {
 
   // Ingestion and the rest of preparation continue from the saved decisions. The
   // library runner is the only orchestrator; this screen only asks it to continue.
-  function continuePreparation(recheck = false) {
-    if (!db) return;
+  // Resolves true once the run has started (its first non-failed state), false when it
+  // could not start. It does not wait for the whole preparation.
+  function continuePreparation(): Promise<boolean> {
+    if (!db) return Promise.resolve(false);
     setError(null);
     setRunning(true);
-    void runPreparation(docId, { db, forceIngest: true, recheck })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => {
-        setRunning(getActiveDocId() === docId);
-        void load();
-      });
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (started: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(started);
+      };
+      void runPreparation(docId, {
+        db,
+        forceIngest: true,
+        onEvent: (state) => {
+          if (!state.failed) finish(true);
+        },
+      })
+        .then(() => finish(true))
+        .catch((e) => {
+          setError(e instanceof Error ? e.message : String(e));
+          finish(false);
+        })
+        .finally(() => {
+          setRunning(getActiveDocId() === docId);
+          void load();
+        });
+    });
   }
 
   async function decide(target: PageRecord, decision: ReviewDecision, text?: string) {
-    if (!db) return;
+    if (!db || decidingRef.current || returningRef.current) return;
+    decidingRef.current = true;
     setSaving(true);
     setError(null);
     try {
       await saveReviewDecision(db, target, decision, text);
+      // Read the stored pages after the write: the last-page check is then the same
+      // whichever order the reviewer chose.
+      const freshPages = await load();
+      if (freshPages && freshPages.length > 0 && allPagesResolved(freshPages)) {
+        const started = await continuePreparation();
+        if (!started) return;
+        returningRef.current = true;
+        navigate('/documents');
+        return;
+      }
       const nextNo = pending.find((p) => p.pageNo > target.pageNo)?.pageNo ?? null;
       setCurrentNo(nextNo ?? target.pageNo);
       setNotice(`Page ${target.pageNo}: ${DECISION_TEXT[decision]} saved.`);
-      await load();
-      continuePreparation();
+      void continuePreparation();
     } catch (e) {
       setError(`Could not save the decision: ${String(e)}`);
     } finally {
+      decidingRef.current = false;
       setSaving(false);
     }
-  }
-
-  function retryOcr(target: PageRecord) {
-    if (!db) return;
-    setError(null);
-    setOcrBusy(true);
-    startPageOcr(docId, target.pageNo, (event) => {
-      if (event.type === 'locked') {
-        setError('This document is being processed in another tab.');
-        setOcrBusy(false);
-      } else if (event.type === 'error') {
-        setError(event.message);
-        setOcrBusy(false);
-      } else if (event.type === 'idle') {
-        setOcrBusy(false);
-        setNotice(`Page ${target.pageNo}: OCR retried.`);
-        void load().then(() => continuePreparation());
-      }
-    });
   }
 
   async function proceedWithoutReview() {
@@ -177,7 +192,7 @@ export function ReviewPage() {
     const waived = await waiveUnresolvedPages(db, doc.id);
     setNotice(`${waived} page(s) proceed with their OCR text as extracted.`);
     await load();
-    continuePreparation();
+    void continuePreparation();
   }
 
   if (!loaded) return <p className="app-muted">Loading review…</p>;
@@ -203,7 +218,7 @@ export function ReviewPage() {
       <PageHeader
         eyebrow="Review"
         title={doc.name}
-        description="Compare each page image with its OCR text. Each decision is saved at once; preparation continues when the last page is resolved."
+        description="Check the page image against the text. Accept the text, save a correction, or leave the page blank. Preparation continues when every page is done."
         actions={
           <Link className="app-link-button" to="/documents">
             Back to Documents
@@ -268,7 +283,7 @@ export function ReviewPage() {
                       pdf.js wasm files.
                     </>
                   ) : (
-                    <>This page did not render, so the image may look blank. Retry OCR, or proceed without reviewing.</>
+                    <>This page did not render, so the image may look blank. You can proceed without reviewing.</>
                   )}
                 </div>
               )}
@@ -284,20 +299,18 @@ export function ReviewPage() {
                   aria-label={`OCR text for page ${page.pageNo}`}
                 />
                 <div className="app-review-actions">
-                  <button type="button" className="app-primary-button" disabled={blocked} onClick={() => void decide(page, 'accept')}>
-                    Accept OCR text
+                  <button
+                    type="button"
+                    disabled={blocked}
+                    onClick={() => void decide(page, reviewDecisionFor('accept', correction))}
+                  >
+                    Accept text
                   </button>
                   <button type="button" disabled={blocked} onClick={() => void decide(page, 'correct', correction)}>
-                    Save correction
+                    Save corrected text
                   </button>
                   <button type="button" disabled={blocked} onClick={() => void decide(page, 'blank')}>
-                    Confirm blank
-                  </button>
-                  <button type="button" disabled={blocked} onClick={() => void decide(page, 'unresolved')}>
-                    Leave unresolved
-                  </button>
-                  <button type="button" disabled={blocked} onClick={() => retryOcr(page)}>
-                    Retry OCR
+                    Leave blank
                   </button>
                 </div>
               </div>
@@ -309,9 +322,6 @@ export function ReviewPage() {
               </button>
               <button type="button" disabled={index >= list.length - 1} onClick={() => setCurrentNo(list[index + 1].pageNo)}>
                 Next
-              </button>
-              <button type="button" disabled={blocked} onClick={() => continuePreparation(true)}>
-                Recheck (keeps decisions)
               </button>
               {pending.length > 0 && (
                 <button type="button" className="app-link-button app-link-button--danger" disabled={blocked} onClick={() => void proceedWithoutReview()}>
